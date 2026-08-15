@@ -1,0 +1,225 @@
+# **ATLAS OS**
+
+## **Software Requirements Specification (SRS)**
+
+### **Version 1.0**
+
+---
+
+# **PARTIE I — VISION, MISSION ET PHILOSOPHIE**
+
+---
+
+# **1.1 Préambule**
+
+Ce document constitue la **source de vérité** d'ATLAS OS.
+
+Toutes les décisions relatives au développement, à l'architecture, au design, à l'expérience utilisateur, à l'infrastructure, à la sécurité et à l'évolution du projet doivent respecter cette spécification.
+
+En cas de conflit entre le code existant, une ancienne documentation ou une décision passée et cette spécification, **cette spécification prévaut**.
+
+ATLAS OS n'est pas un prototype expérimental.
+
+ATLAS OS est conçu dès le départ comme un produit professionnel destiné à évoluer pendant plusieurs années.
+
+L'objectif est de construire une plateforme robuste, évolutive et maintenable, capable de devenir la fondation de plusieurs produits commerciaux basés sur des agents IA.
+
+---
+
+# **1.2 Vision**
+
+ATLAS OS est le système d'exploitation d'une entreprise autonome pilotée par l'intelligence artificielle.
+
+Il ne s'agit pas simplement d'un logiciel, d'un chatbot ou d'une automatisation.
+
+ATLAS OS doit permettre à une seule personne de superviser une organisation numérique composée de plusieurs agents spécialisés capables de collaborer pour accomplir des missions complexes.
+
+Chaque agent représente un collaborateur spécialisé.
+
+Chaque mission est coordonnée par une intelligence centrale.
+
+Chaque donnée produite enrichit durablement la connaissance du système.
+
+ATLAS OS doit devenir une plateforme capable d'accueillir de nouveaux métiers, de nouvelles activités et de nouveaux produits sans remise en question de son architecture.
+
+---
+
+# **1.3 Mission**
+
+La mission d'ATLAS OS est de transformer des tâches complexes, longues et répétitives en processus intelligents exécutés automatiquement par une équipe d'agents spécialisés.
+
+Le premier produit développé sur cette plateforme est **Partner Intelligence**.
+
+Partner Intelligence aide les fabricants français de machines industrielles à identifier des partenaires commerciaux, distributeurs, intégrateurs et opportunités de développement à l'international grâce à une intelligence commerciale assistée par IA.
+
+Cette première application sert de fondation pour démontrer la puissance et la flexibilité d'ATLAS OS.
+
+---
+
+# **1.4 Ambition**
+
+ATLAS OS est pensé comme une plateforme.
+
+Partner Intelligence n'est que la première application.
+
+L'architecture devra permettre la création future de nouveaux produits tels que :
+
+* Supplier Intelligence  
+* Market Intelligence  
+* Competitive Intelligence  
+* Acquisition Intelligence  
+* Franchise Intelligence  
+* Procurement Intelligence  
+* Deal Intelligence
+
+Tous ces produits devront pouvoir partager les mêmes fondations techniques.
+
+---
+
+# **1.5 Philosophie**
+
+Chaque décision prise dans le projet doit respecter les principes suivants :
+
+* Construire pour plusieurs années, jamais pour quelques semaines.  
+* Favoriser la qualité plutôt que la rapidité.  
+* Préférer une architecture claire à une accumulation de fonctionnalités.  
+* Concevoir chaque composant comme un module indépendant.  
+* Réutiliser le code lorsque cela apporte une réelle valeur.  
+* Remplacer sans hésitation un composant si une meilleure solution existe.  
+* Faire de l'observabilité, de la sécurité et de la maintenabilité des priorités dès le premier jour.  
+* Développer un système qui reste compréhensible malgré sa croissance.
+
+---
+
+# **1.6 Objectifs**
+
+Les objectifs principaux d'ATLAS OS sont :
+
+* Automatiser les activités à forte valeur ajoutée grâce à des agents IA spécialisés.  
+* Offrir un environnement de travail centralisé permettant de piloter l'ensemble des opérations.  
+* Réduire considérablement le temps consacré à la recherche, à l'analyse et à la qualification des opportunités.  
+* Créer une base de connaissances qui s'enrichit avec le temps.  
+* Permettre le lancement rapide de nouveaux produits construits sur la même architecture.
+
+---
+
+# **1.7 Utilisateur principal**
+
+Le système est conçu pour être utilisé quotidiennement par son fondateur.
+
+L'expérience doit lui permettre de comprendre immédiatement :
+
+* l'état général de la plateforme ;  
+* les missions en cours ;  
+* les performances des agents ;  
+* les opportunités détectées ;  
+* les tâches en attente ;  
+* les alertes éventuelles.
+
+Le fondateur doit consacrer son temps aux décisions stratégiques et non à la supervision technique.
+
+---
+
+# **1.8 Vision produit**
+
+ATLAS OS ne doit jamais donner l'impression d'utiliser une suite d'outils séparés.
+
+L'utilisateur doit ressentir qu'il pilote une seule organisation cohérente.
+
+Tous les composants doivent fonctionner comme les départements d'une même entreprise.
+
+Chaque agent possède une responsabilité claire.
+
+Chaque action est coordonnée.
+
+Chaque information circule naturellement entre les composants.
+
+---
+
+# **1.9 Identité**
+
+ATLAS OS possède une identité forte.
+
+Le logiciel ne doit pas ressembler à un tableau de bord générique.
+
+Il doit transmettre une sensation de maîtrise, de modernité, d'intelligence et d'organisation.
+
+L'objectif est que l'utilisateur ait envie d'utiliser la plateforme plusieurs heures par jour.
+
+L'identité visuelle devra être suffisamment distinctive pour être immédiatement reconnaissable.
+
+---
+
+# **1.10 Expérience utilisateur**
+
+L'expérience utilisateur constitue un élément fondamental du produit.
+
+L'interface ne doit pas uniquement afficher des données.
+
+Elle doit permettre de comprendre intuitivement ce qui se passe dans le système.
+
+Chaque élément graphique doit avoir une utilité.
+
+Les animations doivent améliorer la compréhension des processus.
+
+La navigation doit être fluide.
+
+La plateforme doit être agréable à utiliser même lors de longues sessions.
+
+---
+
+# **1.11 Direction artistique**
+
+ATLAS OS adopte une direction artistique originale basée sur le concept d'un **village numérique vivant**.
+
+Le village représente l'entreprise IA.
+
+Chaque bâtiment représente un département réel de la plateforme.
+
+Chaque agent est représenté par un habitant spécialisé.
+
+Les déplacements des habitants illustrent les missions en cours.
+
+Les échanges entre bâtiments représentent les communications entre les agents.
+
+Les animations doivent être informatives avant d'être décoratives.
+
+L'utilisateur doit avoir la sensation d'observer une organisation vivante qui travaille en permanence.
+
+Un mode immersif (ATLAS Village) et un mode professionnel (Command Center) devront coexister afin de répondre aussi bien aux besoins de supervision qu'aux besoins d'analyse détaillée.
+
+---
+
+# **1.12 Rôle de Claude Code**
+
+Claude Code agit comme le CTO virtuel du projet.
+
+Il doit analyser le projet existant avant toute modification.
+
+Il est autorisé à réutiliser, déplacer, refactoriser, améliorer, remplacer ou supprimer les composants existants lorsque cela permet d'obtenir une architecture plus robuste.
+
+Il n'a aucune obligation de conserver une partie du projet uniquement parce qu'elle existe déjà.
+
+Chaque décision doit être motivée par la qualité du résultat final.
+
+---
+
+# **1.13 Résultat attendu**
+
+À l'issue du développement, le résultat attendu est une plateforme complète, cohérente et prête à être utilisée.
+
+Le produit final doit être :
+
+* techniquement robuste ;  
+* fonctionnellement complet ;  
+* visuellement remarquable ;  
+* agréable à utiliser quotidiennement ;  
+* facilement maintenable ;  
+* facilement extensible ;  
+* déployable sur un VPS ;  
+* capable de fonctionner 24 heures sur 24 et 7 jours sur 7\.
+
+Aucun prototype, démonstrateur ou version incomplète n'est accepté.
+
+Le livrable attendu est un produit fini répondant à l'ensemble des exigences de cette spécification.
+

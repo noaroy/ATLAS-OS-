@@ -1,0 +1,123 @@
+# SearXNG — réglages pour ATLAS OS.
+#
+# Une instance privée, sur le réseau interne Docker, avec un seul appelant
+# connu. Les choix ci-dessous découlent tous de cette situation : pas de
+# public à protéger, pas d'anonymat à préserver entre utilisateurs, mais une
+# exigence forte de stabilité et de latence.
+#
+# Principe directeur : peu de moteurs, bien choisis. Chaque moteur
+# supplémentaire ajoute sa latence, ses pannes et ses blocages, et SearXNG
+# attend le plus lent avant de fusionner. Quatre moteurs solides valent mieux
+# que vingt dont la moitié expire.
+
+use_default_settings: true
+
+general:
+  instance_name: 'ATLAS Search'
+  # Aucun visiteur humain : ni statistiques, ni pages d'aide.
+  enable_metrics: false
+  donation_url: false
+  contact_url: false
+
+search:
+  # Le format JSON est ce qu'ATLAS consomme. Il est désactivé par défaut dans
+  # SearXNG — l'oublier produit du HTML là où le provider attend du JSON, et le
+  # message d'erreur du provider renvoie explicitement à cette ligne.
+  formats:
+    - html
+    - json
+  # Anglais par défaut ; le provider impose la langue du marché requête par
+  # requête (`de` pour l'Allemagne, etc.).
+  default_lang: 'en'
+  # Recherche web classique uniquement. Une entreprise s'identifie par son
+  # site, pas par une image ou un clip.
+  default_categories:
+    - general
+  # Aucun filtrage de contenu : nous cherchons des sites d'entreprises, et un
+  # filtre trop zélé écarte parfois des pages industrielles légitimes.
+  safe_search: 0
+  # Au-delà, un moteur lent pénalise toute la requête. Le provider a sa propre
+  # borne (ATLAS_SEARCH_TIMEOUT_MS) ; celle-ci protège en amont.
+  max_page: 1
+
+server:
+  # Écoute sur toutes les interfaces *du conteneur* — le réseau Docker seul y
+  # accède, aucun port n'est publié vers l'extérieur.
+  bind_address: '0.0.0.0'
+  port: 8080
+  # La clé vient de SEARXNG_SECRET, injectée par docker-compose. Elle n'est pas
+  # écrite ici : ce fichier est monté en lecture seule et versionné, un secret
+  # n'y a pas sa place.
+  # Le limiteur de débit protège une instance publique d'un abus. Ici
+  # l'appelant est unique, connu, et déjà borné par ATLAS (4 requêtes par
+  # découverte). L'activer ne ferait que bloquer notre propre pipeline.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  # Un moteur qui n'a pas répondu en 6 s ne répondra pas utilement.
+  request_timeout: 6.0
+  max_request_timeout: 10.0
+  pool_connections: 20
+  pool_maxsize: 10
+  enable_http2: true
+
+# ─── Moteurs retenus ────────────────────────────────────────────────────────
+#
+# Quatre moteurs, choisis pour la recherche B2B européenne :
+#
+#   duckduckgo  Large couverture, bonne tenue sur les sites d'entreprises,
+#               tolérant aux requêtes en allemand.
+#   brave       Index indépendant — il ne redit pas ce que dit Bing. C'est ce
+#               qui apporte de la diversité réelle, et non du volume.
+#   startpage   Résultats Google sans le blocage de Google. Le meilleur rappel
+#               sur les PME industrielles européennes.
+#   mojeek      Index propre et indépendant. Faible volume, mais il fait
+#               remonter des sites que les trois autres manquent.
+#
+# Volontairement absents : Google et Bing en direct (ils bloquent les instances
+# auto-hébergées en quelques heures), Wikipedia et les agrégateurs (le filtrage
+# d'ATLAS les écarte de toute façon), et tout ce qui relève des images, des
+# vidéos ou des réseaux sociaux.
+engines:
+  - name: duckduckgo
+    disabled: false
+    timeout: 5.0
+    weight: 1.0
+
+  - name: brave
+    disabled: false
+    timeout: 5.0
+    weight: 1.0
+
+  - name: startpage
+    disabled: false
+    timeout: 6.0
+    weight: 1.2
+
+  - name: mojeek
+    disabled: false
+    timeout: 5.0
+    weight: 0.8
+
+  # Tout le reste reste désactivé : chaque moteur actif se paie en latence.
+  - name: google
+    disabled: true
+  - name: bing
+    disabled: true
+  - name: wikipedia
+    disabled: true
+  - name: wikidata
+    disabled: true
+  - name: github
+    disabled: true
+  - name: stackoverflow
+    disabled: true
+  - name: reddit
+    disabled: true
+  - name: youtube
+    disabled: true

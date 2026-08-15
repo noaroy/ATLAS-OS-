@@ -1,0 +1,222 @@
+﻿PARTIE VII — ORDRE DE MISSION FINAL POUR CLAUDE CODE
+________________
+
+
+7.1 Rôle de Claude Code
+Tu agis en tant qu'architecte logiciel senior, ingénieur full-stack, expert en intelligence artificielle et responsable de livraison du projet ATLAS OS.
+Ta mission n'est pas simplement d'ajouter des fonctionnalités.
+Ta mission est de transformer une base de projet existante en une plateforme complète, cohérente et fonctionnelle correspondant à la vision ATLAS OS.
+________________
+
+
+7.2 Contexte du projet
+ATLAS OS est une plateforme destinée à créer une organisation numérique autonome composée d'agents IA spécialisés.
+Le système doit permettre à un utilisateur de :
+* définir des objectifs ;
+* superviser une organisation IA ;
+* déléguer des missions ;
+* suivre les résultats ;
+* faire évoluer continuellement le système.
+Le projet possède déjà une base existante.
+Cette base doit être analysée et utilisée lorsque cela est pertinent.
+Elle n'est cependant pas une contrainte absolue.
+Le résultat final est prioritaire.
+________________
+
+
+7.3 Première étape obligatoire : analyse complète
+Avant toute modification, tu dois analyser l'intégralité du projet.
+Tu dois comprendre :
+* la structure actuelle ;
+* les technologies utilisées ;
+* les composants existants ;
+* l'architecture actuelle ;
+* les fonctionnalités déjà présentes ;
+* les limites techniques.
+Tu dois produire une vision claire de :
+* ce qui peut être conservé ;
+* ce qui doit être amélioré ;
+* ce qui doit être remplacé ;
+* ce qui doit être supprimé.
+________________
+
+
+7.4 Règle principale de développement
+Ne construis pas un prototype.
+Construis une version destinée à devenir un véritable produit.
+Chaque choix doit prendre en compte :
+* évolution future ;
+* maintenance ;
+* sécurité ;
+* performance ;
+* fonctionnement permanent ;
+* ajout de nouveaux agents.
+________________
+
+
+7.5 Création de l'architecture finale
+Tu dois mettre en place une architecture permettant :
+* interface utilisateur ;
+* moteur Hermes ;
+* système multi-agents ;
+* automatisations n8n ;
+* mémoire intelligente ;
+* base de données ;
+* monitoring ;
+* déploiement VPS.
+L'architecture doit être modulaire et évolutive.
+________________
+
+
+7.6 Création de l'expérience utilisateur
+L'interface doit être développée autour de deux expériences.
+________________
+
+
+ATLAS Village
+Créer une interface immersive représentant l'organisation IA sous forme de village.
+Elle doit contenir :
+* bâtiments spécialisés ;
+* habitants représentant les agents ;
+* animations ;
+* évolution du village ;
+* représentation visuelle de l'activité.
+Chaque élément visuel doit avoir une correspondance avec une donnée réelle du système.
+________________
+
+
+Command Center
+Créer une interface professionnelle permettant :
+* supervision ;
+* analyse ;
+* gestion des missions ;
+* consultation des données ;
+* contrôle avancé.
+________________
+
+
+7.7 Création du système Hermes
+Développer Hermes comme l'intelligence centrale.
+Hermes doit pouvoir :
+* comprendre un objectif ;
+* créer un plan ;
+* choisir les agents ;
+* distribuer les missions ;
+* suivre l'avancement ;
+* analyser les résultats ;
+* améliorer l'organisation.
+Hermes doit fonctionner comme un directeur opérationnel.
+________________
+
+
+7.8 Création des agents
+Créer une architecture permettant d'ajouter facilement de nouveaux agents.
+Chaque agent doit posséder :
+* identité ;
+* rôle ;
+* compétences ;
+* outils ;
+* mémoire ;
+* historique ;
+* état actuel.
+Les agents minimum attendus :
+* Explorer ;
+* Analyst ;
+* Ambassador ;
+* Messenger ;
+* Architect ;
+* Archivist ;
+* Evolution Manager ;
+* Engineer.
+________________
+
+
+7.9 Système d'auto-amélioration
+Créer une logique permettant au système d'évoluer.
+ATLAS OS doit pouvoir :
+* observer ses performances ;
+* analyser ses résultats ;
+* détecter ses limites ;
+* proposer des optimisations ;
+* améliorer progressivement ses processus.
+Toute modification critique doit rester contrôlée et traçable.
+________________
+
+
+7.10 Fonctionnement autonome 24h/24
+Le système doit être conçu pour fonctionner continuellement.
+Il doit gérer :
+* lancement automatique ;
+* surveillance ;
+* erreurs ;
+* reprise après interruption ;
+* sauvegardes ;
+* notifications.
+L'objectif est de créer une organisation numérique active en permanence.
+________________
+
+
+7.11 Collaboration avec les outils existants
+Le système doit pouvoir fonctionner avec :
+* Hermes comme intelligence centrale ;
+* n8n comme moteur d'automatisation ;
+* les outils déjà présents dans le projet lorsque pertinents.
+Toute intégration doit être pensée pour durer.
+________________
+
+
+7.12 Exigence de rendu final
+À la fin de ta mission, le résultat attendu est une version complète d'ATLAS OS.
+Le rendu doit inclure :
+* application fonctionnelle ;
+* interface immersive ;
+* système d'agents ;
+* orchestration Hermes ;
+* mémoire ;
+* automatisations ;
+* documentation ;
+* préparation VPS.
+________________
+
+
+7.13 Règle de livraison
+Ne livre pas une succession de petits prototypes.
+Le rendu final doit être cohérent et utilisable.
+Les différentes parties doivent fonctionner ensemble comme un seul système.
+________________
+
+
+7.14 Vérification finale obligatoire
+Avant de considérer la mission terminée, vérifier :
+Fonctionnement
+* l'application démarre ;
+* les modules communiquent ;
+* les agents fonctionnent.
+Interface
+* ATLAS Village fonctionne ;
+* Command Center fonctionne.
+Intelligence
+* Hermes orchestre correctement.
+Autonomie
+* les workflows fonctionnent ;
+* le système peut tourner en continu.
+Évolution
+* de nouveaux agents peuvent être ajoutés facilement.
+________________
+
+
+7.15 Résultat attendu
+Le résultat final doit être :
+Une organisation numérique autonome.
+Pas seulement un logiciel.
+Pas seulement un tableau de bord.
+Une plateforme capable de :
+* réfléchir ;
+* organiser ;
+* exécuter ;
+* apprendre ;
+* évoluer.
+________________
+
+
+FIN PARTIE VII

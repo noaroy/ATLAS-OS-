@@ -1,0 +1,381 @@
+﻿PARTIE II — ARCHITECTURE GLOBALE DU SYSTÈME
+________________
+
+
+2.1 Principes architecturaux fondamentaux
+ATLAS OS doit être construit comme une plateforme logicielle évolutive et non comme une simple application.
+L'objectif est de créer une infrastructure capable d'accueillir plusieurs produits, plusieurs équipes d'agents et plusieurs activités commerciales tout en conservant une architecture stable.
+Chaque choix technique doit favoriser :
+* la modularité ;
+* la robustesse ;
+* la maintenabilité ;
+* la sécurité ;
+* l'évolutivité ;
+* la performance ;
+* l'observabilité.
+ATLAS OS doit être capable d'évoluer pendant plusieurs années sans nécessiter une reconstruction complète.
+________________
+
+
+2.2 Principes de conception
+Modularité
+Chaque composant du système doit avoir une responsabilité clairement définie.
+Chaque module doit pouvoir être :
+* amélioré ;
+* remplacé ;
+* testé ;
+* désactivé ;
+* supprimé.
+Aucun composant ne doit devenir une dépendance critique inutile.
+________________
+
+
+Séparation des responsabilités
+Chaque couche possède un rôle précis :
+Interface utilisateur :
+* affichage ;
+* interaction ;
+* supervision.
+Hermes :
+* orchestration ;
+* stratégie ;
+* coordination.
+Agents :
+* exécution spécialisée.
+Services :
+* logique métier ;
+* traitement des données.
+n8n :
+* automatisations ;
+* workflows.
+Base de données :
+* stockage ;
+* historique ;
+* mémoire.
+Infrastructure :
+* disponibilité ;
+* sécurité ;
+* performances.
+________________
+
+
+Observabilité permanente
+ATLAS OS doit toujours permettre de comprendre son fonctionnement.
+Chaque action importante doit être enregistrée.
+Le système doit pouvoir répondre aux questions :
+* Quel agent travaille actuellement ?
+* Quelle mission est exécutée ?
+* Pourquoi cette décision a été prise ?
+* Quelle donnée a été utilisée ?
+* Quel résultat a été obtenu ?
+* Quelle erreur est survenue ?
+Aucune opération critique ne doit être invisible.
+________________
+
+
+2.3 Analyse du projet existant
+ATLAS OS possède déjà une base de développement.
+Cette base doit être analysée avant toute modification.
+Claude Code doit agir comme un architecte logiciel senior.
+Avant de modifier le moindre élément, il doit comprendre :
+* la structure du projet ;
+* les technologies utilisées ;
+* les dépendances ;
+* les fonctionnalités existantes ;
+* l'organisation du code ;
+* l'interface actuelle ;
+* les agents déjà présents ;
+* les workflows existants.
+________________
+
+
+2.4 Transformation du projet existant
+Le projet actuel représente une base de travail.
+Claude Code peut :
+* conserver un composant ;
+* améliorer un composant ;
+* restructurer un composant ;
+* remplacer un composant ;
+* supprimer un composant.
+Il n'existe aucune obligation de conserver une architecture ancienne si elle limite le potentiel final.
+La priorité absolue est :
+Créer la meilleure version possible d'ATLAS OS.
+________________
+
+
+2.5 Architecture générale ATLAS OS
+L'architecture cible est organisée en plusieurs couches.
+Utilisateur
+
+
+↓
+
+
+ATLAS COMMAND CENTER
+
+
+↓
+
+
+HERMES
+
+
+↓
+
+
+Agents spécialisés + Services métier
+
+
+↓
+
+
+n8n Automation Layer
+
+
+↓
+
+
+Base de données + Mémoire
+
+
+↓
+
+
+Infrastructure Cloud VPS
+
+
+↓
+
+
+Monitoring 24/7
+
+
+________________
+
+
+2.6 ATLAS Command Center
+Le Command Center est l'interface principale de supervision.
+Il permet au fondateur de piloter toute l'organisation IA.
+Fonctions principales :
+* visualisation des agents ;
+* création de missions ;
+* suivi des opérations ;
+* consultation des résultats ;
+* gestion des données ;
+* analyse des performances ;
+* contrôle du système.
+L'interface possède deux modes.
+________________
+
+
+Mode ATLAS Village
+Le mode immersif représente l'organisation sous forme d'un village numérique vivant.
+Chaque bâtiment représente une fonction réelle.
+Chaque agent est représenté comme un habitant.
+Les animations représentent les activités du système.
+Ce mode permet une compréhension rapide et intuitive.
+________________
+
+
+Mode Command Center
+Le mode professionnel affiche :
+* statistiques ;
+* tableaux ;
+* historiques ;
+* logs ;
+* métriques ;
+* paramètres avancés.
+Ce mode est destiné à l'analyse approfondie.
+________________
+
+
+2.7 Hermes — Intelligence centrale
+Hermes est le cerveau opérationnel d'ATLAS OS.
+Hermes n'est pas un simple agent.
+Hermes est l'orchestrateur principal.
+Son rôle est de transformer une intention utilisateur en une suite d'actions coordonnées.
+________________
+
+
+Responsabilités d'Hermes
+Hermes doit pouvoir :
+* comprendre une demande ;
+* analyser un objectif ;
+* créer une stratégie ;
+* découper une mission ;
+* choisir les agents adaptés ;
+* attribuer les tâches ;
+* suivre l'avancement ;
+* contrôler la qualité ;
+* gérer les erreurs ;
+* synthétiser les résultats.
+________________
+
+
+Hermes comme directeur opérationnel
+Hermes doit fonctionner comme un responsable d'équipe.
+Il connaît :
+* les capacités de chaque agent ;
+* leur état actuel ;
+* leurs performances ;
+* leurs historiques ;
+* leurs limites.
+Il doit distribuer intelligemment le travail.
+________________
+
+
+2.8 Système multi-agents
+Les agents sont les spécialistes d'ATLAS OS.
+Chaque agent possède :
+* une mission précise ;
+* des compétences définies ;
+* des outils autorisés ;
+* une mémoire adaptée ;
+* des objectifs mesurables.
+________________
+
+
+Règle fondamentale
+Un agent = une responsabilité principale.
+Un agent ne doit pas devenir un système généraliste.
+La spécialisation améliore :
+* la qualité ;
+* la fiabilité ;
+* la maintenance.
+________________
+
+
+2.9 Communication entre agents
+Toutes les communications doivent être structurées.
+Chaque échange doit contenir :
+* identifiant de mission ;
+* agent émetteur ;
+* agent destinataire ;
+* objectif ;
+* données nécessaires ;
+* résultat attendu ;
+* statut.
+Les communications doivent être :
+* traçables ;
+* historisées ;
+* sécurisées.
+________________
+
+
+2.10 Gestion des missions
+Chaque mission possède un cycle de vie.
+États possibles :
+* créée ;
+* planifiée ;
+* attribuée ;
+* en cours ;
+* terminée ;
+* validée ;
+* archivée ;
+* échouée.
+Chaque mission doit conserver :
+* son historique ;
+* les agents impliqués ;
+* les résultats produits ;
+* le temps nécessaire ;
+* les erreurs rencontrées.
+________________
+
+
+2.11 Mémoire du système
+ATLAS OS doit posséder une mémoire capable d'accumuler de la connaissance.
+Cette mémoire doit permettre :
+* de retrouver des informations passées ;
+* d'éviter les répétitions ;
+* d'améliorer les décisions futures ;
+* d'enrichir les analyses.
+La mémoire doit être organisée en plusieurs niveaux :
+Mémoire court terme
+Informations liées aux missions actuelles.
+Mémoire long terme
+Connaissances permanentes du système.
+Mémoire métier
+Informations spécifiques aux activités commerciales.
+________________
+
+
+2.12 n8n Automation Layer
+n8n est utilisé comme couche d'automatisation.
+Son rôle :
+* déclenchement de workflows ;
+* connexion aux services externes ;
+* automatisations répétitives ;
+* planification des tâches ;
+* gestion des événements.
+n8n ne remplace pas Hermes.
+Hermes décide.
+n8n exécute.
+________________
+
+
+2.13 Base de données
+La base de données doit stocker :
+* utilisateurs ;
+* agents ;
+* missions ;
+* historiques ;
+* résultats ;
+* connaissances ;
+* configurations ;
+* logs.
+Elle doit être conçue pour supporter :
+* croissance des données ;
+* recherches rapides ;
+* sauvegardes ;
+* évolutions futures.
+________________
+
+
+2.14 Logs et monitoring
+ATLAS OS doit disposer d'une surveillance complète.
+Les informations importantes doivent être enregistrées :
+* activité des agents ;
+* erreurs ;
+* performances ;
+* temps d'exécution ;
+* appels externes ;
+* événements système.
+Le système doit permettre un diagnostic rapide.
+________________
+
+
+2.15 Fonctionnement 24/7
+ATLAS OS doit être conçu pour fonctionner en permanence.
+Le système doit gérer :
+* redémarrage automatique ;
+* récupération après erreur ;
+* surveillance continue ;
+* gestion des ressources ;
+* sauvegardes automatiques ;
+* reprise des missions interrompues.
+L'objectif est de créer une organisation numérique toujours active.
+________________
+
+
+2.16 Infrastructure VPS Cloud
+L'architecture finale doit pouvoir être déployée sur un VPS Cloud.
+Le déploiement doit prendre en compte :
+* isolation des services ;
+* sécurité ;
+* mises à jour ;
+* sauvegardes ;
+* monitoring ;
+* montée en charge.
+Le système doit être prêt pour évoluer vers une infrastructure plus importante si nécessaire.
+________________
+
+
+2.17 Vision finale de l'architecture
+ATLAS OS doit fonctionner comme une entreprise numérique autonome.
+L'utilisateur donne une direction.
+Hermes organise.
+Les agents exécutent.
+Les workflows automatisent.
+La mémoire apprend.
+L'infrastructure maintient la disponibilité.
+L'ensemble forme un système cohérent capable de produire une véritable valeur économique.

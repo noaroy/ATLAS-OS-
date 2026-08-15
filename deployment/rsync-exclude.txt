@@ -1,0 +1,39 @@
+# Ce qui ne doit jamais partir vers le serveur.
+#
+# Passé à rsync via --exclude-from, ce fichier rend l'oubli impossible : la
+# liste vit dans le dépôt plutôt que dans la mémoire de celui qui tape la
+# commande. Un secret transféré une fois est un secret à considérer comme
+# connu, et l'on ne peut pas le rattraper.
+
+# ─── Secrets ────────────────────────────────────────────────────────────────
+# Les secrets naissent sur la machine qui les utilise, par init-env.sh, et
+# n'en sortent jamais. .env.example, lui, part : il ne contient que des
+# marques-place, et le script de déploiement refuse désormais de démarrer si
+# l'une d'elles subsiste.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# ─── État local, propre à un poste ──────────────────────────────────────────
+# La base du serveur est la sienne ; l'écraser avec celle d'un poste de travail
+# détruirait l'historique des missions.
+data/
+deployment/backups/
+deployment/rapport-smoke-*.txt
+
+# ─── Ce que le serveur reconstruit lui-même ─────────────────────────────────
+node_modules/
+dist/
+.git/
+graphify-out/
+
+# ─── Bruit d'éditeur et de système ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

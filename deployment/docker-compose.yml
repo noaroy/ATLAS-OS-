@@ -1,0 +1,126 @@
+# ATLAS OS — VPS deployment (SRS §5.16).
+#
+#   docker compose -f deployment/docker-compose.yml up -d
+#
+# Services are isolated, restart on their own, and keep all state in named
+# volumes so the stack can be rebuilt without losing the organisation's memory.
+
+name: atlas-os
+
+services:
+  atlas:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    image: atlas-os:1.0.0
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      ATLAS_HOST: 0.0.0.0
+      ATLAS_PORT: 4700
+      ATLAS_DATA_DIR: /data
+      ATLAS_BACKUP_DIR: /data/backups
+      ATLAS_LOG_PRETTY: "false"
+      # Inside the compose network n8n is reachable by service name.
+      ATLAS_N8N_BASE_URL: http://n8n:5678
+      # Le moteur de recherche vit sur le réseau interne : aucune clé, aucun
+      # quota, aucun port publié.
+      SEARXNG_BASE_URL: http://searxng:8080
+    volumes:
+      - atlas-data:/data
+    networks: [atlas]
+    depends_on:
+      n8n:
+        condition: service_started
+      # ATLAS attend que le moteur réponde : démarrer une mission de découverte
+      # sur un moteur qui n'écoute pas encore produirait un échec inutile.
+      searxng:
+        condition: service_healthy
+    # A generous stop window so the graceful shutdown can finish its backup.
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      N8N_HOST: n8n
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      GENERIC_TIMEZONE: ${ATLAS_TIMEZONE:-UTC}
+      # n8n is not exposed publicly; reach it through the reverse proxy.
+      N8N_SECURE_COOKIE: "false"
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-atlas}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?set N8N_PASSWORD in .env}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks: [atlas]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Moteur de recherche ────────────────────────────────────────────────
+  # SearXNG est un métamoteur : il interroge plusieurs moteurs publics et
+  # fusionne leurs résultats. Auto-hébergé, il ne coûte rien au-delà du VPS et
+  # ne dépend d'aucun contrat qu'un tiers pourrait changer.
+  #
+  # Aucun port n'est publié : seul ATLAS l'atteint, par le réseau interne. Une
+  # instance SearXNG exposée publiquement devient un relais ouvert et se fait
+  # bloquer par les moteurs qu'elle interroge.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      # Utilisée en interne pour construire les liens ; jamais publique.
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # Une clé aléatoire est exigée par SearXNG pour signer ses formulaires.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in .env}
+    volumes:
+      # Nos réglages : moteurs retenus, format JSON autorisé, limiteur désactivé
+      # pour un appelant unique et connu.
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-data:/var/cache/searxng
+    networks: [atlas]
+    healthcheck:
+      # `/healthz` répond sans interroger le moindre moteur : c'est bien la
+      # disponibilité du service qu'on teste, pas celle du web.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # TLS termination and the only public entry point. Caddy obtains and renews
+  # certificates automatically.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ATLAS_DOMAIN: ${ATLAS_DOMAIN:?set ATLAS_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [atlas]
+    depends_on: [atlas]
+
+volumes:
+  atlas-data:
+  n8n-data:
+  searxng-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  atlas:
+    driver: bridge

@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": false,
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@atlas/contracts": ["packages/contracts/src/index.ts"],
+      "@atlas/core": ["packages/core/src/index.ts"],
+      "@atlas/data": ["packages/data/src/index.ts"],
+      "@atlas/memory": ["packages/memory/src/index.ts"],
+      "@atlas/llm": ["packages/llm/src/index.ts"],
+      "@atlas/intelligence": ["packages/intelligence/src/index.ts"],
+      "@atlas/agents": ["packages/agents/src/index.ts"],
+      "@atlas/departments": ["packages/departments/src/index.ts"],
+      "@atlas/hermes": ["packages/hermes/src/index.ts"],
+      "@atlas/automation": ["packages/automation/src/index.ts"],
+      "@atlas/evolution": ["packages/evolution/src/index.ts"],
+      "@atlas/runtime": ["packages/runtime/src/index.ts"],
+      "@atlas/server": ["packages/server/src/index.ts"],
+      "@atlas/testing": ["packages/testing/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist", "apps/console"]
+}

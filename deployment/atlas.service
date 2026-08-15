@@ -1,0 +1,54 @@
+# systemd unit for running ATLAS OS directly on a VPS, without Docker.
+#
+#   sudo cp deployment/atlas.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now atlas
+#
+# Automatic start at boot and restart after failure are what make the 24/7
+# requirement real (SRS §2.15).
+
+[Unit]
+Description=ATLAS OS — autonomous digital organisation
+Documentation=https://github.com/your-org/atlas-os
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atlas
+Group=atlas
+WorkingDirectory=/opt/atlas
+EnvironmentFile=/opt/atlas/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/atlas/dist/server/atlas.mjs
+
+# Restart on any unclean exit, but back off so a boot-loop cannot pin the CPU.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# SIGTERM triggers the graceful shutdown: drain missions, checkpoint the
+# database, write a final backup. Give it room to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Hardening — ATLAS only ever needs to write inside its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/opt/atlas/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atlas
+
+[Install]
+WantedBy=multi-user.target

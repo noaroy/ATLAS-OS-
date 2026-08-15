@@ -1,0 +1,13 @@
+node_modules/
+dist/
+data/
+!data/.gitkeep
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+.DS_Store
+apps/console/dist/
+.claude/settings.local.json
+graphify-out/

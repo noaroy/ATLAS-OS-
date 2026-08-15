@@ -1,0 +1,42 @@
+# Reverse proxy for ATLAS OS.
+# Caddy handles TLS certificates automatically for {$ATLAS_DOMAIN}.
+
+{$ATLAS_DOMAIN} {
+	encode zstd gzip
+
+	# n8n's editor, kept behind the same certificate and off the public root.
+	handle_path /n8n/* {
+		reverse_proxy n8n:5678
+	}
+
+	# The realtime channel needs an idle timeout longer than the heartbeat,
+	# or the proxy will cut the village's live feed every few minutes.
+	@realtime path /api/realtime
+	handle @realtime {
+		reverse_proxy atlas:4700 {
+			transport http {
+				read_timeout 24h
+				write_timeout 24h
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy atlas:4700
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}

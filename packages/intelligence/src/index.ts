@@ -48,6 +48,16 @@ export * from './discovery/index.ts';
 export * from './search/types.ts';
 export { BraveSearchProvider, type BraveOptions } from './search/brave.ts';
 export { SearxngSearchProvider, type SearxngOptions } from './search/searxng.ts';
+export { DuckDuckGoSearchProvider } from './search/duckduckgo.ts';
+export { MarginaliaSearchProvider } from './search/marginalia.ts';
+export {
+  capabilitiesOf,
+  assessSuitability,
+  type ProviderCapabilities,
+  type MissionSearchNeed,
+  type SuitabilityReport,
+  type SuitabilityVerdict,
+} from './search/capabilities.ts';
 export { planQueries, type PlannedQuery } from './search/planner.ts';
 export { filterResults, fetchTargetsFor, type SearchCandidate, type FilterReport } from './search/filter.ts';
 export { fetchPages, type FetchedPage } from './search/fetcher.ts';

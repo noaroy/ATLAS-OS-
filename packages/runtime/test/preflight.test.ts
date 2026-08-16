@@ -1,0 +1,253 @@
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createLogger } from '../../core/src/logger.ts';
+import { createRepositories, type Repositories } from '../../data/src/index.ts';
+import type { AtlasConfig } from '../../core/src/config.ts';
+import type { SearchProvider } from '../../intelligence/src/index.ts';
+import { preflight, formatPreflight } from '../src/preflight.ts';
+
+/**
+ * Le contrôle avant décollage.
+ *
+ * Ce que ces tests protègent : qu'une configuration incapable de produire un
+ * résultat soit refusée *avant* la dépense, et non découverte pendant. Les cinq
+ * missions réelles qui ont échoué pour 10,94 $ auraient toutes été arrêtées ici
+ * — moteur injoignable, délais inversés, plafond absent.
+ *
+ * Le contrôle qui compte le plus est celui du moteur : il l'interroge vraiment.
+ * « Configuré » n'a jamais empêché « injoignable ».
+ */
+
+const logger = createLogger({ level: 'error', pretty: false });
+let dir: string;
+let repos: Repositories;
+
+before(() => {
+  dir = mkdtempSync(join(tmpdir(), 'atlas-preflight-'));
+  repos = createRepositories(join(dir, 'preflight.db'), logger);
+});
+
+after(() => {
+  repos.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+function configWith(overrides: Record<string, unknown> = {}): AtlasConfig {
+  return {
+    env: 'test',
+    llm: {
+      apiKey: 'sk-test',
+      mode: 'live',
+      declaredMode: 'live',
+      forbiddenModels: ['claude-opus'],
+      allowedModels: [],
+      hermesModel: 'claude-haiku-4-5-20251001',
+      agentModel: 'claude-haiku-4-5-20251001',
+      effort: 'low',
+      maxTokens: 4000,
+      ...(overrides.llm as object),
+    },
+    budget: {
+      maxMissionTokens: 100_000,
+      maxMissionCostUsd: 0.4,
+      maxStepTokens: 20_000,
+      maxCallsPerStep: 6,
+      maxOutputTokensPerCall: 2000,
+      circuitBreakerFailures: 3,
+      minViableOutputTokens: 512,
+      ...(overrides.budget as object),
+    },
+    orchestration: {
+      providerTimeoutMs: 60_000,
+      toolTimeoutMs: 90_000,
+      taskTimeoutMs: 120_000,
+      ...(overrides.orchestration as object),
+    },
+    search: { timeoutMs: 10_000, ...(overrides.search as object) },
+  } as unknown as AtlasConfig;
+}
+
+/** Un moteur qui répond, ou qui ne répond pas — au choix du test. */
+function providerThat(outcome: 'ok' | 'timeout' | 'rate-limited'): SearchProvider {
+  return {
+    key: 'test-engine',
+    label: 'Moteur de test',
+    availability: () => ({ available: true, reason: 'disponible' }),
+    search: async () => ({
+      results:
+        outcome === 'ok'
+          ? [
+              {
+                title: 'x',
+                url: 'https://exemple.fr',
+                snippet: '',
+                provider: 'test-engine',
+                rank: 1,
+                query: 'test',
+                retrievedAt: new Date().toISOString(),
+              },
+            ]
+          : [],
+      outcome,
+      detail: outcome === 'ok' ? '1 résultat' : 'le moteur ne répond pas',
+      costUsd: 0,
+      durationMs: 12,
+    }),
+  };
+}
+
+const run = (config: AtlasConfig, search: SearchProvider | null, missionBudgetUsd?: number) =>
+  preflight({ config, repos, search, logger, ...(missionBudgetUsd !== undefined ? { missionBudgetUsd } : {}) });
+
+describe('contrôle avant décollage', () => {
+  test('une configuration saine autorise le décollage', async () => {
+    const report = await run(configWith(), providerThat('ok'));
+    assert.equal(report.cleared, true, formatPreflight(report));
+    assert.equal(report.mode, 'live');
+    assert.equal(report.searchProvider, 'test-engine');
+  });
+
+  test('un moteur injoignable bloque le décollage', async () => {
+    // Le contrôle qui aurait évité LIVE #005 : le moteur était configuré, et
+    // n'a jamais répondu. La mission a coûté 0,86 $ pour zéro candidat.
+    const report = await run(configWith(), providerThat('timeout'));
+    assert.equal(report.cleared, false);
+    const check = report.checks.find((c) => c.name === 'recherche')!;
+    assert.equal(check.status, 'fail');
+    assert.ok(check.detail.includes('timeout'));
+  });
+
+  test('aucun moteur du tout bloque une mission réelle', async () => {
+    const report = await run(configWith(), null);
+    assert.equal(report.cleared, false);
+    assert.ok(report.checks.some((c) => c.name === 'recherche' && c.status === 'fail'));
+  });
+
+  test('aucun moteur ne bloque pas une simulation', async () => {
+    const report = await run(
+      configWith({ llm: { mode: 'simulation', declaredMode: 'simulation', apiKey: '' } }),
+      null,
+    );
+    assert.equal(report.cleared, true, formatPreflight(report));
+  });
+
+  test('le mode réel sans clé est refusé', async () => {
+    const report = await run(configWith({ llm: { apiKey: '' } }), providerThat('ok'));
+    assert.equal(report.cleared, false);
+    const check = report.checks.find((c) => c.name === 'inférence')!;
+    assert.equal(check.status, 'fail');
+    assert.ok(check.remedy);
+  });
+
+  test('un modèle interdit en service est refusé', async () => {
+    // Le garde-fou demandé : Opus ne doit pas servir à de l'extraction.
+    const report = await run(
+      configWith({ llm: { agentModel: 'claude-opus-5', forbiddenModels: ['claude-opus'] } }),
+      providerThat('ok'),
+    );
+    assert.equal(report.cleared, false);
+    const check = report.checks.find((c) => c.name === 'modèles')!;
+    assert.equal(check.status, 'fail');
+    assert.ok(check.detail.includes('claude-opus-5'));
+  });
+
+  test("le rapport nomme ce qui est interdit, pas seulement le nombre", async () => {
+    // « 1 modèle interdit » n'apprend rien à qui relit avant un lancement réel.
+    // La ligne doit se vérifier d'un coup d'œil.
+    const report = await run(
+      configWith({
+        llm: {
+          agentModel: 'claude-haiku-4-5-20251001',
+          hermesModel: 'claude-haiku-4-5-20251001',
+          forbiddenModels: ['claude-opus'],
+        },
+      }),
+      providerThat('ok'),
+    );
+    const check = report.checks.find((c) => c.name === 'modèles')!;
+    assert.equal(check.status, 'pass');
+    assert.ok(check.detail.includes('claude-opus'), `attendu « claude-opus » dans : ${check.detail}`);
+    assert.ok(check.detail.includes('claude-haiku'), 'le modèle en service doit être nommé aussi');
+  });
+
+  test("un modèle hors liste blanche est refusé même s'il n'est pas interdit", async () => {
+    // Aucune escalade implicite : Sonnet ne figure sur aucune liste noire, mais
+    // une liste blanche qui ne le mentionne pas suffit à le refuser.
+    const report = await run(
+      configWith({
+        llm: {
+          agentModel: 'claude-sonnet-5',
+          hermesModel: 'claude-sonnet-5',
+          forbiddenModels: ['claude-opus'],
+          allowedModels: ['claude-haiku'],
+        },
+      }),
+      providerThat('ok'),
+    );
+    assert.equal(report.cleared, false);
+    const check = report.checks.find((c) => c.name === 'modèles')!;
+    assert.equal(check.status, 'fail');
+    assert.ok(check.detail.includes('claude-sonnet-5'));
+    assert.ok(check.remedy?.includes('claude-haiku'), 'le remède doit rappeler ce qui est autorisé');
+  });
+
+  test("l'absence totale de restriction est signalée", async () => {
+    // Le cas qui a motivé le verrou : rien n'empêchait d'appeler le plus cher,
+    // et le preflight le disait « conforme ».
+    const report = await run(
+      configWith({ llm: { forbiddenModels: [], allowedModels: [] } }),
+      providerThat('ok'),
+    );
+    const check = report.checks.find((c) => c.name === 'modèles')!;
+    assert.equal(check.status, 'warn');
+    assert.equal(check.blocking, false, 'un déploiement de développement ne doit pas être bloqué');
+    assert.ok(check.remedy?.includes('ATLAS_FORBIDDEN_MODELS'));
+  });
+
+  test('un plafond nul est refusé en mode réel', async () => {
+    const report = await run(configWith(), providerThat('ok'), 0);
+    assert.equal(report.cleared, false);
+    assert.ok(report.checks.some((c) => c.name === 'budget' && c.status === 'fail'));
+  });
+
+  test('une hiérarchie de délais inversée est refusée', async () => {
+    // L'erreur exacte de LIVE #003 : l'outil bornait plus court que le
+    // fournisseur qu'il enveloppait.
+    const report = await run(
+      configWith({ orchestration: { providerTimeoutMs: 180_000, toolTimeoutMs: 120_000, taskTimeoutMs: 300_000 } }),
+      providerThat('ok'),
+    );
+    assert.equal(report.cleared, false);
+    assert.ok(report.checks.some((c) => c.name === 'délais' && c.status === 'fail'));
+  });
+
+  test('un mode déduit passe, mais est signalé', async () => {
+    const report = await run(configWith({ llm: { declaredMode: 'auto' } }), providerThat('ok'));
+    assert.equal(report.cleared, true);
+    const check = report.checks.find((c) => c.name === 'mode')!;
+    assert.equal(check.status, 'warn');
+    assert.equal(check.blocking, false);
+  });
+
+  test('le rapport nomme ce qui bloque et ce qu’il faut faire', async () => {
+    const report = await run(configWith({ llm: { apiKey: '' } }), providerThat('timeout'));
+    const text = formatPreflight(report);
+
+    assert.ok(text.includes('DÉCOLLAGE REFUSÉ'));
+    // Chaque échec doit proposer un remède : un contrôle qui dit seulement
+    // « non » oblige à relire le code pour comprendre.
+    for (const check of report.checks.filter((c) => c.status === 'fail')) {
+      assert.ok(check.remedy, `${check.name} échoue sans remède`);
+      assert.ok(text.includes(check.remedy), 'le remède doit apparaître dans le rapport');
+    }
+  });
+
+  test('le plafond de la mission prime sur celui du déploiement', async () => {
+    const report = await run(configWith(), providerThat('ok'), 0.4);
+    assert.equal(report.budgetUsd, 0.4);
+    assert.ok(report.checks.some((c) => c.name === 'budget' && c.detail.includes('0.40')));
+  });
+});

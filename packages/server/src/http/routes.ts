@@ -25,6 +25,7 @@ import { DEMO_MISSION } from '@atlas/departments';
 import { missionEconomics, estimateCostUsd, toCsv, toPrintableHtml } from '@atlas/intelligence';
 import type { AtlasSystem } from '../bootstrap.ts';
 import { sendOk } from './reply.ts';
+import { buildCockpit } from './cockpit.ts';
 import { isSecureRequest, requireFounder, requireOperator, tokenFrom } from './auth.ts';
 import { appendSetCookie, clearSessionCookie, serializeSessionCookie } from './cookies.ts';
 import { guardLogin, type Limiters } from './limits.ts';
@@ -213,6 +214,18 @@ export function registerRoutes(app: FastifyInstance, system: AtlasSystem, limite
       // dire la même chose selon qu'on tourne sur des jetons simulés ou sur de
       // l'inférence facturée, et le nombre seul ne le dit pas.
       mode: config.llm.mode,
+      // Le *pourquoi* de la mission : plan retenu, allocations, branches
+      // arrêtées, arbitrages budgétaires, conclusion et ses preuves.
+      decisions: repos.decisions.forMission(id),
+      // Les décisions qui affirment quelque chose sans preuve à l'appui. Vide
+      // est le résultat attendu ; non vide est une anomalie à regarder.
+      unsupportedClaims: repos.decisions.unsupportedClaims(id),
+      // ── Le cockpit ──────────────────────────────────────────────────────
+      // Tout ce que le Command Center affiche vient d'ici. Aucune métrique
+      // n'est recalculée côté navigateur : un chiffre inventé par l'interface
+      // est indiscernable d'un chiffre mesuré, et c'est précisément ce qu'on
+      // ne veut pas dans un tableau de bord qui pilote une dépense.
+      cockpit: buildCockpit(system, id),
     });
   });
 

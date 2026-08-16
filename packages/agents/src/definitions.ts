@@ -1,21 +1,29 @@
 import type { AgentDefinition, Building } from '@atlas/contracts';
 
 /**
- * La carte du village (SRS §3.4–3.5).
+ * La carte de la cité (SRS §3.4–3.5).
  *
- * Coordonnées en unités de grille isométrique. La ville s'organise en trois
- * anneaux, et cette géométrie n'est pas décorative : elle dit comment ATLAS
- * fonctionne.
+ * Quatorze bâtiments, organisés autour du poste de commandement. La géométrie
+ * n'est pas décorative : elle dit comment ATLAS fonctionne.
  *
  *   Le cœur     — commandement, stratégie, salle de mission. Tout passe par là,
  *                 parce que tout est réellement coordonné par Hermès.
- *   La couronne — les métiers, face à face par affinité : la découverte à
- *                 l'ouest regarde l'intelligence à l'est, comme une étape
- *                 regarde celle qui la consomme.
+ *   La couronne — les métiers, disposés dans l'ordre où le travail les traverse :
+ *                 recherche, analyse, production, communication.
  *   Le nord     — le savoir : archives, formation, observatoire. Ce qui reste
  *                 quand une mission est finie.
- *   Le sud      — la liaison : communication, logistique, supervision. Ce qui
- *                 sort du village et ce qui le maintient debout.
+ *   Le sud      — la liaison : logistique et supervision. Ce qui fait circuler
+ *                 et ce qui maintient debout.
+ *
+ * Les coordonnées ont été posées en pixels sur l'écran, puis converties vers la
+ * grille — l'inverse revient à deviner où les bâtiments tomberont une fois
+ * projetés. Aucun couple n'est à moins de 195 px, pour une empreinte de 104 :
+ * les façades ne se recouvrent pas et les étiquettes restent lisibles.
+ *
+ * L'implantation est étirée horizontalement d'un peu plus d'un quart. Une ville
+ * aussi haute que large laissait 61 % de la largeur vide sur un écran 16:9 :
+ * c'est le cadrage vertical qui décidait, et la cité flottait au milieu de deux
+ * marges. Étalée, elle occupe environ 75 % × 86 %.
  *
  * Un bâtiment n'apparaît ici que s'il a une fonction réelle. Aucun décor.
  */
@@ -41,8 +49,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Direction',
     purpose:
       "La salle du conseil : arbitrages, revues de résultats et synchronisation entre départements. On s'y réunit, on n'y produit rien.",
-    x: -2.6,
-    y: 1.6,
+    x: -0.47,
+    y: 5.08,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -55,8 +63,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Direction',
     purpose:
       "Le briefing d'avant-mission et le point de situation pendant qu'elle tourne. Les équipes s'y accordent avant de partir travailler.",
-    x: 2.6,
-    y: 1.6,
+    x: 5.15,
+    y: -0.54,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -71,8 +79,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Découverte',
     purpose:
       "Là où les Explorateurs rassemblent entreprises, marchés, sources et signaux bruts.",
-    x: -5,
-    y: -2,
+    x: -6.93,
+    y: 1.93,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -85,8 +93,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Intelligence',
     purpose:
       "Là où les Analystes transforment la donnée brute en comparaisons, scores et recommandations.",
-    x: 5,
-    y: -2,
+    x: 1.99,
+    y: -6.99,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -99,8 +107,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Développement',
     purpose:
       "Là où les Ambassadeurs identifient distributeurs, intégrateurs et partenaires à l'étranger.",
-    x: -5.6,
-    y: 2.6,
+    x: -4.67,
+    y: 8.13,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -113,8 +121,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Livraison',
     purpose:
       "Là où les Architectes assemblent rapports, synthèses et documents prêts pour le client.",
-    x: 5.6,
-    y: 2.6,
+    x: 8.18,
+    y: -4.72,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -129,8 +137,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Savoir',
     purpose:
       "La mémoire d’ATLAS, entretenue par les Archivistes pour que chaque mission laisse le système plus savant.",
-    x: 0,
-    y: -6.2,
+    x: -5.19,
+    y: -5.19,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -143,8 +151,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Savoir',
     purpose:
       "Là où un spécialiste révise ses compétences et où les nouveaux apprennent les méthodes des départements.",
-    x: -3.6,
-    y: -5.2,
+    x: -9.28,
+    y: -2.26,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -157,8 +165,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Amélioration',
     purpose:
       "Là où le Responsable de l'évolution étudie le fonctionnement d'ATLAS et propose comment il devrait fonctionner mieux.",
-    x: 3.6,
-    y: -5.2,
+    x: -2.22,
+    y: -9.32,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -173,8 +181,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Commercial',
     purpose:
       "Là où les Messagers préparent les approches, les personnalisent et organisent les relances.",
-    x: 0,
-    y: 6.2,
+    x: 5.58,
+    y: 5.58,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -187,8 +195,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Opérations',
     purpose:
       "Le transit du village : dossiers, livrables et pièces circulent d'un département à l'autre en passant par ici.",
-    x: -3.4,
-    y: 5.4,
+    x: 1.98,
+    y: 9.37,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -201,8 +209,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Opérations',
     purpose:
       "La veille permanente : santé du système, alertes, plafonds économiques. On y regarde ATLAS depuis l'extérieur.",
-    x: 3.4,
-    y: 5.4,
+    x: 9.39,
+    y: 1.96,
     level: 1,
     activityScore: 0,
     status: 'nominal',
@@ -215,8 +223,8 @@ export const BUILDINGS: Array<Building & { sortOrder: number }> = [
     department: 'Opérations',
     purpose:
       "Là où les Ingénieurs exécutent les workflows, surveillent la santé du système et gardent les lumières allumées.",
-    x: -7.6,
-    y: 0,
+    x: -11.41,
+    y: 2.38,
     level: 1,
     activityScore: 0,
     status: 'nominal',

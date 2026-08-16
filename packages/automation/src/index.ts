@@ -239,3 +239,4 @@ function computeNextRun(trigger: WorkflowTrigger): string | null {
   if (!isValidCron(trigger.cron)) return null;
   return nextRun(trigger.cron)?.toISOString() ?? null;
 }
+export { guardLiveAutomation, type LiveAutomationRequest, type LiveAutomationVerdict } from './live-guard.ts';

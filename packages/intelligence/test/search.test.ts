@@ -270,17 +270,42 @@ describe('le filtrage déterministe', () => {
     );
   });
 
-  test('applique les exclusions du brief sur ce que le moteur a rendu', () => {
+  test('une exclusion courte et littérale écarte ce qu’elle nomme', () => {
     const report = filterResults(
       [
         result('https://a.de/', 'A GmbH', 'q', 1, 'Wir sind ein Hersteller von Verpackungslinien'),
         result('https://b.de/', 'B GmbH', 'q', 2, 'Händler für Verpackungsmaschinen'),
       ],
-      { exclusions: ['Fabricants concurrents Hersteller'], maxCandidates: 6 },
+      { exclusions: ['Hersteller'], maxCandidates: 6 },
     );
 
     assert.equal(report.candidates.length, 1);
     assert.equal(report.candidates[0]!.domain, 'b.de');
+  });
+
+  test('une exclusion descriptive n’écarte pas tout le marché', () => {
+    // La régression qui a coûté une mission réelle. L'exclusion était découpée
+    // en mots isolés, si bien que « fabricants directs de machines d'emballage »
+    // produisait les motifs « machines » et « emballage » — et rejetait les dix
+    // résultats bruts, y compris chaque distributeur recherché. La mission a
+    // conclu « marché vide » sur un filtre qui avait tout supprimé.
+    //
+    // Une expression longue relève du jugement : elle est laissée à l'étape de
+    // qualification, où un modèle lit réellement les pages.
+    const report = filterResults(
+      [
+        result('https://a.de/', 'A GmbH', 'q', 1, 'Verpackungsmaschinen für die Industrie'),
+        result('https://b.de/', 'B GmbH', 'q', 2, 'Händler für Verpackungsmaschinen'),
+        result('https://c.de/', 'C GmbH', 'q', 3, 'Systemintegration von Verpackungsanlagen'),
+      ],
+      {
+        exclusions: ["fabricants directs de machines d'emballage sans réseau de distribution"],
+        maxCandidates: 6,
+      },
+    );
+
+    assert.equal(report.candidates.length, 3, 'aucun candidat ne devait être écarté');
+    assert.equal(report.rejected.length, 0);
   });
 
   test('borne le nombre de candidats transmis au modèle', () => {

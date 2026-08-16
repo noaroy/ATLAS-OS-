@@ -63,6 +63,30 @@ export interface PipelineCost {
   pagesFetched: number;
 }
 
+/**
+ * Intervalle entre deux requêtes au moteur.
+ *
+ * Un moteur public accepte un appelant régulier et bride une rafale. Ce délai
+ * est le prix d'une recherche fiable — quatre secondes sur une découverte
+ * complète, contre la moitié des requêtes perdues.
+ */
+const SEARCH_INTERVAL_MS = 1100;
+
+/** Attente supplémentaire après un bridage, avant l'unique reprise. */
+const SEARCH_RETRY_MS = 2500;
+
+/** Une pause annulable : un signal d'arrêt ne doit pas attendre son terme. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
 export class PipelineDiscoveryProvider implements DiscoveryProvider {
   readonly key = 'search-pipeline';
   readonly label = 'Recherche web (moteur + analyse)';
@@ -116,7 +140,15 @@ export class PipelineDiscoveryProvider implements DiscoveryProvider {
     // ── 2. Chercher ─────────────────────────────────────────────────────────
     const raw: SearchResult[] = [];
     let searchFailures = 0;
-    for (const plan of planned) {
+    for (const [index, plan] of planned.entries()) {
+      // ── Un intervalle entre deux requêtes ───────────────────────────────
+      // Quatre requêtes en 1,3 seconde : le moteur en a bloqué deux, et la
+      // mission a conclu « marché vide » sur la moitié des sources. Un moteur
+      // public tolère un appelant régulier, pas une rafale. Une seconde entre
+      // deux requêtes coûte quatre secondes sur une découverte entière, et rend
+      // le résultat fiable — c'est un échange évident.
+      if (index > 0) await pause(SEARCH_INTERVAL_MS, ctx.signal);
+
       const response = await this.engine.search(
         {
           query: plan.query,
@@ -137,6 +169,30 @@ export class PipelineDiscoveryProvider implements DiscoveryProvider {
         // constat de marché, pas une panne. Les confondre ferait remonter
         // « recherche impossible » là où le moteur a parfaitement fonctionné —
         // exactement la confusion que la taxonomie sert à éviter.
+        // Un bridage se corrige en attendant, une seule fois. Au-delà, on
+        // renonce à cette requête : insister sur un moteur qui refuse ne fait
+        // que confirmer son refus.
+        if (response.outcome === 'rate-limited') {
+          await pause(SEARCH_RETRY_MS, ctx.signal);
+          const retry = await this.engine.search(
+            {
+              query: plan.query,
+              country: plan.country,
+              language: plan.language,
+              count: this.options.resultsPerQuery,
+            },
+            { logger: ctx.logger, timeoutMs: this.options.searchTimeoutMs, signal: ctx.signal },
+          );
+          this.lastCost.queriesRun++;
+          this.lastCost.searchApiCostUsd += retry.costUsd;
+
+          if (retry.outcome === 'ok') {
+            raw.push(...retry.results);
+            notes.push(`« ${plan.query} » → bridée puis aboutie après attente.`);
+            continue;
+          }
+        }
+
         if (response.outcome !== 'empty') searchFailures++;
         notes.push(`« ${plan.query} » → ${response.outcome} : ${response.detail}`);
       }

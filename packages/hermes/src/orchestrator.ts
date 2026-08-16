@@ -1,5 +1,6 @@
 import type {
   AgentDefinition,
+  DecisionKind,
   Mission,
   MissionPlan,
   MissionArtifact,
@@ -394,6 +395,29 @@ export class HermesEngine {
 
       const result = await this.#synthesise(mission, tasks, artifacts, Date.now() - started, signal);
       result.budgetExhausted = budgetExhausted;
+
+      // ── La conclusion, et ce sur quoi elle repose ────────────────────────
+      // C'est la seule décision d'Hermès qui porte sur le monde plutôt que sur
+      // l'organisation du travail. Elle doit donc citer les preuves qui la
+      // soutiennent — et lorsqu'il n'y en a aucune, cela se voit dans le
+      // journal au lieu de se deviner.
+      const supporting = this.deps.repos.companies
+        .evidenceForMission(mission.id)
+        .filter((item) => !item.simulated)
+        .map((item) => item.id);
+
+      this.#decide({
+        missionId: mission.id,
+        kind: 'conclude',
+        decision: `Mission ${mission.code} conclue : ${result.summary.slice(0, 160)}`,
+        rationale:
+          supporting.length > 0
+            ? `${supporting.length} preuve(s) sourcée(s) soutiennent cette synthèse.`
+            : "Aucune preuve sourcée : la synthèse rend compte du déroulement, pas d'un constat de marché.",
+        evidenceIds: supporting,
+        estimatedCostUsd: null,
+        impact: `${starved.length} étape(s) sans entrée · ${tasks.filter((t) => t.status === 'succeeded').length}/${tasks.length} réussies`,
+      });
       result.replanned = replanned;
       result.skippedForMissingInput = starved.map((t) => t.ref);
       result.outcome = this.#classifyOutcome({
@@ -463,13 +487,51 @@ export class HermesEngine {
     };
   }
 
+  /**
+   * Consigne une décision d'orchestration.
+   *
+   * Volontairement tolérante : si l'écriture échoue, la mission continue. Un
+   * journal est un moyen de comprendre après coup, pas une condition de
+   * fonctionnement — le perdre serait regrettable, faire échouer la mission
+   * pour cela serait absurde.
+   */
+  #decide(input: {
+    missionId: MissionId;
+    taskRef?: string | null;
+    kind: DecisionKind;
+    decision: string;
+    rationale: string;
+    evidenceIds?: string[];
+    estimatedCostUsd?: number | null;
+    impact?: string | null;
+  }): void {
+    try {
+      this.deps.repos.decisions.record(input);
+    } catch (err) {
+      this.#log.warn('decision not recorded', { error: describeError(err) });
+    }
+  }
+
   #limitsFor(mission: Mission): BudgetLimits {
     const settings = this.deps.settings();
     const missionTokens = mission.tokenBudget ?? settings.missionTokenBudget;
     const base = this.deps.config.budget ?? DEFAULT_BUDGET_LIMITS;
 
+    // Une mission peut porter son propre plafond en dollars, dans son contexte.
+    // Il ne peut que *resserrer* celui du déploiement, jamais l'élargir : un
+    // pilote à 0,40 $ doit rester à 0,40 $ même si la configuration en autorise
+    // cinq, et aucune mission ne doit pouvoir s'octroyer plus que le cadre.
+    const declared = (mission.context as { budgetUsd?: unknown } | null)?.budgetUsd;
+    const missionCostUsd =
+      typeof declared === 'number' && Number.isFinite(declared) && declared > 0
+        ? base.maxMissionCostUsd > 0
+          ? Math.min(base.maxMissionCostUsd, declared)
+          : declared
+        : base.maxMissionCostUsd;
+
     return {
       ...base,
+      maxMissionCostUsd: missionCostUsd,
       maxMissionTokens: missionTokens > 0 ? missionTokens : 0,
       maxStepTokens:
         base.maxStepTokens > 0
@@ -631,6 +693,31 @@ export class HermesEngine {
       producedAt: nowIso(),
     });
 
+    this.#decide({
+      missionId: mission.id,
+      kind: 'plan',
+      decision: `Méthode du département « ${department.name} » : ${plan.steps.length} étape(s).`,
+      rationale: outcome.degraded
+        ? "Le brief n'a pas pu être extrait ; le plan retient les champs déclarés tels quels."
+        : "L'objectif relève de ce département, dont la méthode est déclarée et éprouvée. " +
+          'Improviser une décomposition coûterait un raisonnement pour un résultat moins vérifiable.',
+      estimatedCostUsd: null,
+      impact: plan.steps.map((step) => `${step.ref}→${step.agentKey}`).join(', '),
+    });
+
+    // L'allocation est une décision à part entière : qui reçoit quoi, et
+    // pourquoi ce spécialiste plutôt qu'un autre.
+    for (const step of plan.steps) {
+      this.#decide({
+        missionId: mission.id,
+        taskRef: step.ref,
+        kind: 'allocation',
+        decision: `${step.ref} confiée à ${step.agentKey}.`,
+        rationale: `L'étape demande la compétence portée par ce spécialiste dans la méthode du département.`,
+        impact: step.title,
+      });
+    }
+
     return { plan, tokensUsed: outcome.tokensUsed, degraded: outcome.degraded };
   }
 
@@ -678,6 +765,21 @@ export class HermesEngine {
           mission.id,
           'Stopped early: the mission reached its token budget',
         );
+
+        // La décision qui coûte le plus cher est celle de continuer. Elle est
+        // donc consignée avec ce qu'elle a évité, pas seulement ce qu'elle a
+        // interrompu.
+        this.#decide({
+          missionId: mission.id,
+          kind: 'budget',
+          decision: `Mission arrêtée : plafond atteint. ${cancelled} étape(s) annulée(s).`,
+          rationale:
+            refused.hit
+              ? "Un appel a été refusé avant d'être émis : le plafond de dépense est atteint. " +
+                'Le travail déjà accompli est conservé.'
+              : 'Le budget de jetons de la mission est épuisé. Poursuivre coûterait sans garantie de résultat.',
+          impact: `${cancelled} étape(s) non exécutée(s)`,
+        });
         this.deps.events.publish({
           type: 'mission.budget-exhausted',
           severity: 'warning',
@@ -883,6 +985,19 @@ export class HermesEngine {
     const unmet = this.#unmetPrecondition(mission, task);
     if (unmet) {
       repos.missions.setTaskStatus(task.id, 'skipped', { error: `SKIPPED_NO_INPUT — ${unmet}` });
+
+      // Arrêter une branche sans entrée est la décision la plus rentable
+      // qu'ATLAS prenne : c'est elle qui a empêché l'enrichissement de
+      // LIVE #001 de consommer 343 % du budget de la mission pour documenter
+      // une liste vide.
+      this.#decide({
+        missionId: mission.id,
+        taskRef: task.ref,
+        kind: 'stop-branch',
+        decision: `Étape ${task.ref} non lancée.`,
+        rationale: unmet,
+        impact: "Aucun appel de modèle engagé pour une étape sans matière.",
+      });
       this.deps.events.publish({
         type: 'task.skipped',
         severity: 'warning',
@@ -1403,18 +1518,43 @@ export class HermesEngine {
    * what was learned rather than from nothing.
    */
   #learn(mission: Mission, tasks: MissionTask[], result: MissionResult): void {
+    // ── Ce qu'une mission a le droit de laisser en mémoire ─────────────────
+    //
+    // La synthèse d'une mission est écrite par un modèle. Elle décrit le
+    // déroulement, et elle peut aussi affirmer des choses sur le monde — « le
+    // marché allemand compte peu d'intégrateurs indépendants » — sans qu'aucune
+    // source ne l'étaye. Mémoriser cela tel quel transformerait une phrase
+    // plausible en connaissance d'ATLAS, réutilisée par toutes les missions
+    // suivantes comme si elle avait été vérifiée.
+    //
+    // La règle se lit donc dans le code : une mission sans preuve sourcée
+    // n'enregistre que de l'opérationnel — comment le travail s'est passé —
+    // jamais un constat de marché. Une mission avec preuves enregistre un
+    // constat métier, en disant sur combien de sources il repose.
+    const sourced = this.deps.repos.companies
+      .evidenceForMission(mission.id)
+      .filter((item) => !item.simulated && Boolean(item.sourceRef));
+
     this.deps.memory.remember({
       kind: 'outcome',
-      title: `Mission outcome: ${mission.title}`,
+      title: `Déroulement de mission : ${mission.title}`,
       content: [
-        `Objective: ${mission.objective}`,
-        `Result quality: ${result.quality}/100 in ${formatDuration(result.durationMs)}.`,
+        `Objectif : ${mission.objective}`,
+        `Qualité ${result.quality}/100 en ${formatDuration(result.durationMs)}.`,
+        `Étapes réussies : ${tasks.filter((t) => t.status === 'succeeded').length}/${tasks.length}.`,
+        `Preuves sourcées : ${sourced.length}.`,
         '',
-        result.summary.slice(0, 4000),
+        sourced.length > 0
+          ? result.summary.slice(0, 4000)
+          : "Aucune preuve sourcée. La synthèse rend compte du déroulement et n'établit " +
+            "rien du marché : une absence de résultat peut venir de la recherche, pas du terrain.",
       ].join('\n'),
+      // Opérationnel quand rien n'est sourcé : ce souvenir parle du système,
+      // pas du monde.
+      tier: sourced.length > 0 ? 'business' : 'operational',
       tags: ['mission', ...mission.tags],
       missionId: mission.id,
-      importance: result.quality >= 80 ? 0.7 : 0.5,
+      importance: sourced.length > 0 && result.quality >= 80 ? 0.7 : 0.4,
     });
 
     const failed = tasks.filter((t) => t.status === 'failed');

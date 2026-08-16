@@ -27,6 +27,8 @@ import type {
   Department,
   DepartmentStats,
   Evidence,
+  MissionCockpit,
+  MissionDecision,
   MissionEconomics,
   Opportunity,
   OpportunityDetail,
@@ -129,6 +131,12 @@ export interface MissionDetail {
   economics: MissionEconomics;
   /** Ce qui a produit ces chiffres : inférence facturée, ou simulation. */
   mode: 'live' | 'simulation';
+  /** Pourquoi la mission s'est déroulée ainsi : plan, arrêts, conclusion. */
+  decisions: MissionDecision[];
+  /** Décisions affirmant quelque chose sans preuve. Vide est le cas normal. */
+  unsupportedClaims: MissionDecision[];
+  /** Tout ce que le cockpit affiche, mesuré côté serveur. */
+  cockpit: MissionCockpit;
 }
 
 export interface RuntimeSettingsView {

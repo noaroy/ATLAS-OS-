@@ -494,9 +494,32 @@ export class AgentRuntime {
     };
   }
 
-  /** Grants provider-side web research only to agents that hold research tools. */
+  /**
+   * Les outils web du fournisseur — accordés seulement en dernier recours.
+   *
+   * `web_search` et `web_fetch` sont exécutés par Anthropic : c'est le modèle
+   * qui cherche. C'est exactement l'architecture que LIVE #005 a réfutée — trois
+   * délais successifs, 0,86 $, zéro candidat, parce qu'une recherche menée par
+   * un modèle ne converge pas.
+   *
+   * Depuis, ATLAS a un vrai moteur : requêtes courtes, filtrage déterministe,
+   * pages ciblées, et le modèle n'intervient qu'en analyste sur les survivants.
+   * Accorder ces outils en plus revenait à rouvrir l'ancien chemin en douce,
+   * malgré `ATLAS_SEARCH_FALLBACK_ENABLED=false`.
+   *
+   * Ils ne partent donc que si le déploiement a explicitement choisi la
+   * recherche par modèle, ou autorisé le repli. Un effet de bord bienvenu : ces
+   * outils exigent l'appel programmatique, que les modèles économiques ne
+   * supportent pas — le pilote LIVE tournait sur Haiku et se faisait rejeter en
+   * 400 avant la moindre recherche.
+   */
   #serverToolsFor(tools: Array<{ category: string }>): LlmServerTool[] {
     if (this.deps.provider.kind !== 'anthropic') return [];
+
+    const { search } = this.deps.config;
+    const modelIsTheEngine = search.provider === 'anthropic' || search.fallbackEnabled;
+    if (!modelIsTheEngine) return [];
+
     const research = tools.some((t) => WEB_RESEARCH_CATEGORIES.has(t.category));
     return research ? ['web_search', 'web_fetch'] : [];
   }

@@ -16,8 +16,9 @@ import {
   relativeTime,
 } from '../components/ui.tsx';
 import { MissionOpportunities } from './Opportunities.tsx';
+import { Cockpit, LiveBanner } from '../components/Cockpit.tsx';
 
-type Tab = 'plan' | 'steps' | 'opportunities' | 'result' | 'trail';
+type Tab = 'cockpit' | 'plan' | 'steps' | 'opportunities' | 'result' | 'trail';
 
 /**
  * The full record of one mission (SRS §2.14).
@@ -29,7 +30,7 @@ export function MissionDetailView() {
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<MissionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('steps');
+  const [tab, setTab] = useState<Tab>('cockpit');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
@@ -84,6 +85,8 @@ export function MissionDetailView() {
           ← Toutes les missions
         </Link>
       </div>
+
+      <LiveBanner cockpit={detail.cockpit} />
 
       <header className="panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -191,6 +194,7 @@ export function MissionDetailView() {
       <nav className="flex gap-1 border-b border-[--color-border]">
         {(
           [
+            ['cockpit', 'Cockpit'],
             ['steps', `Étapes (${tasks.length})`],
             ['plan', "Plan d’Hermès"],
             // Only a department mission has a pipeline to show.
@@ -213,6 +217,15 @@ export function MissionDetailView() {
           </button>
         ))}
       </nav>
+
+      {tab === 'cockpit' && (
+        <Cockpit
+          missionId={mission.id}
+          cockpit={detail.cockpit}
+          decisions={detail.decisions}
+          unsupportedClaims={detail.unsupportedClaims}
+        />
+      )}
 
       {tab === 'steps' && (
         <div className="space-y-3">

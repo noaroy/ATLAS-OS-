@@ -451,3 +451,4 @@ export class EvolutionEngine {
     }
   }
 }
+export { observeLiveMission, type ImprovementProposal, type ProposalPriority } from './live-observations.ts';

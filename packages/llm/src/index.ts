@@ -6,6 +6,7 @@ import type { LlmProvider } from './types.ts';
 export * from './types.ts';
 export * from './budget.ts';
 export * from './pricing.ts';
+export * from './model-policy.ts';
 export * from './json-schema.ts';
 export { AnthropicProvider } from './anthropic-provider.ts';
 export { SimulationProvider } from './simulation-provider.ts';

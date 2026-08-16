@@ -1,5 +1,6 @@
 import { describeError } from '@atlas/core';
 import type { BudgetLedger } from './budget.ts';
+import { assertModelAllowed, PERMISSIVE_POLICY, type ModelPolicy } from './model-policy.ts';
 import type { LlmProvider, LlmRequest, LlmResponse } from './types.ts';
 import { toolCallsOf } from './types.ts';
 
@@ -25,11 +26,23 @@ export class BudgetedProvider implements LlmProvider {
   constructor(
     private readonly inner: LlmProvider,
     private readonly ledger: BudgetLedger,
+    /**
+     * Les modèles que ce déploiement s'autorise.
+     *
+     * Au même endroit que le budget, et pour la même raison : un plafond de
+     * dépense ne sert à rien si un modèle dix-huit fois plus cher peut être
+     * choisi trois lignes plus loin.
+     */
+    private readonly policy: ModelPolicy = PERMISSIVE_POLICY,
   ) {
     this.kind = inner.kind;
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    // Le modèle d'abord : refuser un appel interdit ne doit rien consommer,
+    // pas même une ligne de comptabilité budgétaire.
+    assertModelAllowed(request.model, this.policy);
+
     // Refuse avant de dépenser. Lève BUDGET_EXCEEDED, non réessayable.
     this.ledger.authorise(request);
 

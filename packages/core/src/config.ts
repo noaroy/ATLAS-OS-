@@ -71,7 +71,7 @@ export interface BudgetConfig {
  * requête moteur.
  */
 export interface SearchConfig {
-  provider: 'searxng' | 'brave' | 'anthropic' | 'none';
+  provider: 'duckduckgo' | 'marginalia' | 'searxng' | 'brave' | 'anthropic' | 'none';
   /** Racine de l'instance SearXNG, sur le réseau interne. */
   searxngBaseUrl: string;
   /** Moteurs interrogés par SearXNG, séparés par des virgules. */
@@ -162,7 +162,38 @@ const envSchema = z.object({
   // ATLAS dépense déjà de l'argent réel à chaque appel d'inférence ; imposer un
   // service payant pour la seule brique qui peut vivre sur notre VPS serait un
   // coût subi sans contrepartie. Brave reste disponible, en option.
-  ATLAS_SEARCH_PROVIDER: z.enum(['searxng', 'brave', 'anthropic', 'none']).default('searxng'),
+  // `duckduckgo` interroge le moteur en direct : ni clé, ni quota, ni service à
+  // héberger. C'est le seul provider qui fonctionne sans infrastructure, donc le
+  // défaut — SearXNG reste préférable en production, quand Docker est
+  // disponible, parce qu'il fusionne plusieurs moteurs.
+  // ─── Mode d'exécution ──────────────────────────────────────────────────────
+  // Jusqu'ici le mode se déduisait de la présence d'une clé : poser une clé
+  // dans .env suffisait à faire basculer ATLAS en dépense réelle sans que
+  // personne l'ait demandé. C'est exactement ce qui s'est produit — le serveur
+  // a démarré en `live` alors que l'intention était de faire une démonstration.
+  //
+  // Le mode se déclare désormais. `auto` conserve l'ancien comportement pour ne
+  // rien casser, mais `live` exige une clé et `simulation` interdit toute
+  // dépense, quelle que soit la configuration par ailleurs.
+  ATLAS_EXECUTION_MODE: z.enum(['auto', 'simulation', 'live']).default('auto'),
+
+  // Modèles interdits, séparés par des virgules.
+  //
+  // Opus par défaut, et ce n'est pas de la prudence excessive : il facture dix-
+  // huit fois le tarif de Haiku, pour un travail d'extraction où la différence
+  // ne se voit pas. L'écart entre une mission à 0,04 $ et la même à 0,72 $ tient
+  // à un mot dans un fichier de configuration — mieux vaut devoir l'autoriser
+  // explicitement que découvrir la facture après coup.
+  ATLAS_FORBIDDEN_MODELS: z.string().default('claude-opus'),
+
+  // Modèles autorisés. Vide = tous, hors interdits. Renseigné, c'est une liste
+  // blanche stricte : rien d'autre ne passe, y compris un modèle qu'un agent
+  // porterait dans sa propre définition.
+  ATLAS_ALLOWED_MODELS: z.string().default(''),
+
+  ATLAS_SEARCH_PROVIDER: z
+    .enum(['duckduckgo', 'marginalia', 'searxng', 'brave', 'anthropic', 'none'])
+    .default('duckduckgo'),
   SEARXNG_BASE_URL: z.string().default('http://searxng:8080'),
   // Vide = les moteurs configurés dans l'instance. Une sélection resserrée vaut
   // mieux qu'une longue liste : chaque moteur ajoute de la latence et des
@@ -206,6 +237,12 @@ export interface AtlasConfig {
     apiKey: string;
     /** Simulation mode is a first-class operating mode, not a stub. */
     mode: 'live' | 'simulation';
+    /** Ce qui a été déclaré, avant résolution : `auto` déduit de la clé. */
+    declaredMode: 'auto' | 'simulation' | 'live';
+    /** Modèles que ce déploiement refuse d'appeler, quoi qu'on lui demande. */
+    forbiddenModels: string[];
+    /** Liste blanche. Vide = tout ce qui n'est pas interdit. */
+    allowedModels: string[];
     hermesModel: string;
     agentModel: string;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -314,7 +351,24 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
     backup: { retention: e.ATLAS_BACKUP_RETENTION },
     llm: {
       apiKey,
-      mode: apiKey ? 'live' : 'simulation',
+      // Le mode déclaré l'emporte. `simulation` gagne même contre une clé
+      // présente : c'est le seul moyen de garantir qu'une démonstration ne
+      // dépensera rien.
+      mode:
+        e.ATLAS_EXECUTION_MODE === 'simulation'
+          ? 'simulation'
+          : e.ATLAS_EXECUTION_MODE === 'live'
+            ? 'live'
+            : apiKey
+              ? 'live'
+              : 'simulation',
+      declaredMode: e.ATLAS_EXECUTION_MODE,
+      forbiddenModels: e.ATLAS_FORBIDDEN_MODELS.split(',')
+        .map((m) => m.trim())
+        .filter(Boolean),
+      allowedModels: e.ATLAS_ALLOWED_MODELS.split(',')
+        .map((m) => m.trim())
+        .filter(Boolean),
       hermesModel: e.ATLAS_HERMES_MODEL,
       agentModel: e.ATLAS_AGENT_MODEL,
       effort: e.ATLAS_LLM_EFFORT,

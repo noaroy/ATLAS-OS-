@@ -21,12 +21,15 @@
     "build:console": "npm run build --workspace @atlas/console",
     "start": "node dist/server/atlas.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "seed": "tsx scripts/seed.ts",
     "founder:reset": "node scripts/founder-reset.mjs",
     "demo": "tsx scripts/demo.ts",
     "demo:village": "tsx scripts/demo-village.ts",
-    "backup": "tsx scripts/backup.ts"
+    "backup": "tsx scripts/backup.ts",
+    "search:probe": "tsx scripts/search-probe.ts",
+    "live:pilot": "tsx scripts/live-pilot.ts",
+    "live:retry": "tsx scripts/live-retry.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

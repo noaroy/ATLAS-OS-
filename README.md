@@ -91,6 +91,8 @@ New specialists can be added at runtime through the API — no redeploy.
 - **[Agents](docs/AGENTS.md)** — the team, their skills, and adding your own
 - **[Departments](docs/DEPARTMENTS.md)** — the products, the pipeline, and what the platform guarantees
 - **[Maintenance](docs/MAINTENANCE.md)** — backups, upgrades, troubleshooting
+- **[Live](docs/LIVE.md)** — leaving simulation: real spend, real sources, and what is never done
+- **[Économie](docs/ECONOMIE.md)** — what each failed mission cost, and what now prevents it
 
 ## Deployment
 

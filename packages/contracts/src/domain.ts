@@ -770,3 +770,155 @@ export interface AuthSession {
   user: User;
   expiresAt: string;
 }
+
+// ─── Le journal des décisions d'Hermès (SRS §2.7) ──────────────────────────
+
+/**
+ * Ce sur quoi Hermès a le droit de trancher.
+ *
+ * Aucune de ces catégories ne porte sur un fait métier. Hermès décide de la
+ * stratégie, de l'ordre, de l'allocation et de la poursuite ; il ne décide pas
+ * qu'une entreprise existe, ni qu'elle a tel effectif. Cela vient d'une source,
+ * jamais d'un raisonnement — et c'est la frontière que ce type encode.
+ */
+export const DECISION_KINDS = [
+  /** Le plan retenu pour la mission. */
+  'plan',
+  /** Quel spécialiste reçoit quelle étape. */
+  'allocation',
+  /** Poursuivre malgré un résultat partiel. */
+  'continue',
+  /** Arrêter une branche devenue inutile. */
+  'stop-branch',
+  /** Reconsidérer le plan après un échec dont il dépendait. */
+  'replan',
+  /** Demander un arbitrage humain. */
+  'escalate',
+  /** Arrêt provoqué par un plafond économique. */
+  'budget',
+  /** La synthèse finale et la recommandation. */
+  'conclude',
+] as const;
+
+export type DecisionKind = (typeof DECISION_KINDS)[number];
+
+/**
+ * Une décision d'orchestration, avec ce qui la justifie.
+ *
+ * Une mission produit un plan, des étapes et un résultat ; ce qui manquait,
+ * c'est le *pourquoi*. Sans lui, une mission ratée ne se rejoue qu'en relisant
+ * le code, et une mission réussie ne s'explique pas au fondateur.
+ */
+export interface MissionDecision {
+  id: string;
+  missionId: MissionId;
+  /** L'étape concernée, quand la décision en vise une. */
+  taskRef: string | null;
+  kind: DecisionKind;
+  /** Ce qui a été décidé, en une phrase. */
+  decision: string;
+  /** Pourquoi. Jamais vide : une décision sans raison n'est pas auditable. */
+  rationale: string;
+  /**
+   * Les preuves invoquées.
+   *
+   * Vide pour une décision d'organisation, ce qui est normal. Vide pour une
+   * affirmation métier, ce qui ne l'est pas — et se voit.
+   */
+  evidenceIds: string[];
+  /** Ce que la décision engageait, en dollars, au moment de la prendre. */
+  estimatedCostUsd: number | null;
+  impact: string | null;
+  createdAt: string;
+}
+
+
+// ─── Le cockpit d'une mission (SRS §2.14) ──────────────────────────────────
+
+/**
+ * Ce que le Command Center affiche pendant une mission.
+ *
+ * Un seul principe gouverne cette structure : **chaque nombre est lu dans la
+ * base, jamais recalculé côté navigateur**. Un compteur estimé par l'interface
+ * a exactement la même apparence qu'un compteur mesuré, et plus rien ensuite ne
+ * permet de distinguer les deux. Sur un tableau de bord qui pilote une dépense
+ * réelle, c'est inacceptable.
+ *
+ * Assemblé côté serveur pour une seconde raison : la console demande la fiche
+ * d'une mission toutes les deux secondes et demie, et vingt requêtes séparées à
+ * cette cadence coûteraient plus cher que la mission observée.
+ */
+export interface MissionCockpit {
+  missionId: MissionId;
+  mode: 'live' | 'simulation';
+
+  budget: {
+    maxUsd: number;
+    spentUsd: number;
+    remainingUsd: number;
+    maxTokens: number;
+    tokensUsed: number;
+  };
+
+  search: {
+    provider: string | null;
+    /**
+     * Le moteur répond-il ? Déduit du dernier appel réellement effectué.
+     *
+     * Jamais mesuré à l'affichage : sonder le moteur à chaque rafraîchissement
+     * de la console le ferait brider en quelques minutes — exactement ce qui
+     * bloque le pilote au moment où ceci est écrit.
+     */
+    health: 'healthy' | 'unhealthy' | 'unknown';
+    /**
+     * Peut-il répondre à *cette* mission ?
+     *
+     * Distinct de la santé, et c'est la distinction la plus coûteuse du
+     * système : un moteur peut répondre en trois cents millisecondes sans rien
+     * contenir du marché visé.
+     */
+    suitability: 'suitable' | 'degraded' | 'unsuitable' | 'unknown';
+    /** Ce qui manque à ce moteur pour cette mission, s'il manque quelque chose. */
+    suitabilityGaps: string[];
+    /** Ce que le moteur sait faire — indépendant de son état de santé. */
+    commercialDiscovery: boolean;
+    geographicCoverage: string[];
+    languageCoverage: string[];
+    caveat: string | null;
+    queries: number;
+    rateLimited: number;
+    failures: number;
+  };
+
+  pipeline: {
+    candidates: number;
+    shortlisted: number;
+    approved: number;
+    rejected: number;
+    pagesFetched: number;
+    evidence: { total: number; observed: number; reported: number; inferred: number; sourced: number };
+  };
+
+  inference: {
+    calls: number;
+    failedCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    models: string[];
+  };
+
+  reliability: {
+    retries: number;
+    timeouts: number;
+    warnings: number;
+    errors: number;
+  };
+
+  review: Array<{
+    id: string;
+    stage: string;
+    reviewedBy: string | null;
+    reviewedAt: string | null;
+    note: string | null;
+  }>;
+}

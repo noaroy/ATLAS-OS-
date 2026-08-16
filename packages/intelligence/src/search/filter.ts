@@ -97,9 +97,21 @@ export function filterResults(results: SearchResult[], options: FilterOptions): 
   const byDomain = new Map<string, SearchCandidate>();
   let grouped = 0;
 
+  // ── Les exclusions, prises comme des expressions et non comme des sacs de mots
+  //
+  // Découper « fabricants directs de machines d'emballage » en mots isolés
+  // produisait les termes « fabricants », « directs », « machines »,
+  // « emballage » — chacun devenant un motif de rejet à lui seul. L'exclusion
+  // finissait par écarter tout ce qui parlait du sujet : dix résultats bruts,
+  // dix rejets, zéro candidat, pour 0,03 $ de mission. Découper une exclusion
+  // en mots en inverse le sens.
+  //
+  // Une expression longue relève du jugement, pas du filtrage littéral : elle
+  // est laissée à l'étape de qualification, où un modèle lit vraiment. Ce
+  // filtre-ci reste ce qu'il doit être — grossier, gratuit, et sans opinion.
   const exclusionTerms = options.exclusions
-    .flatMap((e) => e.toLowerCase().split(/[\s,;]+/))
-    .filter((w) => w.length > 4);
+    .map((phrase) => phrase.toLowerCase().trim())
+    .filter((phrase) => phrase.length > 3 && phrase.split(/\s+/).length <= 3);
 
   for (const result of results) {
     const domain = normaliseDomain(result.url);

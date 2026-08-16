@@ -218,6 +218,9 @@ export function makeTestConfig(
     llm: {
       apiKey: '',
       mode: 'simulation',
+      declaredMode: 'simulation',
+      forbiddenModels: [],
+      allowedModels: [],
       hermesModel: 'test-hermes',
       agentModel: 'test-agent',
       effort: 'low',

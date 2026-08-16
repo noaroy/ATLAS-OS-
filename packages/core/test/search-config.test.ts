@@ -28,16 +28,25 @@ function configWith(env: Record<string, string>) {
 }
 
 describe('le choix du moteur de recherche', () => {
-  test('SearXNG est le moteur par défaut', () => {
-    // Aucun service payant obligatoire : ATLAS fonctionne avec son propre VPS.
-    assert.equal(configWith({}).search.provider, 'searxng');
+  test('le moteur par défaut fonctionne sans infrastructure', () => {
+    // Le défaut a changé, et la raison mérite d'être écrite. SearXNG restait le
+    // meilleur choix — un métamoteur qui fusionne plusieurs sources — mais il
+    // exige Docker, et Docker ne démarre pas sur le poste de développement.
+    // ATLAS s'est retrouvé des semaines avec un moteur configuré, injoignable,
+    // et aucune mission réelle possible. Un défaut qui ne marche nulle part
+    // n'est pas un défaut.
+    assert.equal(configWith({}).search.provider, 'duckduckgo');
   });
 
-  test('aucune clé Brave n’est requise sous SearXNG', () => {
+  test('SearXNG reste choisissable quand il est disponible', () => {
+    assert.equal(configWith({ ATLAS_SEARCH_PROVIDER: 'searxng' }).search.provider, 'searxng');
+  });
+
+  test('aucun service payant n’est requis', () => {
     const config = configWith({});
     assert.equal(config.search.braveApiKey, '', 'aucune clé fournie');
-    assert.equal(config.search.provider, 'searxng', 'et pourtant un moteur utilisable');
-    assert.ok(config.search.searxngBaseUrl.length > 0, 'une URL interne par défaut');
+    assert.equal(config.search.provider, 'duckduckgo', 'et pourtant un moteur utilisable');
+    assert.ok(config.search.searxngBaseUrl.length > 0, 'une URL SearXNG reste préconfigurée');
   });
 
   test('Brave reste choisissable, en option', () => {

@@ -13,6 +13,15 @@ export const DEPARTMENT_DEFINITIONS: DepartmentDefinition[] = [BUSINESS_EXPANSIO
 
 export { BUSINESS_EXPANSION };
 export { DEMO_MISSION, DEMO_MISSION_TAG, type DemoMissionSpec } from './demo-mission.ts';
+export { LIVE_PILOT_MISSION, LIVE_PILOT_LIMITS, LIVE_PILOT_NEED, type LivePilotLimits } from './live-pilot.ts';
+export {
+  VALIDATION_PRESETS,
+  presetById,
+  totalPresetBudgetUsd,
+  type ValidationPreset,
+  type PresetCriteria,
+  type PresetVerdict,
+} from './validation-presets.ts';
 
 export const DEPARTMENT_KEYS: DepartmentKey[] = DEPARTMENT_DEFINITIONS.map((d) => d.key);
 

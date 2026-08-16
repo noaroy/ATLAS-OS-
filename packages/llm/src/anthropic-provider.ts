@@ -14,11 +14,42 @@ import type {
  * Anthropic-backed inference.
  *
  * Two deliberate choices here:
- *  • Adaptive thinking is always on and effort is the depth control — the
+ *  • Adaptive thinking is the depth control where the model supports it — the
  *    fixed thinking-budget model is gone on current Claude models.
  *  • Every call streams and resolves via `finalMessage()`, which gives ATLAS
  *    timeout protection on long agent turns without handling stream events.
  */
+
+/**
+ * Ce que chaque famille de modèles accepte dans une requête.
+ *
+ * Un paramètre non supporté ne dégrade pas la réponse : il fait rejeter la
+ * requête entière en 400, avant toute inférence. LIVE PILOT 001 est mort deux
+ * fois là-dessus, en une seconde à chaque tentative — d'abord sur
+ * `thinking: adaptive`, puis sur `output_config.effort`. Six étapes sautées,
+ * mission échouée. Le coût fut nul puisque rien n'est facturé sur un 400, mais
+ * le pilote n'a rien prouvé.
+ *
+ * La table est en positif, jamais en négatif : un modèle inconnu ne reçoit
+ * aucun paramètre optionnel. Un raisonnement moins profond est un désagrément ;
+ * une requête rejetée est une mission morte. C'est le sens dans lequel il faut
+ * se tromper.
+ *
+ * Les modèles de raisonnement — Opus, Sonnet, Fable — acceptent les deux. Les
+ * modèles économiques comme Haiku n'acceptent ni l'un ni l'autre : ils sont
+ * faits pour l'extraction et la classification, où la profondeur ne se règle
+ * pas.
+ */
+const REASONING_MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5'];
+
+const isReasoningModel = (model: string): boolean =>
+  REASONING_MODELS.some((supported) => model.startsWith(supported));
+
+/** Le raisonnement adaptatif : profondeur variable, décidée par le modèle. */
+const supportsAdaptiveThinking = isReasoningModel;
+
+/** Le réglage d'effort : disponible seulement là où il y a de quoi le régler. */
+const supportsEffort = isReasoningModel;
 export class AnthropicProvider implements LlmProvider {
   readonly kind = 'anthropic' as const;
   #client: Anthropic;
@@ -39,17 +70,24 @@ export class AnthropicProvider implements LlmProvider {
         ? [{ type: 'text', text: request.system, cache_control: { type: 'ephemeral' } }]
         : request.system,
       messages: request.messages.map(toApiMessage),
-      thinking: { type: 'adaptive' },
-      output_config: {
-        effort: request.effort ?? 'high',
-        // Le schéma est nettoyé ici, au dernier moment : un mot-clé non
-        // supporté ferait rejeter la requête entière en 400 avant toute
-        // inférence, et l'appelant n'aurait aucun moyen de le voir venir.
-        ...(request.jsonSchema
-          ? { format: { type: 'json_schema', schema: sanitiseStructuredSchema(request.jsonSchema) } }
-          : {}),
-      },
+      ...(supportsAdaptiveThinking(request.model) ? { thinking: { type: 'adaptive' } } : {}),
     };
+
+    // `output_config` n'est ajouté que s'il a un contenu que ce modèle accepte.
+    // Un objet vide, ou porteur d'un champ refusé, suffit à faire rejeter la
+    // requête.
+    const outputConfig: Record<string, unknown> = {};
+    if (supportsEffort(request.model)) outputConfig.effort = request.effort ?? 'high';
+    if (request.jsonSchema) {
+      // Le schéma est nettoyé ici, au dernier moment : un mot-clé non supporté
+      // ferait rejeter la requête entière en 400 avant toute inférence, et
+      // l'appelant n'aurait aucun moyen de le voir venir.
+      outputConfig.format = {
+        type: 'json_schema',
+        schema: sanitiseStructuredSchema(request.jsonSchema),
+      };
+    }
+    if (Object.keys(outputConfig).length > 0) body.output_config = outputConfig;
 
     const tools: Array<Record<string, unknown>> = [];
     for (const tool of request.tools ?? []) {

@@ -165,9 +165,36 @@ export function EvolutionView() {
                     </div>
                   </details>
 
+                  {/*
+                    Une proposition sans observation à l'appui n'est pas une
+                    proposition, c'est une préférence. Le commentaire du contrat
+                    dit « always traceable » ; rien ne le vérifiait à l'affichage,
+                    et c'est précisément la proposition sans données qu'on approuve
+                    le plus vite, parce qu'il n'y a rien à lire avant de cliquer.
+                  */}
+                  {Object.keys(improvement.evidence).length === 0 && (
+                    <p className="mt-2 rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[0.68rem] leading-relaxed text-amber-300">
+                      Aucune observation à l’appui. Rien n’étaye ce changement : à refuser, sauf
+                      raison connue par ailleurs.
+                    </p>
+                  )}
+
+                  {/*
+                    Un changement appliqué sans instantané de l'état antérieur ne
+                    peut pas être annulé. Le bouton « Revert » existe quand même —
+                    le dire avant vaut mieux que de le découvrir en cliquant.
+                  */}
+                  {improvement.status === 'applied' && improvement.revertData === null && (
+                    <p className="mt-2 rounded border border-rose-500/25 bg-rose-500/10 px-2 py-1 text-[0.68rem] leading-relaxed text-rose-300">
+                      Appliqué sans instantané de l’état antérieur — cette modification n’est pas
+                      réversible automatiquement.
+                    </p>
+                  )}
+
                   <div className="mt-2 text-[0.68rem] text-[--color-faint]">
                     Proposed by {improvement.proposedBy} · {relativeTime(improvement.createdAt)}
                     {improvement.appliedAt && ` · applied ${relativeTime(improvement.appliedAt)}`}
+                    {improvement.decidedBy && ` · décidé par ${improvement.decidedBy}`}
                   </div>
                 </div>
 

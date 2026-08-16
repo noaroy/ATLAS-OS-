@@ -24,11 +24,19 @@ import {
   PipelineDiscoveryProvider,
   BraveSearchProvider,
   SearxngSearchProvider,
+  DuckDuckGoSearchProvider,
+  MarginaliaSearchProvider,
   type DiscoveryProvider,
   SimulationDiscoveryProvider,
 } from '@atlas/intelligence';
 import { DEPARTMENT_DEFINITIONS } from '@atlas/departments';
-import { RuntimeSupervisor, VillageService, runBackup } from '@atlas/runtime';
+import {
+  RuntimeSupervisor,
+  VillageService,
+  runBackup,
+  recoverInterruptedMissions,
+  type RecoveryReport,
+} from '@atlas/runtime';
 
 /**
  * The assembled system.
@@ -52,6 +60,14 @@ export interface AtlasSystem {
   discovery: DiscoveryService;
   village: VillageService;
   supervisor: RuntimeSupervisor;
+  /**
+   * Ce que le démarrage a trouvé en l'air, et remis en pause.
+   *
+   * Exposé plutôt que journalisé seulement : une mission interrompue qui a déjà
+   * dépensé mérite d'être vue dans le cockpit, pas seulement dans un fichier de
+   * journal que personne ne relit après un redémarrage.
+   */
+  recovery: RecoveryReport;
   settings(): RuntimeSettings;
   shutdown(reason: string): Promise<void>;
 }
@@ -100,7 +116,19 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // rend le budget incontournable plutôt que consultable — la distinction qui
   // a coûté 9,15 $ lors de LIVE #001.
   const ledger = new BudgetLedger((record) => repos.llmCalls.record(record));
-  const provider = new BudgetedProvider(createLlmProvider(config, logger), ledger);
+  // La politique de modèles voyage avec le budget, sous les appels. Un plafond
+  // de dépense ne sert à rien si un modèle dix-huit fois plus cher peut être
+  // choisi trois lignes plus loin — par un réglage de console, une variable
+  // d'environnement, ou le `model` propre à un agent.
+  const provider = new BudgetedProvider(createLlmProvider(config, logger), ledger, {
+    allowed: config.llm.allowedModels,
+    forbidden: config.llm.forbiddenModels,
+  });
+
+  logger.info('politique de modèles', {
+    allowed: config.llm.allowedModels.join(', ') || '(tous, hors interdits)',
+    forbidden: config.llm.forbiddenModels.join(', ') || '(aucun)',
+  });
   const registry = new ToolRegistry();
   const automation = new AutomationService({ repos, events, config, logger });
 
@@ -130,7 +158,11 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // même quel qu'il soit. C'est tout l'intérêt de l'abstraction : passer de
   // SearXNG à Brave ne touche pas une ligne de Business Expansion.
   const engine =
-    config.search.provider === 'searxng'
+    config.search.provider === 'duckduckgo'
+      ? new DuckDuckGoSearchProvider()
+      : config.search.provider === 'marginalia'
+        ? new MarginaliaSearchProvider()
+      : config.search.provider === 'searxng'
       ? new SearxngSearchProvider({
           baseUrl: config.search.searxngBaseUrl,
           engines: config.search.searxngEngines,
@@ -245,6 +277,12 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   seed(repos, config, logger);
   validateDepartments(repos, logger);
 
+  // Un arrêt brutal laisse des missions `running` que plus rien ne fera
+  // avancer. Elles repassent en pause ici, avant que quoi que ce soit ne
+  // démarre — et elles y restent : reprendre une mission réelle est une
+  // décision humaine, jamais un effet de bord du redémarrage.
+  const recovery = recoverInterruptedMissions(repos, logger);
+
   let shuttingDown = false;
   const shutdown = async (reason: string): Promise<void> => {
     if (shuttingDown) return;
@@ -289,6 +327,7 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     discovery,
     village,
     supervisor,
+    recovery,
     settings,
     shutdown,
   };
@@ -375,8 +414,13 @@ function seed(repos: Repositories, config: AtlasConfig, logger: Logger): void {
   }
 
   let createdBuildings = 0;
+  let remappedBuildings = 0;
   for (const building of BUILDINGS) {
+    // Créer ce qui manque, réaligner le reste. Le plan de la ville appartient
+    // au code ; le niveau et l'activité appartiennent au travail accompli, et
+    // `syncLayout` ne touche pas à ceux-là.
     if (repos.buildings.ensure(building)) createdBuildings++;
+    else if (repos.buildings.syncLayout(building)) remappedBuildings++;
   }
 
   let createdAgents = 0;
@@ -409,7 +453,7 @@ function seed(repos: Repositories, config: AtlasConfig, logger: Logger): void {
     }
   }
 
-  if (createdSkills || createdDepartments || refreshedDepartments || createdBuildings || createdAgents || renamedAgents || reset) {
-    logger.info('village seeded', { skills: createdSkills, departments: createdDepartments, departmentsRefreshed: refreshedDepartments, agentsRenamed: renamedAgents, buildings: createdBuildings, agents: createdAgents, statesReset: reset });
+  if (createdSkills || createdDepartments || refreshedDepartments || createdBuildings || remappedBuildings || createdAgents || renamedAgents || reset) {
+    logger.info('village seeded', { skills: createdSkills, departments: createdDepartments, departmentsRefreshed: refreshedDepartments, agentsRenamed: renamedAgents, buildings: createdBuildings, buildingsRemapped: remappedBuildings, agents: createdAgents, statesReset: reset });
   }
 }

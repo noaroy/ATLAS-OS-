@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { MemoryHit, MemoryTier } from '@atlas/contracts';
 import { api } from '../lib/api.ts';
 import { Empty, ErrorNote, Panel, Spinner, StatCard, relativeTime } from '../components/ui.tsx';
@@ -15,8 +16,23 @@ const TIER_TONE: Record<MemoryTier, string> = {
   business: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
 };
 
+/**
+ * Une connaissance métier sans mission d'origine.
+ *
+ * C'est le seul cas que cette vue doit signaler d'elle-même. Une connaissance
+ * opérationnelle ou stratégique sans provenance est au pire inutile ; une
+ * connaissance *métier* sans provenance est un fait sur le monde réel que rien
+ * ne rattache à une source, et elle sera relue par les missions suivantes comme
+ * si elle était établie. C'est exactement la façon dont une donnée inventée
+ * cesse d'être détectable : au deuxième usage, elle n'est plus une réponse de
+ * modèle, elle est « ce qu'ATLAS sait ».
+ */
+const isUnsourcedBusiness = (item: MemoryHit): boolean =>
+  item.tier === 'business' && item.missionId === null;
+
 /** The Central Library (SRS §2.11): what ATLAS knows, and how it is organised. */
 export function MemoryView() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<MemoryHit[] | null>(null);
   const [stats, setStats] = useState<{ total: number; byTier: Record<string, number> } | null>(null);
   const [query, setQuery] = useState('');
@@ -100,6 +116,20 @@ export function MemoryView() {
 
       {error && <ErrorNote message={error} />}
 
+      {/*
+        Le compte porte sur ce qui est affiché, et le dit. Les statistiques
+        viennent du serveur mais la liste est plafonnée à quarante entrées :
+        annoncer un total à partir d'une page serait exactement le genre de
+        chiffre juste-en-apparence que cette vue existe pour éviter.
+      */}
+      {items && items.some(isUnsourcedBusiness) && (
+        <p className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
+          {items.filter(isUnsourcedBusiness).length} connaissance(s) métier sans mission d’origine
+          parmi les {items.length} affichées. Une connaissance métier que rien ne rattache à une
+          mission sera relue par les missions suivantes comme un fait établi.
+        </p>
+      )}
+
       <Panel dense>
         {items === null ? (
           <Spinner />
@@ -134,11 +164,39 @@ export function MemoryView() {
                     <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-[--color-muted]">
                       {item.content.length > 600 ? `${item.content.slice(0, 600)}…` : item.content}
                     </p>
-                    <div className="mt-1.5 text-[0.68rem] text-[--color-faint]">
-                      importance {(item.importance * 100).toFixed(0)}% · recalled {item.accessCount}× ·{' '}
-                      {relativeTime(item.createdAt)}
-                      {item.agentKey && ` · by ${item.agentKey}`}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[0.68rem] text-[--color-faint]">
+                      <span>importance {(item.importance * 100).toFixed(0)}%</span>
+                      <span>· confiance {(item.confidence * 100).toFixed(0)}%</span>
+                      <span>· rappelée {item.accessCount}×</span>
+                      <span>· {relativeTime(item.createdAt)}</span>
+                      {item.agentKey && <span>· par {item.agentKey}</span>}
+                      {/*
+                        La provenance est cliquable, pas seulement affichée : une
+                        connaissance qu'on ne peut pas remonter jusqu'à la mission
+                        qui l'a produite ne se vérifie pas, elle se croit.
+                      */}
+                      {item.missionId ? (
+                        <>
+                          <span>·</span>
+                          <button
+                            type="button"
+                            className="underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
+                            onClick={() => navigate(`/missions/${item.missionId}`)}
+                          >
+                            mission d’origine
+                          </button>
+                        </>
+                      ) : (
+                        <span>· aucune mission d’origine</span>
+                      )}
                     </div>
+
+                    {isUnsourcedBusiness(item) && (
+                      <p className="mt-1.5 rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[0.68rem] leading-relaxed text-amber-300">
+                        Connaissance métier sans mission d’origine — rien ne permet de remonter à
+                        la source qui l’atteste. À vérifier avant de s’en servir, ou à oublier.
+                      </p>
+                    )}
                   </div>
                   <button
                     type="button"

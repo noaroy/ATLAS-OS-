@@ -456,7 +456,14 @@ function OpportunityDetailPanel({
  * d'ATLAS : rien ne part chez un client sans qu'un humain l'ait approuvé
  * (Article XVI), et l'écran doit rendre visible qui a conclu quoi.
  */
-function ReviewControls({
+/**
+ * Les commandes de revue, réutilisables telles quelles.
+ *
+ * Exportées pour que le cockpit les affiche sans réécrire la décision : une
+ * seconde implémentation de « approuver » finirait par diverger de celle-ci, et
+ * deux façons d'approuver une opportunité, c'est une de trop.
+ */
+export function ReviewControls({
   opportunity,
   onReviewed,
 }: {

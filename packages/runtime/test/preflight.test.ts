@@ -100,8 +100,17 @@ function providerThat(outcome: 'ok' | 'timeout' | 'rate-limited'): SearchProvide
   };
 }
 
+// `probeInference: false` partout : un test unitaire ne doit jamais appeler
+// l'API du modèle. La sonde elle-même est couverte plus bas, sans réseau.
 const run = (config: AtlasConfig, search: SearchProvider | null, missionBudgetUsd?: number) =>
-  preflight({ config, repos, search, logger, ...(missionBudgetUsd !== undefined ? { missionBudgetUsd } : {}) });
+  preflight({
+    config,
+    repos,
+    search,
+    logger,
+    probeInference: false,
+    ...(missionBudgetUsd !== undefined ? { missionBudgetUsd } : {}),
+  });
 
 describe('contrôle avant décollage', () => {
   test('une configuration saine autorise le décollage', async () => {
@@ -290,7 +299,7 @@ describe('contrôle avant décollage — Search Fabric', () => {
   }
 
   const runFabric = (fabric: SearchFabric, config = configWith()) =>
-    preflight({ config, repos, search: fabric, logger, need });
+    preflight({ config, repos, search: fabric, logger, need, probeInference: false });
 
   test('un parc avec un moteur adapté autorise le décollage', async () => {
     const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
@@ -356,5 +365,142 @@ describe('contrôle avant décollage — Search Fabric', () => {
     // décrit — sonder à chaque contrôle referait brider le parc.
     const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
     assert.equal(report.searchHealth, 'unknown', 'sans appel, la santé reste inconnue');
+  });
+});
+
+/**
+ * La sonde d'inférence.
+ *
+ * VAL-001 est morte à sa première étape parce que le solde du compte Anthropic
+ * était épuisé — et le contrôle avant décollage venait d'afficher « ✓ inférence
+ * — API Anthropic configurée ». La clé existait, elle était valide de forme, et
+ * aucun appel ne pouvait aboutir.
+ *
+ * C'est la leçon de LIVE #005 appliquée au mauvais endroit : le moteur de
+ * recherche était interrogé pour de vrai, le fournisseur du modèle était cru
+ * sur parole — alors que c'est lui qui porte toute la dépense.
+ */
+describe('contrôle avant décollage — inférence', () => {
+  const withFetch = async <T>(
+    handler: (url: string) => Promise<Response>,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const original = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      handler(String(input))) as unknown as typeof fetch;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  const probe = (config: AtlasConfig = configWith()) =>
+    preflight({ config, repos, search: providerThat('ok'), logger, need: undefined as never });
+
+  test('une clé présente ne suffit plus : l’API est interrogée', async () => {
+    let called = '';
+    const report = await withFetch(
+      async (url) => {
+        called = url;
+        return new Response(JSON.stringify({ content: [] }), { status: 200 });
+      },
+      () => probe(),
+    );
+
+    assert.match(called, /api\.anthropic\.com/, 'le contrôle doit réellement appeler l’API');
+    const check = report.checks.find((c) => c.name === 'inférence')!;
+    assert.equal(check.status, 'pass');
+    assert.match(check.detail, /répond en \d+ ms/);
+  });
+
+  test('un solde épuisé bloque le décollage, et dit quoi faire', async () => {
+    // Le cas exact de VAL-001.
+    const report = await withFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            type: 'error',
+            error: { type: 'invalid_request_error', message: 'Your credit balance is too low' },
+          }),
+          { status: 400 },
+        ),
+      () => probe(),
+    );
+
+    assert.equal(report.cleared, false, 'une mission ne doit pas partir sans solde');
+    const check = report.checks.find((c) => c.name === 'inférence')!;
+    assert.equal(check.status, 'fail');
+    assert.match(check.detail, /solde/i);
+    assert.match(check.remedy ?? '', /Plans & Billing|simulation/);
+  });
+
+  test('les causes se distinguent : clé refusée, quota, modèle inconnu', async () => {
+    // Recharger un compte, remplacer une clé et corriger un nom de modèle sont
+    // trois gestes différents. « L'API ne répond pas » ne dit lequel.
+    const cases: Array<[number, string, RegExp]> = [
+      [401, '{}', /clé refusée/],
+      [429, '{}', /quota/],
+      [404, '{}', /inconnu du fournisseur/],
+    ];
+
+    for (const [status, body, expected] of cases) {
+      const report = await withFetch(
+        async () => new Response(body, { status }),
+        () => probe(),
+      );
+      const check = report.checks.find((c) => c.name === 'inférence')!;
+      assert.equal(check.status, 'fail', `HTTP ${status} doit bloquer`);
+      assert.match(check.detail, expected);
+    }
+  });
+
+  test('un réseau coupé est signalé comme tel', async () => {
+    const report = await withFetch(
+      async () => {
+        throw new Error('ECONNREFUSED');
+      },
+      () => probe(),
+    );
+    const check = report.checks.find((c) => c.name === 'inférence')!;
+    assert.equal(check.status, 'fail');
+    assert.match(check.detail, /injoignable/);
+  });
+
+  test('la sonde ne part jamais en simulation', async () => {
+    // Une démonstration ne doit rien appeler, même un jeton.
+    let called = false;
+    await withFetch(
+      async () => {
+        called = true;
+        return new Response('{}', { status: 200 });
+      },
+      () => probe(configWith({ llm: { mode: 'simulation', declaredMode: 'simulation', apiKey: '' } })),
+    );
+    assert.equal(called, false);
+  });
+
+  test('la sonde peut être coupée sans faire échouer le contrôle', async () => {
+    // Utile hors ligne : le contrôle prévient au lieu de bloquer.
+    let called = false;
+    const report = await withFetch(
+      async () => {
+        called = true;
+        return new Response('{}', { status: 200 });
+      },
+      () =>
+        preflight({
+          config: configWith(),
+          repos,
+          search: providerThat('ok'),
+          logger,
+          probeInference: false,
+        }),
+    );
+
+    assert.equal(called, false);
+    const check = report.checks.find((c) => c.name === 'inférence')!;
+    assert.equal(check.status, 'warn');
+    assert.equal(check.blocking, false);
   });
 });

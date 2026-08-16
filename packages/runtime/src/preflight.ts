@@ -1,4 +1,5 @@
 import type { AtlasConfig } from '@atlas/core';
+import { describeError, withDeadline } from '@atlas/core';
 import type { Repositories } from '@atlas/data';
 import {
   assessSuitability,
@@ -99,7 +100,112 @@ export interface PreflightInput {
   need?: MissionSearchNeed;
   /** Interroger réellement le moteur. Coupé dans les tests unitaires. */
   probeSearch?: boolean;
+  /**
+   * Interroger réellement l'API du modèle.
+   *
+   * Coûte un jeton de sortie. Coupé dans les tests, actif avant toute mission
+   * réelle : une clé valide de forme et un compte sans solde se ressemblent
+   * exactement, jusqu'à la première étape.
+   */
+  probeInference?: boolean;
+  probeTimeoutMs?: number;
   logger: { child(bindings: Record<string, unknown>): unknown };
+}
+
+/**
+ * L'API du modèle répond-elle vraiment ?
+ *
+ * Un appel minimal — un jeton de sortie — qui vérifie en une fois ce que la
+ * lecture de la configuration ne peut pas vérifier : que la clé est acceptée,
+ * que le compte a du solde, et que le service est joignable.
+ *
+ * Le diagnostic distingue les causes, parce qu'elles appellent des gestes
+ * différents. Un solde épuisé se recharge, une clé révoquée se remplace, un
+ * réseau coupé s'attend. « L'API ne répond pas » ne dit lequel des trois, et
+ * c'est la phrase qui fait chercher au mauvais endroit.
+ */
+async function probeInference(
+  config: AtlasConfig,
+  timeoutMs: number,
+): Promise<{ ok: boolean; durationMs: number; detail: string; remedy: string }> {
+  const started = Date.now();
+
+  try {
+    const response = await withDeadline(
+      (signal) =>
+        fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          signal,
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': config.llm.apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: config.llm.agentModel,
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'ok' }],
+          }),
+        }),
+      { ms: timeoutMs, label: "sonde d'inférence" },
+    );
+
+    const durationMs = Date.now() - started;
+    if (response.ok) return { ok: true, durationMs, detail: 'ok', remedy: '' };
+
+    // Le corps porte la cause réelle. La clé n'y figure jamais : on ne recopie
+    // que le message du fournisseur.
+    const body = (await response.text().catch(() => '')).slice(0, 400);
+    const lower = body.toLowerCase();
+
+    if (lower.includes('credit balance') || lower.includes('insufficient')) {
+      return {
+        ok: false,
+        durationMs,
+        detail: 'solde du compte Anthropic épuisé — aucun appel ne peut aboutir.',
+        remedy:
+          'Rechargez le compte sur console.anthropic.com (Plans & Billing), ou passez ' +
+          'ATLAS_EXECUTION_MODE=simulation pour travailler sans dépense.',
+      };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        durationMs,
+        detail: `clé refusée (HTTP ${response.status}).`,
+        remedy: 'Vérifiez ANTHROPIC_API_KEY — la clé est peut-être révoquée ou mal copiée.',
+      };
+    }
+    if (response.status === 429) {
+      return {
+        ok: false,
+        durationMs,
+        detail: 'quota atteint (HTTP 429).',
+        remedy: 'Attendez la fin de la fenêtre de limitation, ou relevez le quota du compte.',
+      };
+    }
+    if (response.status === 404) {
+      return {
+        ok: false,
+        durationMs,
+        detail: `modèle « ${config.llm.agentModel} » inconnu du fournisseur.`,
+        remedy: 'Corrigez ATLAS_AGENT_MODEL : ce nom de modèle n’existe pas.',
+      };
+    }
+    return {
+      ok: false,
+      durationMs,
+      detail: `HTTP ${response.status} — ${body.slice(0, 160)}`,
+      remedy: 'Consultez le statut du fournisseur avant de relancer.',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      durationMs: Date.now() - started,
+      detail: `injoignable : ${describeError(err)}`,
+      remedy: 'Vérifiez la connectivité réseau, puis relancez le contrôle.',
+    };
+  }
 }
 
 const pass = (name: string, detail: string): PreflightCheck => ({
@@ -154,10 +260,38 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
           'Renseignez ANTHROPIC_API_KEY, ou passez ATLAS_EXECUTION_MODE=simulation.',
         ),
       );
+    } else if (input.probeInference === false) {
+      checks.push(warn('inférence', `Clé présente, non vérifiée · agents ${config.llm.agentModel}.`));
     } else {
-      checks.push(
-        pass('inférence', `API Anthropic configurée · agents ${config.llm.agentModel}.`),
-      );
+      // ── L'inférence est interrogée, pas seulement lue ────────────────────
+      //
+      // Le contrôle disait « API Anthropic configurée » et VAL-001 est morte à
+      // la première étape : le solde du compte était épuisé. La clé existait,
+      // elle était valide de forme, et aucun appel ne pouvait aboutir.
+      //
+      // C'est exactement la leçon de LIVE #005 — « configuré » n'a jamais
+      // empêché « injoignable » — appliquée au moteur de recherche mais jamais
+      // à l'inférence. Le moteur était sondé pour de vrai ; le fournisseur du
+      // modèle était cru sur parole, alors que c'est lui qui porte toute la
+      // dépense.
+      //
+      // La sonde coûte un jeton de sortie, soit une fraction de centime. C'est
+      // le prix de ne pas découvrir le problème après avoir lancé la mission.
+      const probe = await probeInference(config, input.probeTimeoutMs ?? 15_000);
+
+      if (probe.ok) {
+        checks.push(
+          pass('inférence', `API Anthropic répond en ${probe.durationMs} ms · agents ${config.llm.agentModel}.`),
+        );
+      } else {
+        checks.push(
+          fail(
+            'inférence',
+            `L'API Anthropic n'aboutit pas : ${probe.detail}`,
+            probe.remedy,
+          ),
+        );
+      }
     }
   } else {
     checks.push(pass('inférence', 'Mode simulation : aucun appel facturable ne partira.'));

@@ -570,29 +570,35 @@ export class HermesEngine {
         base.maxCallsPerStep,
       ),
       maxMissionTokens: missionTokens > 0 ? missionTokens : 0,
-      // Une étape ne doit pas pouvoir manger la mission. Le seuil était fixé au
-      // tiers, et il était mal calibré : LIVE-001 (M-1F5YW) s'est fait refuser
-      // l'enrichissement à 30 713 jetons sur 40 000 alors que la mission en
-      // avait consommé 62 132 sur 120 000 et 0,0652 $ sur 0,40 $. La garde n'a
-      // pas protégé le budget — elle en a gaspillé la moitié en faisant échouer
-      // le pipeline, et la mission s'est terminée sans une seule opportunité.
+      // ── Le plafond d'étape, en valeur absolue ──────────────────────────────
       //
-      // Le tiers supposait six étapes de poids comparable. Elles ne le sont
-      // pas : l'enrichissement analyse chaque candidat et domine la dépense par
-      // construction. Le seuil honnête d'une étape qui « mange la mission » est
-      // la majorité, pas le tiers — et la moitié se justifie par elle-même là
-      // où un tiers ne se justifiait que par le nombre d'étapes du plan.
+      // Il était exprimé en fraction du budget de la mission — d'abord le
+      // tiers, puis la moitié. Les deux ont cassé une mission qui avait encore
+      // du budget :
       //
-      // Ce n'est pas un affaiblissement : le plafond de mission (jetons et
-      // dollars) reste vérifié avant *chaque* appel, `maxCallsPerStep` arrête
-      // une étape qui boucle, et le coupe-circuit arrête une panne répétée.
-      // Cette garde-ci est une défense en profondeur, pas la barrière
-      // principale — c'est LIVE #001 qui l'a prouvé, en dépassant de 343 % un
-      // plafond de mission qui n'était alors vérifié qu'entre les étapes.
+      //   LIVE-001  enrichissement refusé à 30 713/40 000, mission à 62 132/120 000
+      //   VAL-001   enrichissement refusé à 27 597/40 000, mission à 53 153/80 000
+      //
+      // Déplacer la fraction ne corrigeait pas la nature du défaut. **Un
+      // plafond d'étape exprimé en fraction du plafond de mission bindera
+      // toujours en premier dès qu'une étape domine** — et l'enrichissement
+      // domine par construction, puisqu'il analyse chaque candidat. Une garde
+      // qui fait échouer le pipeline en laissant un tiers du budget inutilisé
+      // ne protège pas ce budget, elle le gaspille.
+      //
+      // Le plafond redevient donc absolu : la valeur configurée, jamais plus
+      // que la mission entière — une étape ne peut de toute façon pas dépasser
+      // ce que la mission a le droit de dépenser.
+      //
+      // Ce que cela protège encore : une étape pathologique dans une grande
+      // mission. LIVE #001 a consommé 1 372 673 jetons dans une seule étape ;
+      // sous ce plafond elle s'arrêtait à 120 000. Ce que cela cesse de faire :
+      // couper une étape normale dans une petite mission, où c'est le plafond
+      // de mission — vérifié avant *chaque* appel — qui est la vraie barrière.
       maxStepTokens:
         base.maxStepTokens > 0
           ? missionTokens > 0
-            ? Math.min(base.maxStepTokens, Math.ceil(missionTokens / 2))
+            ? Math.min(base.maxStepTokens, missionTokens)
             : base.maxStepTokens
           : 0,
     };

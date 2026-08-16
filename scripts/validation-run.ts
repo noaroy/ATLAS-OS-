@@ -57,6 +57,11 @@ async function main(): Promise<void> {
     config,
     repos,
     search: fabric,
+    // Le parc d'inférence change la question posée : non plus « Anthropic
+    // répond-il ? » mais « en reste-t-il un capable de servir ? ». Sans lui, le
+    // contrôle bloquerait sur le premier fournisseur en panne alors qu'un
+    // secours existe peut-être.
+    inferenceFabric: system.inferenceFabric,
     logger: system.logger,
     missionBudgetUsd: preset.limits.maxCostUsd,
     ...(preset.need ? { need: preset.need } : {}),

@@ -427,3 +427,77 @@ describe('la comptabilité par appel', () => {
     assert.ok(!/sk-ant|api[_-]?key/i.test(serialised));
   });
 });
+
+/**
+ * Le plafond d'étape ne doit pas couper une mission qui a du budget.
+ *
+ * Deux missions réelles ont échoué sur ce point, et déplacer la fraction n'a
+ * rien corrigé :
+ *
+ *   LIVE-001  enrichissement refusé à 30 713/40 000, mission à 62 132/120 000
+ *   VAL-001   enrichissement refusé à 27 597/40 000, mission à 53 153/80 000
+ *
+ * Un plafond d'étape exprimé en fraction du plafond de mission bindera toujours
+ * en premier dès qu'une étape domine — et l'enrichissement domine par
+ * construction, puisqu'il analyse chaque candidat.
+ */
+describe('le plafond d’étape ne coupe pas une mission solvable', () => {
+  test('une étape peut consommer largement tant que la mission a du budget', async () => {
+    // Une seule étape lourde, une mission qui a de la marge : elle doit aller
+    // au bout. C'est le scénario exact de VAL-001, où le pipeline s'est arrêté
+    // avec un tiers du budget inutilisé.
+    const sys = createTestSystem({
+      settings: { maxConcurrentTasks: 1, taskMaxAttempts: 1, missionTokenBudget: 80_000 },
+      budget: { maxStepTokens: 120_000, maxCallsPerStep: 12, maxMissionCostUsd: 0 },
+      handler: departmentHandler(async () => ({
+        kind: 'text',
+        text: 'étape substantielle',
+        usage: { inputTokens: 9_000, outputTokens: 300 },
+      })),
+    });
+    system = sys;
+
+    const mission = await runDepartmentMission(sys);
+    const tasks = sys.repos.missions.tasksFor(mission.id);
+
+    const refusedByStep = tasks.filter((t) => /absorber le budget/.test(t.error ?? ''));
+    assert.equal(
+      refusedByStep.length,
+      0,
+      `aucune étape ne doit être refusée par le plafond d'étape : ${refusedByStep
+        .map((t) => `${t.ref} — ${t.error}`)
+        .join(' | ')}`,
+    );
+  });
+
+  test('le plafond d’étape reste absolu, pas une fraction de la mission', async () => {
+    // La propriété à protéger, énoncée directement : le plafond d'étape ne doit
+    // jamais être plus strict que le plafond de mission. S'il l'était, il
+    // deviendrait la vraie limite sans que personne l'ait décidé.
+    const sys = createTestSystem({
+      settings: { maxConcurrentTasks: 1, taskMaxAttempts: 1, missionTokenBudget: 60_000 },
+      budget: { maxStepTokens: 120_000, maxMissionCostUsd: 0 },
+      handler: departmentHandler(async () => ({
+        kind: 'text',
+        text: 'ok',
+        usage: { inputTokens: 1_000, outputTokens: 100 },
+      })),
+    });
+    system = sys;
+
+    const mission = await runDepartmentMission(sys);
+    const snapshot = sys.ledger.snapshot(mission.id) ?? sys.ledger.close(mission.id);
+
+    if (snapshot) {
+      assert.ok(
+        snapshot.limits.maxStepTokens <= snapshot.limits.maxMissionTokens,
+        'une étape ne peut pas dépasser la mission — mais elle ne doit pas non plus être bridée plus tôt',
+      );
+      assert.equal(
+        snapshot.limits.maxStepTokens,
+        60_000,
+        'le plafond d’étape suit la mission, il n’en prend pas une fraction',
+      );
+    }
+  });
+});

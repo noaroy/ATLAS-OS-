@@ -298,8 +298,18 @@ describe('contrôle avant décollage — Search Fabric', () => {
     return new SearchFabric({ registry, need });
   }
 
+  // `probeSearch: false` sur les tests de routage : ils vérifient le plan, pas
+  // la santé. La sonde elle-même est couverte par ses propres tests.
   const runFabric = (fabric: SearchFabric, config = configWith()) =>
-    preflight({ config, repos, search: fabric, logger, need, probeInference: false });
+    preflight({
+      config,
+      repos,
+      search: fabric,
+      logger,
+      need,
+      probeInference: false,
+      probeSearch: false,
+    });
 
   test('un parc avec un moteur adapté autorise le décollage', async () => {
     const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
@@ -359,12 +369,61 @@ describe('contrôle avant décollage — Search Fabric', () => {
     assert.equal(check.blocking, false);
   });
 
-  test('le preflight n’appelle aucun moteur pour rendre son verdict', async () => {
-    // Les moteurs scriptés lèvent si on les appelle : que ce bloc passe prouve
-    // que le contrôle se fait sur l'état connu, sans provoquer le trafic qu'il
-    // décrit — sonder à chaque contrôle referait brider le parc.
+  test('le contrôle interroge réellement le parc avant de laisser partir', async () => {
+    // Ce test affirmait l'inverse — que le preflight ne devait appeler aucun
+    // moteur — et c'est ce qui a laissé passer le défaut. VAL-001 est partie
+    // sur « 2 moteurs adaptés » alors que SearXNG n'écoutait nulle part et que
+    // DuckDuckGo servait sa page anti-bot ; la mission a payé 0,0259 $ pour
+    // découvrir un parc muet.
+    //
+    // Lire un plan n'est pas vérifier. « Configuré » n'a jamais empêché
+    // « injoignable » — la leçon de LIVE #005, appliquée au chemin qui sert.
+    let queried = 0;
+    const registry = new SearchProviderRegistry();
+    registry.register({
+      provider: {
+        key: 'duckduckgo',
+        label: 'DuckDuckGo',
+        availability: () => ({ available: true, reason: 'prêt' }),
+        search: async () => {
+          queried += 1;
+          return {
+            results: [],
+            outcome: 'rate-limited' as const,
+            detail: 'page de vérification',
+            costUsd: 0,
+            durationMs: 5,
+          };
+        },
+      },
+      priority: 0,
+      costModel: 'free',
+      costPerQueryUsd: 0,
+    });
+
+    const report = await preflight({
+      config: configWith(),
+      repos,
+      search: new SearchFabric({ registry, need }),
+      logger,
+      need,
+      probeInference: false,
+    });
+
+    assert.ok(queried > 0, 'le moteur doit être réellement interrogé');
+    assert.equal(report.cleared, false, 'un parc muet ne doit pas laisser partir une mission');
+    assert.equal(report.searchHealth, 'unhealthy');
+    const check = report.checks.find((c) => c.name === 'search fabric')!;
+    assert.match(check.detail, /BLOCKED-BY-SEARCH-FABRIC/);
+  });
+
+  test('la sonde peut être coupée, et le contrôle le dit', async () => {
+    // Utile hors ligne : le rapport annonce alors que les moteurs n'ont pas été
+    // interrogés, plutôt que de laisser croire qu'ils ont répondu.
     const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
     assert.equal(report.searchHealth, 'unknown', 'sans appel, la santé reste inconnue');
+    const check = report.checks.find((c) => c.name === 'search fabric')!;
+    assert.match(check.detail, /non interrogés/);
   });
 });
 

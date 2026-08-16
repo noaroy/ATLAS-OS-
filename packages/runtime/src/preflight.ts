@@ -247,6 +247,33 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
   const mode = config.llm.mode;
   const budgetUsd = input.missionBudgetUsd ?? config.budget.maxMissionCostUsd;
 
+  // Déclarés avant `finish`, qui les lit : un contrôle peut rendre la main à
+  // tout moment, et le rapport doit porter ce qui a été constaté jusque-là.
+  let searchHealth: 'healthy' | 'unhealthy' | 'unknown' = 'unknown';
+  let fabricReport: FabricReport | null = null;
+  let suitabilityFromFabric: SuitabilityReport | null = null;
+  let suitability: SuitabilityReport | null = null;
+
+  /**
+   * Assemble le rapport à partir de ce qui a été constaté jusqu'ici.
+   *
+   * Extrait pour qu'un contrôle qui constate un blocage puisse rendre la main
+   * immédiatement. Dérouler les contrôles suivants après avoir établi qu'aucun
+   * moteur ne répond décrirait un parc qu'on vient de constater muet.
+   */
+  const finish = (): PreflightReport => ({
+    mode,
+    declaredMode: config.llm.declaredMode,
+    cleared: !checks.some((check) => check.blocking && check.status === 'fail'),
+    checks,
+    budgetUsd,
+    searchProvider: search?.key ?? null,
+    searchHealth,
+    searchSuitability: suitability ?? suitabilityFromFabric,
+    fabric: fabricReport,
+    generatedAt: new Date().toISOString(),
+  });
+
   // ── Mode ────────────────────────────────────────────────────────────────
   if (config.llm.declaredMode === 'auto') {
     checks.push(
@@ -442,9 +469,6 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
 
   // ── Moteur de recherche ─────────────────────────────────────────────────
   // Le contrôle qui manquait. « Configuré » ne veut rien dire : on interroge.
-  let searchHealth: 'healthy' | 'unhealthy' | 'unknown' = 'unknown';
-  let fabricReport: FabricReport | null = null;
-  let suitabilityFromFabric: SuitabilityReport | null = null;
 
   if (search instanceof SearchFabric) {
     // La question a changé, et c'est tout l'objet du Search Fabric.
@@ -483,11 +507,61 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
     } else {
       const first = plan.order[0]!;
       suitabilityFromFabric = first.suitability;
-
-      // La santé du parc est celle du premier moteur retenu — pas une moyenne.
-      // C'est lui qui répondra ; les suivants ne servent qu'en cas de bascule,
-      // et leur état ne dit rien de ce qui va se passer.
       searchHealth = first.health;
+
+      // ── Le parc est interrogé, pas seulement listé ────────────────────────
+      //
+      // Ce contrôle manquait, et c'est la même leçon qu'ailleurs appliquée trop
+      // tard. Le chemin mono-moteur interrogeait réellement le moteur depuis
+      // LIVE #005 ; le chemin Fabric — celui réellement en service — se
+      // contentait de lire son plan. VAL-001 est partie sur « 2 moteurs
+      // adaptés » alors que SearXNG n'écoutait nulle part et que DuckDuckGo
+      // servait sa page anti-bot. La mission a payé 0,0259 $ pour découvrir un
+      // parc à terre.
+      //
+      // Une seule requête, sur le moteur qui répondra vraiment. Sonder tout le
+      // parc coûterait le trafic qu'on cherche à éviter, et n'apprendrait rien
+      // sur les moteurs de secours qui, eux, ne serviront peut-être jamais.
+      if (input.probeSearch !== false) {
+        const probe = await search.search(
+          { query: 'test', count: 3 },
+          { logger: input.logger as never, timeoutMs: Math.min(config.search.timeoutMs, 10_000) },
+        );
+
+        searchHealth = probe.outcome === 'ok' ? 'healthy' : 'unhealthy';
+
+        if (probe.outcome !== 'ok') {
+          // Le Fabric a déjà tenté sa bascule pendant cette sonde : si elle
+          // avait abouti, l'issue serait `ok`. Un échec ici signifie que tout
+          // ce qui pouvait répondre a été essayé.
+          const trace = search.lastTrace();
+          const chainTried = trace.attempts.map((a) => `${a.providerId} → ${a.outcome}`).join(' · ');
+
+          checks.push(
+            mode === 'live'
+              ? fail(
+                  'search fabric',
+                  `BLOCKED-BY-SEARCH-FABRIC — aucun moteur ne répond. ${chainTried || probe.detail}`,
+                  'Démarrez une instance SearXNG (SEARXNG_BASE_URL), attendez la fin du ' +
+                    'refroidissement de DuckDuckGo, ou configurez un moteur avec clé.',
+                )
+              : warn('search fabric', `Aucun moteur ne répond ; sans effet en simulation.`),
+          );
+
+          // Le rapport doit refléter ce que la sonde vient d'apprendre, pas le
+          // plan optimiste établi avant elle.
+          fabricReport = {
+            ...fabricReport,
+            providers: search.statuses(),
+            blocked: true,
+            blockedReason: `Aucun moteur n'a répondu à la sonde. ${chainTried}`,
+          };
+
+          // Rien d'autre à contrôler côté recherche : la suite décrirait un
+          // parc qu'on vient de constater muet.
+          return finish();
+        }
+      }
 
       const chain = plan.order.map((c) => c.record.id).join(' → ');
       const skipped = fabricReport.excluded.length;
@@ -496,6 +570,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
           'search fabric',
           `${plan.order.length} moteur(s) adaptés : ${chain}` +
             (skipped > 0 ? ` · ${skipped} écarté(s)` : '') +
+            (input.probeSearch === false ? ' · non interrogés' : ' · le premier a répondu') +
             `. Une bascule est automatique si le premier échoue.`,
         ),
       );
@@ -572,7 +647,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
   // Le Fabric a déjà tranché l'adéquation en choisissant : la reposer ici
   // interrogerait le Fabric lui-même, dont les capacités ne sont celles
   // d'aucun moteur réel.
-  let suitability: SuitabilityReport | null = suitabilityFromFabric;
+  suitability = suitabilityFromFabric;
   if (search && !(search instanceof SearchFabric) && input.need) {
     suitability = assessSuitability(search, input.need);
     checks.push(
@@ -593,20 +668,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
     );
   }
 
-  const cleared = !checks.some((check) => check.blocking && check.status === 'fail');
-
-  return {
-    mode,
-    declaredMode: config.llm.declaredMode,
-    cleared,
-    checks,
-    budgetUsd,
-    searchProvider: search?.key ?? null,
-    searchHealth,
-    searchSuitability: suitability,
-    fabric: fabricReport,
-    generatedAt: new Date().toISOString(),
-  };
+  return finish();
 }
 
 /** Le rapport, mis en forme pour un terminal. */

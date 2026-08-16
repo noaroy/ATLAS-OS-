@@ -51,6 +51,33 @@ export const DEFAULT_BUDGET_LIMITS: BudgetLimits = {
   minViableOutputTokens: 512,
 };
 
+/**
+ * Combien d'appels une étape mérite, vu le travail réellement en jeu.
+ *
+ * Le plafond était forfaitaire — douze appels par étape, que la mission vise
+ * trois candidats ou trois cents. La reprise de LIVE-001 l'a montré par
+ * l'absurde : enrichir **trois** candidats a pris onze appels, dont l'entrée
+ * croissait de 5 748 à 14 406 jetons parce que chaque appel renvoie tout le
+ * contexte accumulé. À lui seul cet enrichissement a coûté 0,116 $ — plus du
+ * quart de l'enveloppe du pilote, pour documenter trois entreprises.
+ *
+ * Deux appels par candidat : analyser, puis conclure. Un plancher pour les
+ * étapes qui n'itèrent sur rien. Et jamais plus que le plafond configuré : la
+ * proportion resserre, elle n'élargit pas.
+ *
+ * Zéro candidat signifie que la découverte n'a pas encore tourné. Elle a besoin
+ * de son plafond plein pour aller en chercher, et la proportionner à un compte
+ * encore vide la condamnerait avant qu'elle commence.
+ *
+ * Fonction pure, et exportée pour cela : c'est une règle de calibrage, elle doit
+ * pouvoir être vérifiée sans monter une mission entière.
+ */
+export function proportionalCallsPerStep(candidates: number, maxCallsPerStep: number): number {
+  if (maxCallsPerStep <= 0) return 0;
+  if (candidates <= 0) return maxCallsPerStep;
+  return Math.min(maxCallsPerStep, Math.max(4, candidates * 2));
+}
+
 /** Une ligne de comptabilité : un appel, ce qu'il a coûté, ce qu'il servait. */
 export interface LlmCallRecord {
   missionId: string | null;

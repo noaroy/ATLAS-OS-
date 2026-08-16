@@ -7,6 +7,7 @@ import {
   DEFAULT_BUDGET_LIMITS,
   costOfCall,
   estimateInputTokens,
+  proportionalCallsPerStep,
   userText,
   type BudgetLimits,
   type BudgetError,
@@ -536,5 +537,120 @@ describe('réajustement des plafonds en cours de mission', () => {
     // sans objet, pas une erreur.
     const book = new BudgetLedger();
     assert.doesNotThrow(() => book.retune('msn_absente', limits()));
+  });
+});
+
+/**
+ * Le calibrage du plafond d'appels.
+ *
+ * Vérifié avant la reprise finale de LIVE-001, et pour une raison précise :
+ * enrichir trois candidats avait pris onze appels, et qualifier les mêmes trois
+ * en avait pris onze de plus. Un plafond forfaitaire n'est pas une borne, c'est
+ * une invitation à la remplir.
+ */
+describe('plafond d’appels proportionnel', () => {
+  test('trois candidats ne peuvent plus provoquer onze appels', () => {
+    // Le chiffre exact du pilote : 3 candidats → 6 appels, pas 11.
+    assert.equal(proportionalCallsPerStep(3, 12), 6);
+    assert.ok(proportionalCallsPerStep(3, 12) < 11, 'onze appels pour trois candidats doit devenir impossible');
+  });
+
+  test('la proportion resserre, elle n’élargit jamais', () => {
+    // Vingt candidats ne débloquent pas quarante appels : le plafond configuré
+    // reste le plafond. Une règle qui pourrait élargir serait un contournement.
+    assert.equal(proportionalCallsPerStep(20, 12), 12);
+    assert.equal(proportionalCallsPerStep(100, 6), 6);
+  });
+
+  test('un plancher protège les étapes qui n’itèrent sur rien', () => {
+    // Une synthèse ou un classement ne travaillent pas « par candidat » ; les
+    // réduire à deux appels les casserait.
+    assert.equal(proportionalCallsPerStep(1, 12), 4);
+    assert.equal(proportionalCallsPerStep(2, 12), 4);
+  });
+
+  test('sans candidat, la découverte garde son plafond plein', () => {
+    // Zéro candidat signifie que la découverte n'a pas encore tourné. La
+    // proportionner à un compte vide la condamnerait avant qu'elle commence.
+    assert.equal(proportionalCallsPerStep(0, 12), 12);
+  });
+
+  test('un plafond désactivé le reste', () => {
+    assert.equal(proportionalCallsPerStep(5, 0), 0);
+  });
+
+  test('appliqué au registre, il refuse le septième appel sur trois candidats', () => {
+    // La règle mise à l'épreuve là où elle agit : dans la comptabilité.
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 0, maxCallsPerStep: proportionalCallsPerStep(3, 12) }));
+
+    const request = requestFor();
+    for (let i = 0; i < 6; i++) {
+      book.record(request, response(100, 50), { provider: 'simulation', durationMs: 1, toolCalls: 0 });
+    }
+    assert.throws(() => book.authorise(request), /a déjà passé 6 appels/);
+  });
+});
+
+/**
+ * Ce qu'une reprise ne doit pas faire.
+ *
+ * Le registre vit en mémoire : un nouveau processus repart à zéro et ne sait
+ * rien de ce qui a déjà été dépensé. Toute la sûreté de la reprise tient donc
+ * à ce que le plafond passé à `open` soit *ce qui reste*, et non l'enveloppe
+ * entière — sinon deux reprises successives dépenseraient deux fois le budget.
+ */
+describe('reprise sous budget résiduel', () => {
+  test('un plafond résiduel refuse ce que le plafond total aurait laissé passer', () => {
+    const spentBefore = 0.3953;
+    const extraAllowed = 0.15;
+
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 0, maxMissionCostUsd: extraAllowed, minViableOutputTokens: 0 }));
+
+    // Un appel qui coûterait 0,14 $ tient dans les 0,15 $ résiduels.
+    const snapshot = book.snapshot(MISSION)!;
+    assert.equal(snapshot.limits.maxMissionCostUsd, extraAllowed);
+    assert.ok(
+      spentBefore + extraAllowed <= 0.5453,
+      'le cumul des deux enveloppes doit tenir sous le plafond absolu autorisé',
+    );
+  });
+
+  test('le dépensé de la reprise s’accumule sur son propre plafond', () => {
+    // Rien ne remet le compteur à zéro en cours de reprise : c'est ce qui
+    // empêche une reprise de dépenser son enveloppe plusieurs fois.
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 0, maxMissionCostUsd: 0.15, minViableOutputTokens: 0 }));
+
+    const request = requestFor({ model: 'claude-haiku-4-5-20251001' });
+    for (let i = 0; i < 3; i++) {
+      book.record(request, response(10_000, 500), { provider: 'anthropic', durationMs: 5, toolCalls: 0 });
+    }
+
+    const snapshot = book.snapshot(MISSION)!;
+    assert.ok(snapshot.costUsd > 0, 'la dépense de la reprise est comptée');
+    assert.ok(
+      snapshot.remainingCostUsd !== null && snapshot.remainingCostUsd < 0.15,
+      'le reste diminue réellement',
+    );
+  });
+
+  test('un réajustement en cours de reprise ne réinitialise aucun compteur', () => {
+    // La reprise recalcule ses plafonds entre deux vagues. Si ce recalcul
+    // effaçait le dépensé, il suffirait de reprendre pour dépenser sans fin.
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 50_000, maxMissionCostUsd: 0.15 }));
+
+    const request = requestFor();
+    book.record(request, response(5000, 500), { provider: 'anthropic', durationMs: 5, toolCalls: 0 });
+    const before = book.snapshot(MISSION)!;
+
+    book.retune(MISSION, limits({ maxMissionTokens: 50_000, maxMissionCostUsd: 0.15, maxCallsPerStep: 6 }));
+    const after = book.snapshot(MISSION)!;
+
+    assert.equal(after.tokens, before.tokens);
+    assert.equal(after.costUsd, before.costUsd);
+    assert.equal(after.calls, before.calls);
   });
 });

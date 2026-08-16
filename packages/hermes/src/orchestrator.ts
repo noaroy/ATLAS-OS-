@@ -24,7 +24,7 @@ import {
 import type { Repositories, RuntimeSettings } from '@atlas/data';
 import type { AgentRuntime } from '@atlas/agents';
 import type { BudgetError, BudgetLedger, BudgetLimits, LlmProvider } from '@atlas/llm';
-import { DEFAULT_BUDGET_LIMITS, textOf, totalTokens, userText } from '@atlas/llm';
+import { DEFAULT_BUDGET_LIMITS, proportionalCallsPerStep, textOf, totalTokens, userText } from '@atlas/llm';
 import type { MemoryService } from '@atlas/memory';
 import { instantiatePlaybook, missionEconomics, type OpportunityService } from '@atlas/intelligence';
 import { routeObjective } from '@atlas/departments';
@@ -543,32 +543,6 @@ export class HermesEngine {
     }
   }
 
-  /**
-   * Combien d'appels une étape a le droit de passer, vu le travail réel.
-   *
-   * Le plafond était forfaitaire — douze appels par étape, que la mission vise
-   * trois candidats ou trois cents. La reprise de LIVE-001 l'a montré par
-   * l'absurde : l'enrichissement de **trois** candidats a passé onze appels,
-   * dont l'entrée croissait de 5 748 à 14 406 jetons parce que chaque appel
-   * renvoie tout le contexte accumulé. À lui seul il a consommé 0,11 $ — le
-   * quart de l'enveloppe du pilote, pour documenter trois entreprises.
-   *
-   * Le plafond suit donc l'objectif : deux appels par candidat — analyser puis
-   * conclure — et un plancher pour les étapes qui n'itèrent sur rien. Un
-   * plafond forfaitaire n'est pas une borne, c'est une invitation à la remplir.
-   */
-  #callsPerStepFor(mission: Mission, base: BudgetLimits): number {
-    if (base.maxCallsPerStep <= 0) return 0;
-
-    const candidates = this.deps.repos.opportunities.forMission(mission.id).length;
-    // Zéro candidat signifie que la découverte n'a pas encore tourné : elle a
-    // besoin de son plancher pour aller en chercher, et le proportionner à un
-    // compte encore vide la condamnerait avant qu'elle commence.
-    if (candidates === 0) return base.maxCallsPerStep;
-
-    return Math.min(base.maxCallsPerStep, Math.max(4, candidates * 2));
-  }
-
   #limitsFor(mission: Mission): BudgetLimits {
     const settings = this.deps.settings();
     const missionTokens = mission.tokenBudget ?? settings.missionTokenBudget;
@@ -589,7 +563,12 @@ export class HermesEngine {
     return {
       ...base,
       maxMissionCostUsd: missionCostUsd,
-      maxCallsPerStep: this.#callsPerStepFor(mission, base),
+      // Le plafond d'appels suit le travail réel : douze appels forfaitaires
+      // ont laissé l'enrichissement de trois candidats en passer onze.
+      maxCallsPerStep: proportionalCallsPerStep(
+        this.deps.repos.opportunities.forMission(mission.id).length,
+        base.maxCallsPerStep,
+      ),
       maxMissionTokens: missionTokens > 0 ? missionTokens : 0,
       // Une étape ne doit pas pouvoir manger la mission. Le seuil était fixé au
       // tiers, et il était mal calibré : LIVE-001 (M-1F5YW) s'est fait refuser

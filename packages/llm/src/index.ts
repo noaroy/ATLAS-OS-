@@ -12,6 +12,53 @@ export { AnthropicProvider } from './anthropic-provider.ts';
 export { SimulationProvider } from './simulation-provider.ts';
 export { BudgetedProvider } from './budgeted-provider.ts';
 
+// ─── Inference Fabric ───────────────────────────────────────────────────────
+// Le parc de fournisseurs, derrière le contrat d'un fournisseur unique. Tout ce
+// qui consomme l'inférence continue de voir un `LlmProvider` ; ce provider sait
+// maintenant basculer, disjoncter et refuser une bascule plus chère.
+export {
+  InferenceFabric,
+  type InferenceAttempt,
+  type InferenceTrace,
+} from './fabric/fabric.ts';
+export {
+  createInferenceFabric,
+  buildInferenceRegistry,
+  type InferenceFabricOptions,
+} from './fabric/factory.ts';
+export {
+  InferenceProviderRegistry,
+  classifyFailure,
+  shouldFailover,
+  announcedCostPerMTokens,
+  type InferenceRecord,
+  type InferenceStatus,
+  type InferenceScore,
+  type InferenceMetrics,
+  type InferenceRegistration,
+  type InferenceFailure,
+  type InferenceFailureKind,
+  type InferenceCostModel,
+  type CreditState,
+} from './fabric/registry.ts';
+export {
+  InferenceRouter,
+  DEFAULT_ROUTING_POLICY,
+  type InferencePlan,
+  type InferenceCandidate,
+  type RoutingPolicy,
+} from './fabric/router.ts';
+export {
+  assessInferenceSuitability,
+  ANTHROPIC_CAPABILITIES,
+  OPENAI_COMPATIBLE_CAPABILITIES,
+  SIMULATION_CAPABILITIES,
+  UNKNOWN_CAPABILITIES,
+  type InferenceCapabilities,
+  type InferenceSuitability,
+  type InferenceSuitabilityVerdict,
+} from './fabric/capabilities.ts';
+
 /**
  * Chooses the inference provider for this deployment.
  *

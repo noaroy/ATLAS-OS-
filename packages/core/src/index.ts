@@ -1,3 +1,4 @@
+export * from './circuit-breaker.ts';
 export * from './config.ts';
 export * from './errors.ts';
 export * from './event-bus.ts';

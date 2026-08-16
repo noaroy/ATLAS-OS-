@@ -1,6 +1,7 @@
 import type { AtlasConfig } from '@atlas/core';
 import { describeError, withDeadline } from '@atlas/core';
 import type { Repositories } from '@atlas/data';
+import type { InferenceStatus } from '@atlas/llm';
 import {
   assessSuitability,
   OPEN_NEED,
@@ -109,6 +110,15 @@ export interface PreflightInput {
    */
   probeInference?: boolean;
   probeTimeoutMs?: number;
+  /**
+   * Le parc de fournisseurs d'inférence, quand le déploiement en pilote un.
+   *
+   * Fourni, il change la question posée : non plus « le fournisseur principal
+   * répond-il ? » mais « en reste-t-il un capable de servir ? ». Omis, le
+   * contrôle retombe sur le comportement d'origine — un fournisseur unique
+   * reste un point de défaillance unique assumé.
+   */
+  inferenceFabric?: { statuses(): InferenceStatus[] };
   logger: { child(bindings: Record<string, unknown>): unknown };
 }
 
@@ -283,13 +293,41 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
         checks.push(
           pass('inférence', `API Anthropic répond en ${probe.durationMs} ms · agents ${config.llm.agentModel}.`),
         );
+      } else if (input.inferenceFabric) {
+        // La question a changé, exactement comme pour la recherche.
+        //
+        // Avant : « la clé Anthropic répond-elle ? » — une question à laquelle
+        // un seul fournisseur pouvait répondre non, bloquant tout. VAL-001 est
+        // morte sur ce non-là.
+        //
+        // Maintenant : « reste-t-il un fournisseur sain ET adapté ? » Le parc
+        // n'est bloqué que lorsqu'il l'est entièrement.
+        const alive = input.inferenceFabric
+          .statuses()
+          .filter((s) => s.available && s.credit !== 'exhausted' && s.circuit.state !== 'open')
+          .filter((s) => !(mode === 'live' && s.kind === 'simulation'));
+
+        if (alive.length > 0) {
+          checks.push(
+            warn(
+              'inférence',
+              `Anthropic n'aboutit pas (${probe.detail}) — bascule possible vers ` +
+                `${alive.map((s) => s.id).join(', ')}.`,
+              'La mission partira sur un fournisseur de secours. Vérifiez le compte principal.',
+            ),
+          );
+        } else {
+          checks.push(
+            fail(
+              'inférence',
+              `BLOCKED-BY-INFERENCE-FABRIC — aucun fournisseur sain et adapté. ${probe.detail}`,
+              probe.remedy,
+            ),
+          );
+        }
       } else {
         checks.push(
-          fail(
-            'inférence',
-            `L'API Anthropic n'aboutit pas : ${probe.detail}`,
-            probe.remedy,
-          ),
+          fail('inférence', `L'API Anthropic n'aboutit pas : ${probe.detail}`, probe.remedy),
         );
       }
     }

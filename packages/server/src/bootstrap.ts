@@ -3,7 +3,7 @@ import { createRepositories, type Repositories } from '@atlas/data';
 import type { AtlasConfig, Logger } from '@atlas/core';
 import { EventBus, createLogger, describeError } from '@atlas/core';
 import { MemoryService } from '@atlas/memory';
-import { BudgetLedger, BudgetedProvider, createLlmProvider, type LlmProvider } from '@atlas/llm';
+import { BudgetLedger, BudgetedProvider, createInferenceFabric, InferenceFabric, type LlmProvider } from '@atlas/llm';
 import {
   AgentRuntime,
   ToolRegistry,
@@ -68,6 +68,14 @@ export interface AtlasSystem {
    */
   searchFabric: SearchFabric | null;
   /**
+   * Le parc de fournisseurs d'inférence réellement en service.
+   *
+   * Exposé pour la même raison que le parc de moteurs : le cockpit doit lire
+   * l'état vivant — disjoncteurs, crédit épuisé, métriques accumulées — plutôt
+   * qu'un registre neuf qui afficherait « inconnu » partout.
+   */
+  inferenceFabric: InferenceFabric;
+  /**
    * Ce que le démarrage a trouvé en l'air, et remis en pause.
    *
    * Exposé plutôt que journalisé seulement : une mission interrompue qui a déjà
@@ -127,7 +135,15 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // de dépense ne sert à rien si un modèle dix-huit fois plus cher peut être
   // choisi trois lignes plus loin — par un réglage de console, une variable
   // d'environnement, ou le `model` propre à un agent.
-  const provider = new BudgetedProvider(createLlmProvider(config, logger), ledger, {
+  // L'inférence est un parc, derrière le contrat d'un fournisseur unique.
+  // VAL-001 est morte à sa première étape parce que le compte Anthropic était
+  // vide et qu'aucun repli n'existait — il n'existait qu'un fournisseur. Un
+  // système censé tourner 24 h/24 ne peut pas tenir à un seul compte.
+  //
+  // Le budget et la politique de modèles restent *au-dessus* : ils décident si
+  // l'appel a le droit de partir, le Fabric décide seulement qui le sert.
+  const inference = createInferenceFabric(config, logger);
+  const provider = new BudgetedProvider(inference, ledger, {
     allowed: config.llm.allowedModels,
     forbidden: config.llm.forbiddenModels,
   });
@@ -336,6 +352,7 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     village,
     supervisor,
     searchFabric: engine,
+    inferenceFabric: inference,
     recovery,
     settings,
     shutdown,

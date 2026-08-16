@@ -9,6 +9,7 @@ import {
   estimateInputTokens,
   userText,
   type BudgetLimits,
+  type BudgetError,
   type LlmCallRecord,
   type LlmRequest,
 } from '@atlas/llm';
@@ -384,3 +385,156 @@ function response(inputTokens: number, outputTokens: number) {
     refusal: null,
   };
 }
+
+/**
+ * Ce qu'un refus budgétaire doit dire.
+ *
+ * « refused by the budget » a coûté une enquête entière sur LIVE-001. Le
+ * message ne disait ni quelle garde s'était déclenchée, ni sur quelle valeur —
+ * on a donc cherché du côté du plafond en dollars, 0,0652 $ sur 0,40 $, alors
+ * que le refus venait du plafond de l'étape. Un refus doit se lire « X > Y ».
+ */
+describe('diagnostic d’un refus', () => {
+  const request = (overrides: Partial<LlmRequest> = {}): LlmRequest =>
+    ({
+      model: 'claude-haiku-4-5-20251001',
+      system: 'test',
+      // Un contexte de la taille réelle de celui qui a été refusé : l'appel
+      // d'enrichissement de LIVE-001 portait 15 795 jetons d'entrée. Avec un
+      // contexte minuscule, aucune garde ne se déclenche et le test ne teste rien.
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x'.repeat(60_000) }] }],
+      maxTokens: 8000,
+      meta: { missionId: 'msn_x', taskRef: 'enrichment', agentKey: null, purpose: 'test' },
+      ...overrides,
+    }) as LlmRequest;
+
+  test('le plafond d’étape nomme sa garde et ses nombres', () => {
+    // Le refus exact de LIVE-001, reproduit : l'étape avait consommé 30 713
+    // jetons sur 40 000, et le message ne le disait pas.
+    const ledger = new BudgetLedger();
+    ledger.open('msn_x', {
+      ...DEFAULT_BUDGET_LIMITS,
+      maxStepTokens: 40_000,
+      maxMissionTokens: 120_000,
+      maxMissionCostUsd: 0.4,
+    });
+
+    // On amène l'étape à 30 713 jetons par des enregistrements réels.
+    for (let i = 0; i < 3; i++) {
+      ledger.record(
+        request(),
+        {
+          content: [{ type: 'text', text: 'ok' }],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 10_000, outputTokens: 238, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'claude-haiku-4-5-20251001',
+          refusal: null,
+        } as never,
+        { provider: 'anthropic', durationMs: 10, toolCalls: 0 },
+      );
+    }
+
+    try {
+      ledger.authorise(request());
+      assert.fail('le plafond d’étape aurait dû refuser');
+    } catch (err) {
+      const budget = (err as BudgetError).budget!;
+      assert.equal(budget.guard, 'step-tokens');
+      assert.equal(budget.limit, 40_000);
+      assert.ok(budget.current > 30_000, `current=${budget.current}`);
+      assert.ok(budget.projected > 0);
+      assert.match(budget.reason, />/, 'la raison doit exprimer une comparaison');
+      assert.match((err as Error).message, /enrichment/);
+    }
+  });
+
+  test('le plafond en dollars se distingue de celui en jetons', () => {
+    // Les deux gardes portaient le même message. Les distinguer est ce qui
+    // permet de savoir laquelle recalibrer.
+    const ledger = new BudgetLedger();
+    ledger.open('msn_x', {
+      ...DEFAULT_BUDGET_LIMITS,
+      // Assez bas pour que l'entrée seule dépasse : on teste la garde en
+      // dollars, pas la marge de la sortie.
+      maxMissionCostUsd: 0.000001,
+      maxMissionTokens: 0,
+      maxStepTokens: 0,
+      minViableOutputTokens: 0,
+    });
+
+    try {
+      ledger.authorise(request());
+      assert.fail('le plafond en dollars aurait dû refuser');
+    } catch (err) {
+      assert.equal((err as BudgetError).budget?.guard, 'mission-cost');
+      assert.equal((err as BudgetError).budget?.unit, 'usd');
+    }
+  });
+
+  test('un refus reste non réessayable', () => {
+    // Rejouer le même appel donnerait le même refus, en repayant le contexte
+    // accumulé. Le plafond en jetons de mission est le plus simple à saturer
+    // sans dépendre d'un tarif.
+    const ledger = new BudgetLedger();
+    ledger.open('msn_x', {
+      ...DEFAULT_BUDGET_LIMITS,
+      maxMissionTokens: 10,
+      maxMissionCostUsd: 0,
+      maxStepTokens: 0,
+      minViableOutputTokens: 0,
+    });
+
+    try {
+      ledger.authorise(request());
+      assert.fail('refus attendu');
+    } catch (err) {
+      assert.ok(err instanceof AtlasError, `attendu AtlasError, reçu ${(err as Error).name}`);
+      assert.equal(err.retryable, false);
+      assert.equal((err as BudgetError).budget?.guard, 'mission-tokens');
+    }
+  });
+});
+
+describe('réajustement des plafonds en cours de mission', () => {
+  test('un plafond peut être resserré sans effacer le dépensé', () => {
+    // Certains plafonds ne sont connaissables qu'après la découverte : le
+    // nombre d'appels que mérite une étape suit le nombre de candidats, et il
+    // n'y en a aucun au démarrage. Mais un réajustement qui remettrait la
+    // comptabilité à zéro serait un moyen de contourner le budget en changeant
+    // simplement d'avis.
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 100_000, maxCallsPerStep: 12 }));
+
+    const request = requestFor();
+    book.record(request, response(1000, 200), { provider: 'simulation', durationMs: 5, toolCalls: 0 });
+
+    const before = book.snapshot(MISSION)!;
+    book.retune(MISSION, limits({ maxMissionTokens: 100_000, maxCallsPerStep: 6 }));
+    const after = book.snapshot(MISSION)!;
+
+    assert.equal(after.tokens, before.tokens, 'le dépensé survit au réajustement');
+    assert.equal(after.calls, before.calls);
+    assert.equal(after.limits.maxCallsPerStep, 6, 'le nouveau plafond s’applique');
+  });
+
+  test('le nouveau plafond refuse dès qu’il est dépassé', () => {
+    const book = new BudgetLedger();
+    book.open(MISSION, limits({ maxMissionTokens: 0, maxCallsPerStep: 12 }));
+
+    const request = requestFor();
+    for (let i = 0; i < 4; i++) {
+      book.record(request, response(100, 50), { provider: 'simulation', durationMs: 1, toolCalls: 0 });
+    }
+    assert.doesNotThrow(() => book.authorise(request), 'quatre appels tiennent sous douze');
+
+    book.retune(MISSION, limits({ maxMissionTokens: 0, maxCallsPerStep: 4 }));
+    assert.throws(() => book.authorise(request), /a déjà passé 4 appels/);
+  });
+
+  test('réajuster une mission inconnue ne lève pas', () => {
+    // Une mission hors périmètre n'a pas de comptabilité ; la réajuster est
+    // sans objet, pas une erreur.
+    const book = new BudgetLedger();
+    assert.doesNotThrow(() => book.retune('msn_absente', limits()));
+  });
+});

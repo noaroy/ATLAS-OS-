@@ -23,7 +23,7 @@ import {
 } from '@atlas/core';
 import type { Repositories, RuntimeSettings } from '@atlas/data';
 import type { AgentRuntime } from '@atlas/agents';
-import type { BudgetLedger, BudgetLimits, LlmProvider } from '@atlas/llm';
+import type { BudgetError, BudgetLedger, BudgetLimits, LlmProvider } from '@atlas/llm';
 import { DEFAULT_BUDGET_LIMITS, textOf, totalTokens, userText } from '@atlas/llm';
 import type { MemoryService } from '@atlas/memory';
 import { instantiatePlaybook, missionEconomics, type OpportunityService } from '@atlas/intelligence';
@@ -427,31 +427,62 @@ export class HermesEngine {
         budgetExhausted,
       });
 
-      // A mission stopped by its budget still completes: the steps that ran
-      // produced real work, and the founder is told the result is partial.
+      // ── Le statut doit dire si le pipeline a abouti ────────────────────────
+      //
+      // Toute mission se terminait en `completed`, y compris celle dont une
+      // seule étape sur six avait réussi. Un opérateur lisait « terminée » pour
+      // une mission arrêtée net par une garde, sans opportunité, sans revue —
+      // et le tableau de bord la comptait dans son taux de réussite.
+      //
+      // La distinction n'est pas le résultat métier, c'est le déroulement.
+      // Une mission qui cherche honnêtement et ne trouve rien a fait son
+      // travail : elle est terminée, avec `no-result`. Une mission dont une
+      // étape a été *annulée* par une garde n'est jamais allée au bout : elle
+      // ne peut pas porter le même mot.
+      const cancelled = tasks.filter((t) => t.status === 'cancelled');
+      const reachedConclusion = cancelled.length === 0;
+
       const notes = [
         failed.length > 0 ? `${failed.length} step(s) failed` : null,
+        cancelled.length > 0
+          ? `${cancelled.length} étape(s) annulée(s) : ${cancelled.map((t) => t.ref).join(', ')}`
+          : null,
         starved.length > 0 ? `${starved.length} étape(s) sautée(s) faute d'entrée` : null,
         budgetExhausted ? 'stopped at its token budget' : null,
       ].filter(Boolean);
 
-      mission = this.deps.repos.missions.transition(missionId, 'completed', {
-        result,
-        progress: 1,
-        error: notes.length > 0 ? notes.join('; ') : null,
-      });
+      mission = this.deps.repos.missions.transition(
+        missionId,
+        reachedConclusion ? 'completed' : 'failed',
+        {
+          result,
+          // Le progrès suit les étapes réellement terminées : afficher 100 %
+          // pour une mission interrompue serait le même mensonge que
+          // « completed ».
+          progress: reachedConclusion ? 1 : tasks.filter((t) => t.status === 'succeeded').length / Math.max(1, tasks.length),
+          error: notes.length > 0 ? notes.join('; ') : null,
+        },
+      );
 
       this.deps.events.publish({
         type: 'mission.completed',
-        severity: failed.length > 0 || budgetExhausted ? 'warning' : 'success',
+        severity: reachedConclusion && failed.length === 0 ? 'success' : 'warning',
         source: 'hermes',
         missionId,
-        message: `Mission ${mission.code} completed${notes.length ? ` (${notes.join('; ')})` : ''}`,
+        // Le mot doit correspondre au statut réellement écrit : un journal qui
+        // annonce « completed » pour une mission passée en échec est la
+        // première chose qu'on relit après un incident, et la dernière qu'on
+        // devrait avoir à corriger de tête.
+        message: `Mission ${mission.code} ${reachedConclusion ? 'completed' : 'interrompue'}${
+          notes.length ? ` (${notes.join('; ')})` : ''
+        }`,
         payload: {
           quality: result.quality,
           durationMs: result.durationMs,
           artifacts: result.artifacts.length,
           failedSteps: failed.length,
+          cancelledSteps: cancelled.map((t) => t.ref),
+          reachedConclusion,
           outcome: result.outcome,
           skippedForMissingInput: result.skippedForMissingInput,
           budgetExhausted,
@@ -512,6 +543,32 @@ export class HermesEngine {
     }
   }
 
+  /**
+   * Combien d'appels une étape a le droit de passer, vu le travail réel.
+   *
+   * Le plafond était forfaitaire — douze appels par étape, que la mission vise
+   * trois candidats ou trois cents. La reprise de LIVE-001 l'a montré par
+   * l'absurde : l'enrichissement de **trois** candidats a passé onze appels,
+   * dont l'entrée croissait de 5 748 à 14 406 jetons parce que chaque appel
+   * renvoie tout le contexte accumulé. À lui seul il a consommé 0,11 $ — le
+   * quart de l'enveloppe du pilote, pour documenter trois entreprises.
+   *
+   * Le plafond suit donc l'objectif : deux appels par candidat — analyser puis
+   * conclure — et un plancher pour les étapes qui n'itèrent sur rien. Un
+   * plafond forfaitaire n'est pas une borne, c'est une invitation à la remplir.
+   */
+  #callsPerStepFor(mission: Mission, base: BudgetLimits): number {
+    if (base.maxCallsPerStep <= 0) return 0;
+
+    const candidates = this.deps.repos.opportunities.forMission(mission.id).length;
+    // Zéro candidat signifie que la découverte n'a pas encore tourné : elle a
+    // besoin de son plancher pour aller en chercher, et le proportionner à un
+    // compte encore vide la condamnerait avant qu'elle commence.
+    if (candidates === 0) return base.maxCallsPerStep;
+
+    return Math.min(base.maxCallsPerStep, Math.max(4, candidates * 2));
+  }
+
   #limitsFor(mission: Mission): BudgetLimits {
     const settings = this.deps.settings();
     const missionTokens = mission.tokenBudget ?? settings.missionTokenBudget;
@@ -532,11 +589,31 @@ export class HermesEngine {
     return {
       ...base,
       maxMissionCostUsd: missionCostUsd,
+      maxCallsPerStep: this.#callsPerStepFor(mission, base),
       maxMissionTokens: missionTokens > 0 ? missionTokens : 0,
+      // Une étape ne doit pas pouvoir manger la mission. Le seuil était fixé au
+      // tiers, et il était mal calibré : LIVE-001 (M-1F5YW) s'est fait refuser
+      // l'enrichissement à 30 713 jetons sur 40 000 alors que la mission en
+      // avait consommé 62 132 sur 120 000 et 0,0652 $ sur 0,40 $. La garde n'a
+      // pas protégé le budget — elle en a gaspillé la moitié en faisant échouer
+      // le pipeline, et la mission s'est terminée sans une seule opportunité.
+      //
+      // Le tiers supposait six étapes de poids comparable. Elles ne le sont
+      // pas : l'enrichissement analyse chaque candidat et domine la dépense par
+      // construction. Le seuil honnête d'une étape qui « mange la mission » est
+      // la majorité, pas le tiers — et la moitié se justifie par elle-même là
+      // où un tiers ne se justifiait que par le nombre d'étapes du plan.
+      //
+      // Ce n'est pas un affaiblissement : le plafond de mission (jetons et
+      // dollars) reste vérifié avant *chaque* appel, `maxCallsPerStep` arrête
+      // une étape qui boucle, et le coupe-circuit arrête une panne répétée.
+      // Cette garde-ci est une défense en profondeur, pas la barrière
+      // principale — c'est LIVE #001 qui l'a prouvé, en dépassant de 343 % un
+      // plafond de mission qui n'était alors vérifié qu'entre les étapes.
       maxStepTokens:
         base.maxStepTokens > 0
           ? missionTokens > 0
-            ? Math.min(base.maxStepTokens, Math.ceil(missionTokens / 3))
+            ? Math.min(base.maxStepTokens, Math.ceil(missionTokens / 2))
             : base.maxStepTokens
           : 0,
     };
@@ -755,6 +832,14 @@ export class HermesEngine {
     while (!signal.aborted) {
       const settings = this.deps.settings();
       const limit = settings.maxConcurrentTasks;
+
+      // Les plafonds qui dépendent du travail réel sont recalculés ici, entre
+      // deux vagues. Le nombre d'appels que mérite une étape suit le nombre de
+      // candidats, et il n'y en avait aucun à l'ouverture de la mission : figé
+      // au démarrage, ce plafond serait resté forfaitaire — et c'est un plafond
+      // forfaitaire qui a laissé l'enrichissement passer onze appels pour trois
+      // candidats. Le dépensé n'est jamais remis à zéro par ce réajustement.
+      this.deps.ledger?.retune(mission.id, this.#limitsFor(repos.missions.require(mission.id)));
 
       // ── Cost ceiling ──────────────────────────────────────────────────
       // Checked before dispatching, never mid-step: a step already running is
@@ -1128,6 +1213,14 @@ export class HermesEngine {
       if (err instanceof AtlasError && err.code === 'BUDGET_EXCEEDED') {
         refused.hit = true;
         repos.missions.setTaskStatus(task.id, 'cancelled', { error });
+
+        // « refused by the budget » a coûté une enquête entière : le message ne
+        // disait ni quelle garde s'était déclenchée ni sur quelle valeur, et
+        // l'on a cherché du côté du plafond en dollars — 0,0652 $ sur 0,40 $ —
+        // alors que le refus venait du plafond de l'étape. On doit pouvoir lire
+        // « X > Y » sans ouvrir le code.
+        const budget = (err as BudgetError).budget;
+
         this.deps.events.publish({
           type: 'mission.budget-refused',
           severity: 'warning',
@@ -1135,9 +1228,23 @@ export class HermesEngine {
           missionId: mission.id,
           agentKey: agent.key,
           message: `Appel refusé pour ${mission.code} : ${error}`,
-          payload: { taskRef: task.ref, reason: error },
+          payload: { taskRef: task.ref, reason: error, budget: budget ?? null },
         });
-        this.#log.warn('llm call refused by the budget', { code: mission.code, ref: task.ref });
+        this.#log.warn('llm call refused by the budget', {
+          code: mission.code,
+          ref: task.ref,
+          ...(budget
+            ? {
+                budgetGuard: budget.guard,
+                current: budget.current,
+                limit: budget.limit,
+                projected: budget.projected,
+                remaining: budget.remaining,
+                unit: budget.unit,
+                reason: budget.reason,
+              }
+            : {}),
+        });
         return;
       }
 

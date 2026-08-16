@@ -126,6 +126,24 @@ export class BudgetLedger {
     });
   }
 
+  /**
+   * Réajuste les plafonds d'une mission déjà ouverte, sans toucher au dépensé.
+   *
+   * Certains plafonds ne peuvent pas être connus au démarrage. Le nombre
+   * d'appels que mérite une étape dépend du nombre de candidats, et il n'y en a
+   * aucun avant que la découverte ait tourné : figer la limite à l'ouverture
+   * revient à la calculer sur un compte vide, donc à la laisser forfaitaire.
+   *
+   * Ce qui est déjà consommé n'est jamais remis à zéro. Un réajustement qui
+   * effacerait la comptabilité serait un moyen de contourner le budget en
+   * changeant simplement d'avis.
+   */
+  retune(missionId: string, limits: BudgetLimits): void {
+    const spend = this.#missions.get(missionId);
+    if (!spend) return;
+    spend.limits = limits;
+  }
+
   close(missionId: string): BudgetSnapshot | null {
     const snapshot = this.snapshot(missionId);
     this.#missions.delete(missionId);
@@ -236,6 +254,15 @@ export class BudgetLedger {
       throw refuse(
         `Coupe-circuit : ${spend.consecutiveFailures} appels consécutifs ont échoué de suite. ` +
           "ATLAS cesse d'appeler le modèle pour cette mission plutôt que de répéter une panne à vos frais.",
+        {
+          guard: 'circuit-breaker',
+          current: spend.consecutiveFailures,
+          limit: limits.circuitBreakerFailures,
+          projected: 1,
+          remaining: 0,
+          unit: 'calls',
+          reason: `${spend.consecutiveFailures} échecs consécutifs >= ${limits.circuitBreakerFailures}`,
+        },
       );
     }
 
@@ -265,6 +292,15 @@ export class BudgetLedger {
           `${fmt(affordable)} jetons de sortie, or ${fmt(limits.minViableOutputTokens)} sont ` +
           `nécessaires au minimum. Dépensé ${usd(spend.costUsd)} sur ${usd(limits.maxMissionCostUsd)}. ` +
           "L'appel n'est pas lancé.",
+        {
+          guard: 'min-viable-output',
+          current: affordable,
+          limit: limits.minViableOutputTokens,
+          projected: plannedOutput,
+          remaining: affordable,
+          unit: 'tokens',
+          reason: `${fmt(affordable)} jetons finançables < ${fmt(limits.minViableOutputTokens)} minimum`,
+        },
       );
     }
 
@@ -273,6 +309,16 @@ export class BudgetLedger {
         `Budget de mission insuffisant : ${fmt(spend.tokens)} jetons déjà consommés sur ` +
           `${fmt(limits.maxMissionTokens)}, et cet appel peut en coûter ${fmt(worstCaseTokens)}. ` +
           "L'appel n'est pas lancé.",
+        {
+          guard: 'mission-tokens',
+          current: spend.tokens,
+          limit: limits.maxMissionTokens,
+          projected: worstCaseTokens,
+          remaining: limits.maxMissionTokens - spend.tokens,
+          unit: 'tokens',
+          reason:
+            `${fmt(spend.tokens)} + ${fmt(worstCaseTokens)} > ${fmt(limits.maxMissionTokens)} jetons de mission`,
+        },
       );
     }
 
@@ -285,6 +331,16 @@ export class BudgetLedger {
           `Plafond de dépense atteint : ${usd(spend.costUsd)} déjà dépensés sur ` +
             `${usd(limits.maxMissionCostUsd)}, et cet appel peut coûter ${usd(worstCost)}. ` +
             "L'appel n'est pas lancé.",
+          {
+            guard: 'mission-cost',
+            current: spend.costUsd,
+            limit: limits.maxMissionCostUsd,
+            projected: worstCost,
+            remaining: limits.maxMissionCostUsd - spend.costUsd,
+            unit: 'usd',
+            reason:
+              `${usd(spend.costUsd)} + ${usd(worstCost)} > ${usd(limits.maxMissionCostUsd)} de mission`,
+          },
         );
       }
     }
@@ -297,12 +353,33 @@ export class BudgetLedger {
           throw refuse(
             `L'étape « ${stepKey} » a déjà passé ${step.calls} appels au modèle, sa limite. ` +
               'Une étape qui boucle est arrêtée ici, pas quand la mission est vide.',
+            {
+              guard: 'step-calls',
+              current: step.calls,
+              limit: limits.maxCallsPerStep,
+              projected: 1,
+              remaining: 0,
+              unit: 'calls',
+              reason: `${step.calls} appels >= ${limits.maxCallsPerStep} pour l'étape « ${stepKey} »`,
+            },
           );
         }
         if (limits.maxStepTokens > 0 && step.tokens + worstCaseTokens > limits.maxStepTokens) {
           throw refuse(
             `L'étape « ${stepKey} » a consommé ${fmt(step.tokens)} jetons sur ` +
-              `${fmt(limits.maxStepTokens)} : elle ne peut pas absorber le budget de la mission.`,
+              `${fmt(limits.maxStepTokens)} : elle ne peut pas absorber le budget de la mission. ` +
+              `Cet appel en demanderait ${fmt(worstCaseTokens)} au pire.`,
+            {
+              guard: 'step-tokens',
+              current: step.tokens,
+              limit: limits.maxStepTokens,
+              projected: worstCaseTokens,
+              remaining: limits.maxStepTokens - step.tokens,
+              unit: 'tokens',
+              reason:
+                `${fmt(step.tokens)} + ${fmt(worstCaseTokens)} > ${fmt(limits.maxStepTokens)} jetons ` +
+                `pour l'étape « ${stepKey} »`,
+            },
           );
         }
       }
@@ -435,8 +512,50 @@ const EMPTY_USAGE: LlmUsage = {
 
 const totalOf = (usage: LlmUsage): number => usage.inputTokens + usage.outputTokens;
 
-const refuse = (message: string): AtlasError =>
-  new AtlasError('BUDGET_EXCEEDED', message, { retryable: false });
+/**
+ * Quelle règle a refusé, avec ses nombres.
+ *
+ * « refused by the budget » a coûté une enquête entière : le message ne disait
+ * ni quelle garde s'était déclenchée, ni sur quelle valeur. On a cherché du
+ * côté du plafond en dollars — 0,0652 $ sur 0,40 $ — alors que le refus venait
+ * du plafond de l'étape, dérivé implicitement du budget en jetons.
+ *
+ * Un refus doit se lire « X > Y », pas « quelque chose a dit non ».
+ */
+export type BudgetGuard =
+  | 'circuit-breaker'
+  | 'min-viable-output'
+  | 'mission-tokens'
+  | 'mission-cost'
+  | 'step-calls'
+  | 'step-tokens';
+
+export interface BudgetRefusal {
+  guard: BudgetGuard;
+  /** Ce qui est déjà consommé, dans l'unité de la garde. */
+  current: number;
+  /** La limite qui s'applique. */
+  limit: number;
+  /** Ce que cet appel ajouterait au pire. */
+  projected: number;
+  /** Ce qui resterait disponible avant l'appel. */
+  remaining: number;
+  unit: 'tokens' | 'usd' | 'calls';
+  reason: string;
+}
+
+/** Une erreur budgétaire qui porte ses chiffres, pas seulement sa phrase. */
+export interface BudgetError extends AtlasError {
+  budget?: BudgetRefusal;
+}
+
+const refuse = (message: string, detail?: BudgetRefusal): AtlasError => {
+  const error = new AtlasError('BUDGET_EXCEEDED', message, {
+    retryable: false,
+  }) as BudgetError;
+  if (detail) error.budget = detail;
+  return error;
+};
 
 const fmt = (n: number): string => Math.round(n).toLocaleString('fr-FR');
 const usd = (n: number): string => `${n.toFixed(4)} $`;

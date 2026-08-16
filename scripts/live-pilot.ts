@@ -17,6 +17,7 @@
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, formatDuration } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
+import { evaluatePilot, formatPilotReport } from '../packages/runtime/src/pilot-verdict.ts';
 import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import { missionEconomics } from '../packages/intelligence/src/economics.ts';
 import { LIVE_PILOT_MISSION, LIVE_PILOT_LIMITS, LIVE_PILOT_NEED } from '../packages/departments/src/live-pilot.ts';
@@ -201,30 +202,44 @@ async function main(): Promise<void> {
   console.log(`    coût par preuve       ${per(evidence.length)}`);
   console.log();
 
-  // Le verdict, sans complaisance.
-  const verdict =
-    simulatedEvidence > 0
-      ? 'FAIL'
-      : opportunities.length > 0 && sourced > 0 && cost <= LIVE_PILOT_LIMITS.maxCostUsd
-        ? opportunities.length >= 3 && sourced >= 3
-          ? 'PASS'
-          : 'PARTIAL'
-        : 'FAIL';
+  // ── Le verdict, critère par critère ─────────────────────────────────────
+  //
+  // L'ancien calcul regardait trois choses — des candidats, des preuves
+  // sourcées, un budget tenu — et rendait PASS dès qu'elles étaient réunies.
+  // M-1F5YW a donc affiché PASS avec une seule étape réussie sur six.
+  // Découvrir n'est pas conclure : le verdict interroge maintenant la chaîne
+  // entière, et l'affiche ligne à ligne pour qu'il se vérifie sans code.
+  const pilot = evaluatePilot({
+    repos: system.repos,
+    missionId: mission.id,
+    maxCostUsd: LIVE_PILOT_LIMITS.maxCostUsd,
+    spentUsd: cost,
+  });
 
-  const colour = verdict === 'PASS' ? c.green : verdict === 'PARTIAL' ? c.amber : c.red;
-  console.log(`    ${c.bold}VERDICT : ${colour}${verdict}${c.reset}`);
-  console.log(
-    `    ${c.dim}${
-      verdict === 'FAIL'
-        ? "Aucun candidat sourcé n'a été produit."
-        : verdict === 'PARTIAL'
-          ? 'Des résultats sourcés existent, en volume insuffisant pour conclure.'
-          : 'Candidats réels, preuves sourcées, budget tenu.'
-    }${c.reset}\n`,
-  );
+  console.log(`  ${c.bold}CRITÈRES END-TO-END${c.reset}`);
+  console.log(formatPilotReport(pilot).split('\n  VERDICT')[0]);
+
+  const colour =
+    pilot.verdict === 'PASS'
+      ? c.green
+      : pilot.verdict === 'PARTIAL'
+        ? c.amber
+        : c.red;
+  console.log(`    ${c.bold}VERDICT : ${colour}${pilot.verdict}${c.reset}`);
+  console.log(`    ${c.dim}${pilot.rationale}${c.reset}`);
+
+  if (pilot.incompleteSteps.length > 0) {
+    console.log();
+    console.log(`    ${c.dim}Étapes non abouties :${c.reset}`);
+    for (const step of pilot.incompleteSteps) {
+      console.log(`    ${c.dim}  ${step.ref.padEnd(14)} ${step.status}${c.reset}`);
+      if (step.reason) console.log(`    ${c.dim}    → ${step.reason.slice(0, 160)}${c.reset}`);
+    }
+  }
+  console.log();
 
   await system.shutdown('pilote terminé');
-  process.exitCode = verdict === 'FAIL' ? 1 : 0;
+  process.exitCode = pilot.verdict === 'PASS' ? 0 : 1;
 }
 
 void main().catch((err: unknown) => {

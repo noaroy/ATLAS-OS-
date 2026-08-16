@@ -403,7 +403,12 @@ describe('token budget', () => {
     const mission = await runMission(system, 'Budgeted mission.', 30_000);
     const tasks = system.repos.missions.tasksFor(mission.id);
 
-    assert.equal(mission.status, 'completed', 'stopping on budget is a clean stop, not a crash');
+    // Stopping on budget is still a clean stop, not a crash — but it can no
+    // longer read as `completed`. A mission whose steps were cancelled never
+    // reached its conclusion, and saying otherwise put it in the dashboard's
+    // success rate.
+    assert.equal(mission.status, 'failed', 'an interrupted mission does not read as completed');
+    assert.ok(mission.result, 'a budget stop still produces a result — nothing crashed');
     assert.equal(mission.result?.budgetExhausted, true);
     assert.ok(
       tasks.some((t) => t.status === 'cancelled'),

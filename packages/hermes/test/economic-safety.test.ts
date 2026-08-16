@@ -294,12 +294,25 @@ describe('une étape ne peut plus absorber la mission', () => {
 
     const mission = await runDepartmentMission(sys);
 
-    assert.equal(mission.status, 'completed', 'un plafond atteint est un arrêt net, pas un plantage');
+    // Un plafond atteint reste un arrêt net et non un plantage — mais il ne
+    // peut plus se lire « completed ». M-1F5YW affichait « terminée » avec une
+    // étape réussie sur six, et le tableau de bord la comptait dans son taux
+    // de réussite. Le statut doit dire que le pipeline n'a pas abouti ; c'est
+    // `result.outcome` qui porte la nuance de *pourquoi*.
+    assert.equal(mission.status, 'failed', "une mission interrompue ne se lit pas « terminée »");
+    assert.equal(mission.error?.includes('annulée'), true, 'le statut doit dire ce qui a été annulé');
     assert.equal(mission.result?.budgetExhausted, true);
     assert.equal(mission.result?.outcome, 'cancelled-budget');
     assert.ok(
       sys.repos.missions.tasksFor(mission.id).some((t) => t.status === 'cancelled'),
       'le reste du plan est annulé plutôt que lancé au-delà du plafond',
+    );
+    // Ce que le test protégeait vraiment : l'arrêt est propre. Aucune exception
+    // n'a traversé, et le travail déjà fait est conservé.
+    assert.ok(mission.result, 'un arrêt budgétaire produit quand même un résultat');
+    assert.ok(
+      sys.repos.missions.tasksFor(mission.id).some((t) => t.status === 'succeeded'),
+      'les étapes déjà passées sont conservées',
     );
   });
 

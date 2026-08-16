@@ -4,6 +4,13 @@ export { assessHealth, sampleResources, buildDashboardStats, type HealthDeps } f
 export { runBackup, type BackupResult } from './backup.ts';
 export { preflight, formatPreflight, type PreflightReport, type PreflightCheck } from './preflight.ts';
 export {
+  evaluatePilot,
+  formatPilotReport,
+  type PilotReport,
+  type PilotVerdict,
+  type VerdictCriterion,
+} from './pilot-verdict.ts';
+export {
   recoverInterruptedMissions,
   formatRecovery,
   type RecoveryReport,

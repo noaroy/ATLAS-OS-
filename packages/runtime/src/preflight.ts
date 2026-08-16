@@ -1,6 +1,14 @@
 import type { AtlasConfig } from '@atlas/core';
 import type { Repositories } from '@atlas/data';
-import { assessSuitability, type MissionSearchNeed, type SearchProvider, type SuitabilityReport } from '@atlas/intelligence';
+import {
+  assessSuitability,
+  OPEN_NEED,
+  SearchFabric,
+  type MissionSearchNeed,
+  type ProviderStatus,
+  type SearchProvider,
+  type SuitabilityReport,
+} from '@atlas/intelligence';
 
 /**
  * Le contrôle avant décollage.
@@ -32,6 +40,24 @@ export interface PreflightCheck {
   remedy?: string;
 }
 
+/**
+ * L'état du parc de moteurs au moment du contrôle.
+ *
+ * Assemblé sans rien appeler : les statuts viennent des exécutions passées, et
+ * l'ordre vient du routeur. Sonder chaque moteur pour remplir cet objet
+ * enverrait, à chaque affichage du cockpit, exactement le trafic qui a fait
+ * brider DuckDuckGo.
+ */
+export interface FabricReport {
+  providers: ProviderStatus[];
+  /** Les moteurs retenus, dans l'ordre où ils seraient essayés. */
+  order: string[];
+  /** Ceux qui ne le sont pas, et pourquoi. */
+  excluded: Array<{ id: string; reason: string }>;
+  blocked: boolean;
+  blockedReason: string | null;
+}
+
 export interface PreflightReport {
   mode: 'simulation' | 'live';
   declaredMode: 'auto' | 'simulation' | 'live';
@@ -46,6 +72,13 @@ export interface PreflightReport {
   searchHealth: 'healthy' | 'unhealthy' | 'unknown';
   /** Peut-il répondre à *cette* mission ? Déduit, sans appel. */
   searchSuitability: SuitabilityReport | null;
+  /**
+   * Le parc, quand le déploiement en pilote un.
+   *
+   * `null` lorsqu'un moteur unique est câblé — ce qui reste possible, et reste
+   * un point de défaillance unique assumé.
+   */
+  fabric: FabricReport | null;
   generatedAt: string;
 }
 
@@ -238,8 +271,78 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
   // ── Moteur de recherche ─────────────────────────────────────────────────
   // Le contrôle qui manquait. « Configuré » ne veut rien dire : on interroge.
   let searchHealth: 'healthy' | 'unhealthy' | 'unknown' = 'unknown';
+  let fabricReport: FabricReport | null = null;
+  let suitabilityFromFabric: SuitabilityReport | null = null;
 
-  if (!search) {
+  if (search instanceof SearchFabric) {
+    // La question a changé, et c'est tout l'objet du Search Fabric.
+    //
+    // Avant : « DuckDuckGo répond-il ? » — une question à laquelle un seul
+    // moteur pouvait répondre non, bloquant tout. ATLAS a passé deux jours à
+    // attendre ce non-là.
+    //
+    // Maintenant : « existe-t-il au moins un moteur sain ET adapté ? » Une
+    // mission n'est bloquée que lorsque le parc entier l'est.
+    const need = input.need ?? OPEN_NEED;
+    const plan = search.plan(need);
+
+    fabricReport = {
+      providers: search.statuses(),
+      order: plan.order.map((c) => c.record.id),
+      excluded: plan.considered
+        .filter((c) => c.excluded !== null)
+        .map((c) => ({ id: c.record.id, reason: c.excluded ?? '' })),
+      blocked: plan.blocked,
+      blockedReason: plan.blockedReason,
+    };
+
+    if (plan.blocked) {
+      searchHealth = 'unhealthy';
+      checks.push(
+        mode === 'live'
+          ? fail(
+              'search fabric',
+              `BLOCKED-BY-SEARCH-FABRIC — ${plan.blockedReason}`,
+              'Attendez la fin du refroidissement, configurez une instance SearXNG (SEARXNG_BASE_URL), ' +
+                'ou visez un marché que le parc couvre.',
+            )
+          : warn('search fabric', `Aucun moteur utilisable ; sans effet en simulation.`),
+      );
+    } else {
+      const first = plan.order[0]!;
+      suitabilityFromFabric = first.suitability;
+
+      // La santé du parc est celle du premier moteur retenu — pas une moyenne.
+      // C'est lui qui répondra ; les suivants ne servent qu'en cas de bascule,
+      // et leur état ne dit rien de ce qui va se passer.
+      searchHealth = first.health;
+
+      const chain = plan.order.map((c) => c.record.id).join(' → ');
+      const skipped = fabricReport.excluded.length;
+      checks.push(
+        pass(
+          'search fabric',
+          `${plan.order.length} moteur(s) adaptés : ${chain}` +
+            (skipped > 0 ? ` · ${skipped} écarté(s)` : '') +
+            `. Une bascule est automatique si le premier échoue.`,
+        ),
+      );
+
+      // Un parc d'un seul moteur reste un point de défaillance unique. Le
+      // signaler ne bloque pas — c'est une configuration légitime — mais le
+      // taire reviendrait à laisser croire que la bascule protège quand elle
+      // n'a nulle part où basculer.
+      if (plan.order.length === 1) {
+        checks.push(
+          warn(
+            'redondance',
+            `Un seul moteur utilisable (${chain}) : aucune bascule possible s'il échoue.`,
+            'Posez ATLAS_SEARCH_PROVIDER=auto et configurez SEARXNG_BASE_URL pour un second moteur.',
+          ),
+        );
+      }
+    }
+  } else if (!search) {
     checks.push(
       mode === 'live'
         ? fail(
@@ -294,8 +397,11 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
   // répondre parfaitement et ne rien savoir du marché visé : « aucun
   // distributeur allemand » et « ce moteur ne couvre pas l'allemand » sont deux
   // constats opposés que rien ne distinguait.
-  let suitability: SuitabilityReport | null = null;
-  if (search && input.need) {
+  // Le Fabric a déjà tranché l'adéquation en choisissant : la reposer ici
+  // interrogerait le Fabric lui-même, dont les capacités ne sont celles
+  // d'aucun moteur réel.
+  let suitability: SuitabilityReport | null = suitabilityFromFabric;
+  if (search && !(search instanceof SearchFabric) && input.need) {
     suitability = assessSuitability(search, input.need);
     checks.push(
       suitability.verdict === 'suitable'
@@ -326,6 +432,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightReport>
     searchProvider: search?.key ?? null,
     searchHealth,
     searchSuitability: suitability,
+    fabric: fabricReport,
     generatedAt: new Date().toISOString(),
   };
 }

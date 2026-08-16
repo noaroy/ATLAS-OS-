@@ -28,14 +28,19 @@ function configWith(env: Record<string, string>) {
 }
 
 describe('le choix du moteur de recherche', () => {
-  test('le moteur par défaut fonctionne sans infrastructure', () => {
-    // Le défaut a changé, et la raison mérite d'être écrite. SearXNG restait le
-    // meilleur choix — un métamoteur qui fusionne plusieurs sources — mais il
-    // exige Docker, et Docker ne démarre pas sur le poste de développement.
-    // ATLAS s'est retrouvé des semaines avec un moteur configuré, injoignable,
-    // et aucune mission réelle possible. Un défaut qui ne marche nulle part
-    // n'est pas un défaut.
-    assert.equal(configWith({}).search.provider, 'duckduckgo');
+  test('le défaut n’est plus un moteur, mais un parc', () => {
+    // Le défaut a changé deux fois, et les deux raisons méritent d'être écrites.
+    //
+    // SearXNG a cédé la place à DuckDuckGo parce qu'il exige Docker, et que
+    // Docker ne démarre pas sur le poste de développement : ATLAS est resté des
+    // semaines avec un moteur configuré, injoignable, et aucune mission réelle
+    // possible.
+    //
+    // DuckDuckGo a cédé la place à `auto` parce qu'un moteur unique reste un
+    // point de défaillance unique, quel qu'il soit. Il a bridé, et « attendre
+    // quelques heures » est devenu la stratégie par défaut du système — ce qui
+    // n'est pas une stratégie pour quelque chose censé tourner 24 h/24.
+    assert.equal(configWith({}).search.provider, 'auto');
   });
 
   test('SearXNG reste choisissable quand il est disponible', () => {
@@ -45,8 +50,13 @@ describe('le choix du moteur de recherche', () => {
   test('aucun service payant n’est requis', () => {
     const config = configWith({});
     assert.equal(config.search.braveApiKey, '', 'aucune clé fournie');
-    assert.equal(config.search.provider, 'duckduckgo', 'et pourtant un moteur utilisable');
+    assert.equal(config.search.provider, 'auto', 'et pourtant un parc utilisable');
     assert.ok(config.search.searxngBaseUrl.length > 0, 'une URL SearXNG reste préconfigurée');
+  });
+
+  test('un moteur nommé reste possible, pour reproduire un incident', () => {
+    // Utile au diagnostic, et assumé : c'est alors un parc d'un seul moteur.
+    assert.equal(configWith({ ATLAS_SEARCH_PROVIDER: 'duckduckgo' }).search.provider, 'duckduckgo');
   });
 
   test('Brave reste choisissable, en option', () => {

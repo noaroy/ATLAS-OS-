@@ -7,6 +7,7 @@ import { createLogger } from '../../core/src/logger.ts';
 import { createRepositories, type Repositories } from '../../data/src/index.ts';
 import type { AtlasConfig } from '../../core/src/config.ts';
 import type { SearchProvider } from '../../intelligence/src/index.ts';
+import { SearchFabric, SearchProviderRegistry } from '@atlas/intelligence';
 import { preflight, formatPreflight } from '../src/preflight.ts';
 
 /**
@@ -249,5 +250,111 @@ describe('contrôle avant décollage', () => {
     const report = await run(configWith(), providerThat('ok'), 0.4);
     assert.equal(report.budgetUsd, 0.4);
     assert.ok(report.checks.some((c) => c.name === 'budget' && c.detail.includes('0.40')));
+  });
+});
+
+/**
+ * Le contrôle avant décollage face à un parc de moteurs.
+ *
+ * La question a changé, et c'est tout l'objet du Search Fabric. Avant :
+ * « DuckDuckGo répond-il ? » — une question à laquelle un seul moteur pouvait
+ * répondre non, bloquant tout, et ATLAS a passé deux jours à attendre ce non-là.
+ * Maintenant : « reste-t-il au moins un moteur sain ET adapté ? »
+ */
+describe('contrôle avant décollage — Search Fabric', () => {
+  const need = { countries: ['DE'], languages: ['de'], commercial: true };
+
+  /** Un parc scripté, sans le moindre appel réseau. */
+  function fabricWith(providers: Array<{ key: string; available?: boolean; open?: boolean }>): SearchFabric {
+    const registry = new SearchProviderRegistry();
+    for (const [i, entry] of providers.entries()) {
+      registry.register({
+        provider: {
+          key: entry.key,
+          label: `Moteur ${entry.key}`,
+          availability: () =>
+            entry.available === false
+              ? { available: false, reason: `${entry.key} non configuré` }
+              : { available: true, reason: 'prêt' },
+          search: async () => {
+            throw new Error('aucun test de ce bloc ne doit appeler un moteur');
+          },
+        },
+        priority: i * 10,
+        costModel: 'free',
+        costPerQueryUsd: 0,
+      });
+      if (entry.open) registry.get(entry.key)!.breaker.recordFailure('429', true);
+    }
+    return new SearchFabric({ registry, need });
+  }
+
+  const runFabric = (fabric: SearchFabric, config = configWith()) =>
+    preflight({ config, repos, search: fabric, logger, need });
+
+  test('un parc avec un moteur adapté autorise le décollage', async () => {
+    const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
+
+    assert.equal(report.cleared, true, formatPreflight(report));
+    assert.equal(report.fabric?.blocked, false);
+    assert.equal(report.fabric?.order.length, 2);
+  });
+
+  test('un moteur bridé ne bloque plus rien tant qu’un autre répond', async () => {
+    // Le critère de la mission, exactement : « DuckDuckGo indisponible →
+    // bascule vers le provider suivant », et non « attendez quelques heures ».
+    const report = await runFabric(
+      fabricWith([{ key: 'duckduckgo', open: true }, { key: 'searxng' }]),
+    );
+
+    assert.equal(report.cleared, true, formatPreflight(report));
+    assert.deepEqual(report.fabric?.order, ['searxng']);
+    assert.ok(
+      report.fabric?.excluded.some((e) => e.id === 'duckduckgo' && /refroidissement/.test(e.reason)),
+      'le moteur bridé doit apparaître écarté, avec sa raison',
+    );
+  });
+
+  test('un parc entièrement indisponible bloque, et le dit', async () => {
+    const report = await runFabric(
+      fabricWith([{ key: 'duckduckgo', open: true }, { key: 'brave', available: false }]),
+    );
+
+    assert.equal(report.cleared, false);
+    const check = report.checks.find((c) => c.name === 'search fabric')!;
+    assert.equal(check.status, 'fail');
+    assert.match(check.detail, /BLOCKED-BY-SEARCH-FABRIC/);
+    assert.equal(report.fabric?.blocked, true);
+  });
+
+  test('un moteur sain mais inadapté ne sauve pas le décollage', async () => {
+    // Marginalia répond parfaitement et ne sait rien du marché allemand. Le
+    // compter comme un moteur disponible reviendrait à repayer la mission qui
+    // a conclu qu'aucun distributeur allemand n'existait.
+    const report = await runFabric(fabricWith([{ key: 'marginalia' }]));
+
+    assert.equal(report.cleared, false);
+    assert.equal(report.fabric?.blocked, true);
+    assert.match(report.fabric?.blockedReason ?? '', /inadaptés/);
+  });
+
+  test('un parc réduit à un seul moteur est signalé sans bloquer', async () => {
+    // C'est une configuration légitime, mais c'est un point de défaillance
+    // unique. Le taire laisserait croire que la bascule protège quand elle n'a
+    // nulle part où basculer.
+    const report = await runFabric(fabricWith([{ key: 'duckduckgo' }]));
+
+    assert.equal(report.cleared, true, formatPreflight(report));
+    const check = report.checks.find((c) => c.name === 'redondance')!;
+    assert.equal(check.status, 'warn');
+    assert.equal(check.blocking, false);
+  });
+
+  test('le preflight n’appelle aucun moteur pour rendre son verdict', async () => {
+    // Les moteurs scriptés lèvent si on les appelle : que ce bloc passe prouve
+    // que le contrôle se fait sur l'état connu, sans provoquer le trafic qu'il
+    // décrit — sonder à chaque contrôle referait brider le parc.
+    const report = await runFabric(fabricWith([{ key: 'duckduckgo' }, { key: 'searxng' }]));
+    assert.equal(report.searchHealth, 'unknown', 'sans appel, la santé reste inconnue');
   });
 });

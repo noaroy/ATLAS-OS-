@@ -131,6 +131,9 @@ export function Cockpit({
         </dl>
       </Section>
 
+      {/* ── Le parc de moteurs ───────────────────────────────────────────── */}
+      {cockpit.fabric && <FabricSection fabric={cockpit.fabric} />}
+
       {/* ── L'entonnoir ──────────────────────────────────────────────────── */}
       {/*
         Une cellule « Opportunités » affichait `pipeline.candidates` — la même
@@ -359,6 +362,109 @@ function ReviewSection({ missionId }: { missionId: string }) {
             </li>
           );
         })}
+      </ul>
+    </Section>
+  );
+}
+
+/**
+ * Le parc de moteurs, et lequel répond.
+ *
+ * Cet écran existe pour rendre une phrase impossible à écrire : « attendez
+ * quelques heures que DuckDuckGo revienne ». On doit y lire, d'un coup d'œil,
+ * qui est actif, qui refroidit et pour combien de temps, et qui est écarté
+ * parce qu'il ne sait pas répondre à *cette* mission — trois états que le
+ * voyant unique d'avant confondait en un seul « moteur indisponible ».
+ */
+function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric']> }) {
+  return (
+    <Section title="Search Fabric">
+      {fabric.blocked ? (
+        <div className="mb-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-200">
+          <strong>BLOCKED-BY-SEARCH-FABRIC</strong> — {fabric.blockedReason}
+        </div>
+      ) : (
+        <p className="mb-3 text-xs text-[--color-muted]">
+          Moteur actif : <strong className="text-[--color-ink]">{fabric.active ?? '—'}</strong>. La
+          bascule vers le suivant est automatique et déterministe.
+        </p>
+      )}
+
+      {/*
+        Les bascules du dernier appel. Un résultat obtenu au troisième moteur
+        n'a pas la même valeur qu'un résultat obtenu au premier ; le taire
+        laisserait croire que tout s'est passé normalement.
+      */}
+      {fabric.lastFailover.length > 0 && (
+        <p className="mb-3 rounded border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[0.68rem] leading-relaxed text-amber-200">
+          Dernier appel : bascule après{' '}
+          {fabric.lastFailover.map((f) => `${f.providerId} (${f.outcome})`).join(' → ')}.
+        </p>
+      )}
+
+      <ul className="space-y-2">
+        {fabric.providers.map((p) => (
+          <li
+            key={p.id}
+            className={`rounded-lg border px-3 py-2 ${
+              p.selected
+                ? 'border-emerald-500/40 bg-emerald-500/5'
+                : p.excludedReason
+                  ? 'border-[--color-border] opacity-70'
+                  : 'border-[--color-border]'
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-[--color-ink]">{p.name}</span>
+              {p.selected && (
+                <span className="chip border border-emerald-500/40 bg-emerald-500/10 text-[0.6rem] uppercase tracking-wider text-emerald-300">
+                  actif
+                </span>
+              )}
+              <HealthChip health={p.health} />
+              <SuitabilityChip verdict={p.suitability} />
+              {p.circuit !== 'closed' && (
+                <span
+                  className={`chip border text-[0.62rem] ${
+                    p.circuit === 'open'
+                      ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+                      : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                  }`}
+                  title="Un circuit ouvert ne reçoit aucune requête ; en demi-ouverture, une seule sonde décide."
+                >
+                  circuit · {p.circuit}
+                  {p.circuit === 'open' && p.cooldownRemainingMs > 0
+                    ? ` · ${Math.ceil(p.cooldownRemainingMs / 60_000)} min`
+                    : ''}
+                </span>
+              )}
+            </div>
+
+            {p.excludedReason && (
+              <p className="mt-1 text-[0.68rem] leading-relaxed text-[--color-faint]">
+                Écarté — {p.excludedReason}
+              </p>
+            )}
+
+            {/*
+              Les métriques n'apparaissent qu'après un appel réel. Un moteur
+              jamais interrogé n'a pas un taux de réussite de zéro : il n'en a
+              pas, et afficher « 0 % » le condamnerait sur la foi de rien.
+            */}
+            <div className="mt-1 text-[0.66rem] text-[--color-faint]">
+              {p.calls === 0 ? (
+                'aucun appel enregistré — ni bon ni mauvais, inconnu'
+              ) : (
+                <>
+                  {p.calls} appel(s)
+                  {p.successRate !== null && ` · ${(p.successRate * 100).toFixed(0)} % de réussite`}
+                  {p.averageLatencyMs !== null && ` · ${p.averageLatencyMs} ms`}
+                  {p.costUsd > 0 && ` · ${formatUsd(p.costUsd)}`}
+                </>
+              )}
+            </div>
+          </li>
+        ))}
       </ul>
     </Section>
   );

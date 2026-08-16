@@ -890,6 +890,38 @@ export interface MissionCockpit {
     failures: number;
   };
 
+  /**
+   * Le parc de moteurs, et lequel répond.
+   *
+   * `null` quand le déploiement ne pilote qu'un moteur unique. Non vide, il
+   * remplace la question « le moteur répond-il ? » par « reste-t-il un moteur
+   * capable de répondre ? » — la seule qui compte quand la bascule existe.
+   */
+  fabric: {
+    /** Le moteur en tête de file, celui qui sera interrogé en premier. */
+    active: string | null;
+    providers: Array<{
+      id: string;
+      name: string;
+      health: 'healthy' | 'unhealthy' | 'unknown';
+      suitability: 'suitable' | 'degraded' | 'unsuitable' | 'unknown';
+      /** `closed` sert, `open` refroidit, `half-open` laisse passer une sonde. */
+      circuit: 'closed' | 'open' | 'half-open';
+      cooldownRemainingMs: number;
+      /** Renseigné uniquement s'il est écarté — et alors il dit pourquoi. */
+      excludedReason: string | null;
+      selected: boolean;
+      calls: number;
+      successRate: number | null;
+      averageLatencyMs: number | null;
+      costUsd: number;
+    }>;
+    /** Les bascules du dernier appel : qui a échoué, et vers qui on est passé. */
+    lastFailover: Array<{ providerId: string; outcome: string }>;
+    blocked: boolean;
+    blockedReason: string | null;
+  } | null;
+
   pipeline: {
     candidates: number;
     shortlisted: number;

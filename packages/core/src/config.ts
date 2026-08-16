@@ -71,7 +71,7 @@ export interface BudgetConfig {
  * requête moteur.
  */
 export interface SearchConfig {
-  provider: 'duckduckgo' | 'marginalia' | 'searxng' | 'brave' | 'anthropic' | 'none';
+  provider: 'auto' | 'duckduckgo' | 'marginalia' | 'searxng' | 'brave' | 'anthropic' | 'none';
   /** Racine de l'instance SearXNG, sur le réseau interne. */
   searxngBaseUrl: string;
   /** Moteurs interrogés par SearXNG, séparés par des virgules. */
@@ -191,9 +191,17 @@ const envSchema = z.object({
   // porterait dans sa propre définition.
   ATLAS_ALLOWED_MODELS: z.string().default(''),
 
+  // `auto` enregistre tout ce qui est configuré et laisse le Search Fabric
+  // router à chaque requête selon l'état réel du parc. Nommer un moteur reste
+  // possible — c'est utile pour reproduire un incident — mais c'est alors un
+  // parc d'un seul moteur, avec le point de défaillance unique que cela
+  // suppose : deux jours d'attente que DuckDuckGo relâche son bridage.
   ATLAS_SEARCH_PROVIDER: z
-    .enum(['duckduckgo', 'marginalia', 'searxng', 'brave', 'anthropic', 'none'])
-    .default('duckduckgo'),
+    .enum(['auto', 'duckduckgo', 'marginalia', 'searxng', 'brave', 'anthropic', 'none'])
+    .default('auto'),
+  // Une instance persistante — locale ou privée distante — se branche ici sans
+  // toucher au code. Le défaut vise le réseau Docker ; en développement,
+  // http://localhost:8080 convient.
   SEARXNG_BASE_URL: z.string().default('http://searxng:8080'),
   // Vide = les moteurs configurés dans l'instance. Une sélection resserrée vaut
   // mieux qu'une longue liste : chaque moteur ajoute de la latence et des

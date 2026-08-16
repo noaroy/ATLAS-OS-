@@ -17,8 +17,7 @@
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, formatDuration } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
-import { DuckDuckGoSearchProvider } from '../packages/intelligence/src/search/duckduckgo.ts';
-import { MarginaliaSearchProvider } from '../packages/intelligence/src/search/marginalia.ts';
+import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import { missionEconomics } from '../packages/intelligence/src/economics.ts';
 import { LIVE_PILOT_MISSION, LIVE_PILOT_LIMITS, LIVE_PILOT_NEED } from '../packages/departments/src/live-pilot.ts';
 
@@ -45,12 +44,9 @@ async function main(): Promise<void> {
   // Le contrôle doit porter sur le moteur qu'ATLAS utilisera réellement.
   // Vérifier DuckDuckGo pendant que le pipeline interroge Marginalia ne
   // prouverait rien — et refuserait le décollage pour un moteur qui ne sert pas.
-  const search =
-    config.search.provider === 'duckduckgo'
-      ? new DuckDuckGoSearchProvider()
-      : config.search.provider === 'marginalia'
-        ? new MarginaliaSearchProvider()
-        : null;
+  // Un parc, plus un moteur. Le point de défaillance unique disparaît : la
+  // reprise n'est bloquée que si *tous* les moteurs adaptés sont indisponibles.
+  const search = createSearchFabric(config.search, { need: LIVE_PILOT_NEED });
 
   const report = await preflight({
     config,

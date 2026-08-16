@@ -92,6 +92,7 @@ New specialists can be added at runtime through the API — no redeploy.
 - **[Departments](docs/DEPARTMENTS.md)** — the products, the pipeline, and what the platform guarantees
 - **[Maintenance](docs/MAINTENANCE.md)** — backups, upgrades, troubleshooting
 - **[Live](docs/LIVE.md)** — leaving simulation: real spend, real sources, and what is never done
+- **[Search Fabric](docs/SEARCH_FABRIC.md)** — many engines behind one contract: routing, failover, circuit breakers
 - **[Économie](docs/ECONOMIE.md)** — what each failed mission cost, and what now prevents it
 
 ## Deployment

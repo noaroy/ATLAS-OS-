@@ -22,10 +22,8 @@ import {
   RegistryDiscoveryProvider,
   WebSearchDiscoveryProvider,
   PipelineDiscoveryProvider,
-  BraveSearchProvider,
-  SearxngSearchProvider,
-  DuckDuckGoSearchProvider,
-  MarginaliaSearchProvider,
+  createSearchFabric,
+  SearchFabric,
   type DiscoveryProvider,
   SimulationDiscoveryProvider,
 } from '@atlas/intelligence';
@@ -60,6 +58,15 @@ export interface AtlasSystem {
   discovery: DiscoveryService;
   village: VillageService;
   supervisor: RuntimeSupervisor;
+  /**
+   * Le parc de moteurs réellement en service.
+   *
+   * Exposé pour que le cockpit lise l'état *vivant* — disjoncteurs ouverts,
+   * refroidissements, métriques accumulées. Reconstruire un registre neuf à
+   * l'affichage rendrait « inconnu » partout et laisserait croire qu'aucun
+   * appel n'a jamais eu lieu.
+   */
+  searchFabric: SearchFabric | null;
   /**
    * Ce que le démarrage a trouvé en l'air, et remis en pause.
    *
@@ -154,25 +161,26 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // coûterait cent fois le prix d'une requête moteur.
   const discoveryProviders: DiscoveryProvider[] = [new RegistryDiscoveryProvider(repos)];
 
-  // Le moteur est choisi par configuration ; le pipeline qui l'entoure est le
-  // même quel qu'il soit. C'est tout l'intérêt de l'abstraction : passer de
-  // SearXNG à Brave ne touche pas une ligne de Business Expansion.
-  const engine =
-    config.search.provider === 'duckduckgo'
-      ? new DuckDuckGoSearchProvider()
-      : config.search.provider === 'marginalia'
-        ? new MarginaliaSearchProvider()
-      : config.search.provider === 'searxng'
-      ? new SearxngSearchProvider({
-          baseUrl: config.search.searxngBaseUrl,
-          engines: config.search.searxngEngines,
-        })
-      : config.search.provider === 'brave'
-        ? new BraveSearchProvider({
-            apiKey: config.search.braveApiKey,
-            costPerQueryUsd: config.search.costPerQueryUsd,
-          })
-        : null;
+  // Le moteur est un parc, derrière le contrat d'un moteur unique. Business
+  // Expansion ne sait pas que la bascule existe : il reçoit un `SearchProvider`
+  // comme avant, et c'est le Fabric qui décide lequel des moteurs enregistrés
+  // répond, qui disjoncte celui qui bride, et qui cadence les requêtes.
+  //
+  // C'est ce qui retire le point de défaillance unique : « attendre que
+  // DuckDuckGo relâche » n'est plus une stratégie, c'est un cas de bascule.
+  const engine = createSearchFabric(config.search);
+
+  if (engine) {
+    const plan = engine.plan();
+    logger.info('search fabric', {
+      mode: config.search.provider,
+      enregistrés: engine.statuses().length,
+      utilisables: plan.order.map((c) => c.record.id),
+      écartés: plan.considered
+        .filter((c) => c.excluded !== null)
+        .map((c) => `${c.record.id} (${c.excluded})`),
+    });
+  }
 
   if (engine) {
     discoveryProviders.push(
@@ -327,6 +335,7 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     discovery,
     village,
     supervisor,
+    searchFabric: engine,
     recovery,
     settings,
     shutdown,

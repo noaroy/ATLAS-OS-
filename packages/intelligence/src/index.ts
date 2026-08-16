@@ -58,6 +58,31 @@ export {
   type SuitabilityReport,
   type SuitabilityVerdict,
 } from './search/capabilities.ts';
+// ─── Search Fabric ──────────────────────────────────────────────────────────
+// Le parc de moteurs, derrière le contrat d'un moteur unique. Tout ce qui
+// consomme la recherche continue de voir un `SearchProvider` ; ce provider
+// sait maintenant basculer, disjoncter et cadencer.
+export { SearchFabric, OPEN_NEED, type FabricTrace, type FabricAttempt } from './search/fabric/fabric.ts';
+export { createSearchFabric, buildRegistry, type FabricOptions } from './search/fabric/factory.ts';
+export {
+  SearchProviderRegistry,
+  type ProviderRecord,
+  type ProviderStatus,
+  type ProviderScore,
+  type ProviderMetrics,
+  type ProviderCostModel,
+  type ProviderRegistration,
+} from './search/fabric/registry.ts';
+export { SearchRouter, type RoutingPlan, type RoutingCandidate } from './search/fabric/router.ts';
+export {
+  CircuitBreaker,
+  isFailoverWorthy,
+  opensImmediately,
+  type CircuitState,
+  type BreakerSnapshot,
+} from './search/fabric/breaker.ts';
+export { RateLimiter, type LimiterOptions } from './search/fabric/limiter.ts';
+
 export { planQueries, type PlannedQuery } from './search/planner.ts';
 export { filterResults, fetchTargetsFor, type SearchCandidate, type FilterReport } from './search/filter.ts';
 export { fetchPages, type FetchedPage } from './search/fetcher.ts';

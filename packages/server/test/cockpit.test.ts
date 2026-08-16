@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createLogger } from '../../core/src/logger.ts';
 import { createRepositories, type Repositories } from '../../data/src/index.ts';
 import type { AtlasConfig } from '../../core/src/config.ts';
+import { createSearchFabric } from '@atlas/intelligence';
 import { buildCockpit } from '../src/http/cockpit.ts';
 import type { AtlasSystem } from '../src/bootstrap.ts';
 
@@ -38,13 +39,26 @@ after(() => {
 });
 
 function systemWith(overrides: Record<string, unknown> = {}): AtlasSystem {
+  const search = {
+    provider: 'duckduckgo',
+    searxngBaseUrl: '',
+    searxngEngines: '',
+    braveApiKey: '',
+    costPerQueryUsd: 0,
+    ...(overrides.search as object),
+  } as AtlasConfig['search'];
+
   return {
     repos,
     config: {
       llm: { mode: 'live', declaredMode: 'live', ...(overrides.llm as object) },
       budget: { maxMissionCostUsd: 0.4, maxMissionTokens: 100_000 },
-      search: { provider: 'duckduckgo', ...(overrides.search as object) },
+      search,
     } as unknown as AtlasConfig,
+    // Le cockpit lit le parc vivant du serveur. Lui en fournir un vrai plutôt
+    // qu'un double : c'est le routage réel qui décide de l'adéquation affichée,
+    // et un faux ne testerait que lui-même.
+    searchFabric: createSearchFabric(search),
   } as unknown as AtlasSystem;
 }
 

@@ -1,11 +1,5 @@
 import type { MissionCockpit, MissionId } from '@atlas/contracts';
-import {
-  assessSuitability,
-  capabilitiesOf,
-  DuckDuckGoSearchProvider,
-  MarginaliaSearchProvider,
-  type SearchProvider,
-} from '@atlas/intelligence';
+import { capabilitiesOf } from '@atlas/intelligence';
 import type { AtlasSystem } from '../bootstrap.ts';
 
 /**
@@ -21,18 +15,6 @@ import type { AtlasSystem } from '../bootstrap.ts';
  * d'une mission toutes les deux secondes et demie. Vingt requêtes séparées à
  * cette cadence coûteraient plus cher que la mission observée.
  */
-/**
- * Le moteur configuré, pour évaluer son adéquation.
- *
- * Instancié sans être appelé : `assessSuitability` ne lit que des capacités
- * déclarées. Aucune requête ne part d'ici.
- */
-function engineFor(key: string): SearchProvider | null {
-  if (key === 'duckduckgo') return new DuckDuckGoSearchProvider();
-  if (key === 'marginalia') return new MarginaliaSearchProvider();
-  return null;
-}
-
 export function buildCockpit(system: AtlasSystem, missionId: MissionId): MissionCockpit {
   const { repos, config } = system;
 
@@ -42,7 +24,6 @@ export function buildCockpit(system: AtlasSystem, missionId: MissionId): Mission
   const opportunities = repos.opportunities.forMission(missionId);
   const events = repos.events.forMission(missionId, 500);
   const mission = repos.missions.get(missionId);
-  const engine = engineFor(config.search.provider);
 
   const spentUsd = llm.reduce((sum, call) => sum + (call.costUsd ?? 0), 0);
   const tokensUsed = llm.reduce((sum, call) => sum + call.inputTokens + call.outputTokens, 0);
@@ -56,7 +37,6 @@ export function buildCockpit(system: AtlasSystem, missionId: MissionId): Mission
       ? Math.min(config.budget.maxMissionCostUsd || declared, declared)
       : config.budget.maxMissionCostUsd;
 
-  const caps = capabilitiesOf(config.search.provider);
   const searchCalls = tools.filter((call) => call.external);
 
   // ── Santé : lue, jamais mesurée ─────────────────────────────────────────
@@ -74,16 +54,75 @@ export function buildCockpit(system: AtlasSystem, missionId: MissionId): Mission
   // ── Adéquation : déduite du brief, sans aucun appel ─────────────────────
   const brief = (mission?.context as { brief?: { markets?: { countries?: string[] } } } | null)?.brief;
   const countries = brief?.markets?.countries?.filter(Boolean) ?? [];
-  const suitability =
-    engine && countries.length > 0
-      ? assessSuitability(engine, {
-          countries,
-          // La langue du marché, faute de mieux : un brief allemand cherche des
-          // sources allemandes.
-          languages: countries.map((c) => c.slice(0, 2).toLowerCase()),
-          commercial: true,
-        })
-      : null;
+  const need = {
+    countries,
+    // La langue du marché, faute de mieux : un brief allemand cherche des
+    // sources allemandes.
+    languages: countries.map((c) => c.slice(0, 2).toLowerCase()),
+    commercial: true,
+  };
+
+  // ── Le parc ─────────────────────────────────────────────────────────────
+  // Lu sur l'instance vivante du serveur, pas reconstruit : c'est là que vivent
+  // les disjoncteurs ouverts et les métriques accumulées. Un registre neuf
+  // afficherait « inconnu » partout et laisserait croire qu'aucun appel n'a eu
+  // lieu — précisément le mensonge que ce fichier existe pour éviter.
+  const fabricInstance = system.searchFabric;
+  const plan = fabricInstance && countries.length > 0 ? fabricInstance.plan(need) : null;
+  const trace = fabricInstance?.lastTrace() ?? null;
+
+  const fabric: MissionCockpit['fabric'] = !fabricInstance
+    ? null
+    : {
+        active: plan?.order[0]?.record.id ?? null,
+        providers: (plan?.considered ?? []).map((candidate) => {
+          const status = fabricInstance.registry.statusOf(candidate.record.id);
+          const score = status?.score ?? null;
+          return {
+            id: candidate.record.id,
+            name: candidate.record.name,
+            health: candidate.health,
+            suitability: candidate.suitability.verdict,
+            circuit: candidate.record.breaker.state,
+            cooldownRemainingMs: candidate.record.breaker.snapshot().cooldownRemainingMs,
+            excludedReason: candidate.excluded,
+            selected: plan?.order[0]?.record.id === candidate.record.id,
+            calls: status?.metrics.calls ?? 0,
+            // `null` plutôt que zéro : un moteur jamais appelé n'a pas un taux
+            // de réussite nul, il n'en a pas.
+            successRate: score?.successRate ?? null,
+            averageLatencyMs: score?.averageLatencyMs ?? null,
+            costUsd: round4(status?.metrics.totalCostUsd ?? 0),
+          };
+        }),
+        lastFailover: (trace?.attempts ?? [])
+          .filter((attempt) => attempt.failedOver)
+          .map((attempt) => ({ providerId: attempt.providerId, outcome: attempt.outcome })),
+        blocked: plan?.blocked ?? false,
+        blockedReason: plan?.blockedReason ?? null,
+      };
+
+  // L'adéquation affichée est celle du moteur qui répondra, pas une moyenne du
+  // parc : les suivants ne servent qu'en cas de bascule, et leur couverture ne
+  // dit rien de ce qui va réellement être interrogé.
+  //
+  // Quand le parc est bloqué, on retombe sur le moteur *examiné* — sinon
+  // l'écran afficherait « inconnu » pour un moteur dont on sait précisément
+  // qu'il est inadapté, et l'opérateur perdrait la seule information qui lui
+  // dit quoi faire. Ne rien savoir et savoir que ça ne conviendra pas sont
+  // deux états distincts, et c'est leur confusion qui a coûté une mission.
+  //
+  // Reste `null` tant qu'aucun marché n'est connu : juger l'adéquation sans
+  // savoir à quoi reviendrait à la déclarer bonne par défaut.
+  const reference = plan?.order[0] ?? plan?.considered[0] ?? null;
+  const suitability = reference?.suitability ?? null;
+
+  // Les capacités affichées sont celles de ce même moteur, pas celles de la clé
+  // de configuration. Avec `auto`, cette clé n'est le nom d'aucun moteur : la
+  // lire rendrait les capacités « moteur non répertorié », c'est-à-dire
+  // pessimistes partout, pour un parc parfaitement capable.
+  const activeKey = reference?.record.id ?? config.search.provider;
+  const caps = capabilitiesOf(activeKey);
 
   return {
     missionId,
@@ -98,7 +137,9 @@ export function buildCockpit(system: AtlasSystem, missionId: MissionId): Mission
     },
 
     search: {
-      provider: config.search.provider,
+      // Le moteur réellement en tête, pas le mode qui l'a sélectionné : afficher
+      // « auto » ne dirait pas qui répond.
+      provider: activeKey,
       health,
       suitability: suitability?.verdict ?? 'unknown',
       suitabilityGaps: suitability?.gaps ?? [],
@@ -110,6 +151,8 @@ export function buildCockpit(system: AtlasSystem, missionId: MissionId): Mission
       rateLimited: tools.filter((call) => call.outcome === 'rate-limited').length,
       failures: tools.filter((call) => !call.ok).length,
     },
+
+    fabric,
 
     pipeline: {
       candidates: opportunities.length,

@@ -20,8 +20,7 @@
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
-import { DuckDuckGoSearchProvider } from '../packages/intelligence/src/search/duckduckgo.ts';
-import { MarginaliaSearchProvider } from '../packages/intelligence/src/search/marginalia.ts';
+import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import { LIVE_PILOT_MISSION, LIVE_PILOT_LIMITS, LIVE_PILOT_NEED } from '../packages/departments/src/live-pilot.ts';
 
 const c = {
@@ -37,12 +36,9 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const system = createSystem(config);
 
-  const search =
-    config.search.provider === 'duckduckgo'
-      ? new DuckDuckGoSearchProvider()
-      : config.search.provider === 'marginalia'
-        ? new MarginaliaSearchProvider()
-        : null;
+  // Un parc, plus un moteur. Le point de défaillance unique disparaît : la
+  // reprise n'est bloquée que si *tous* les moteurs adaptés sont indisponibles.
+  const search = createSearchFabric(config.search, { need: LIVE_PILOT_NEED });
 
   console.log(`\n${c.bold}  Reprise de ${LIVE_PILOT_MISSION.code}${c.reset}\n`);
 
@@ -57,19 +53,47 @@ async function main(): Promise<void> {
 
   console.log(formatPreflight(report).replace(/^/gm, '  '));
   console.log();
-  console.log(`  ${c.dim}santé du moteur    ${report.searchHealth}${c.reset}`);
-  console.log(`  ${c.dim}adéquation         ${report.searchSuitability?.verdict ?? 'non évaluée'}${c.reset}`);
+
+  // ─── Le parc, moteur par moteur ─────────────────────────────────────────
+  // C'est ce tableau qui remplace « attendez que DuckDuckGo revienne ». Un
+  // moteur bridé n'y bloque plus rien : il y apparaît en refroidissement,
+  // pendant qu'un autre prend la tête de file.
+  if (report.fabric) {
+    console.log(`  ${c.bold}Search Fabric${c.reset}`);
+    for (const provider of report.fabric.providers) {
+      const excluded = report.fabric.excluded.find((e) => e.id === provider.id);
+      const rank = report.fabric.order.indexOf(provider.id);
+      const marker = rank === 0 ? `${c.green}▶${c.reset}` : excluded ? `${c.dim}·${c.reset}` : ' ';
+      const state = excluded
+        ? `${c.dim}écarté — ${excluded.reason}${c.reset}`
+        : `${provider.health} · circuit ${provider.circuit.state}` +
+          (rank === 0 ? ` ${c.green}(actif)${c.reset}` : ` (secours ${rank + 1})`);
+      console.log(`   ${marker} ${provider.id.padEnd(12)} ${state}`);
+    }
+    console.log();
+  }
+
+  console.log(`  ${c.dim}santé du moteur retenu  ${report.searchHealth}${c.reset}`);
+  console.log(`  ${c.dim}adéquation              ${report.searchSuitability?.verdict ?? 'non évaluée'}${c.reset}`);
   console.log();
 
   if (!report.cleared) {
-    // La distinction qui a coûté deux missions : un moteur peut répondre
-    // parfaitement et ne rien savoir du marché visé.
-    const cause =
-      report.searchHealth !== 'healthy'
-        ? 'BLOCKED-BY-SEARCH-PROVIDER (santé)'
-        : report.searchSuitability?.verdict === 'unsuitable'
-          ? 'BLOCKED-BY-SEARCH-PROVIDER (adéquation)'
-          : 'BLOCKED-BY-PREFLIGHT';
+    // La cause nomme ce qu'il faut corriger. Un parc entièrement indisponible
+    // et une configuration invalide appellent deux gestes différents ; les
+    // confondre a fait chercher une panne réseau pendant qu'une variable
+    // d'environnement manquait.
+    //
+    // Le blocage par le parc est désormais le seul cas lié à la recherche :
+    // un moteur bridé ne bloque plus rien tant qu'un autre peut répondre.
+    const cause = report.fabric?.blocked
+      ? 'BLOCKED-BY-SEARCH-FABRIC'
+      : report.searchSuitability?.verdict === 'unsuitable'
+        ? 'BLOCKED-BY-SEARCH-PROVIDER (adéquation)'
+        : 'BLOCKED-BY-PREFLIGHT';
+
+    if (report.fabric?.blockedReason) {
+      console.error(`  ${c.dim}${report.fabric.blockedReason}${c.reset}`);
+    }
 
     console.error(`  ${c.red}${cause}${c.reset} — aucune dépense engagée.\n`);
     await system.shutdown('reprise refusée');

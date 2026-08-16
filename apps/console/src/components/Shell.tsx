@@ -45,6 +45,16 @@ export function Shell() {
         ? 'text-[--color-ember]'
         : 'text-[--color-vital]';
 
+  // Le statut arrive en anglais du serveur ; il s'affichait tel quel au milieu
+  // d'une interface française. Traduire à l'affichage plutôt qu'à la source :
+  // la valeur reste stable pour les journaux et les tests.
+  const statusLabel =
+    health?.status === 'critical'
+      ? 'Système en alerte'
+      : health?.status === 'degraded'
+        ? 'Système dégradé'
+        : 'Système sain';
+
   return (
     <div className="flex h-full bg-[--color-void]">
       {/* ── Rail ─────────────────────────────────────────────────────────── */}
@@ -128,15 +138,29 @@ export function Shell() {
                       : 'bg-rose-400'
                 }`}
               />
+              {/*
+                « Connecté », pas « Live ».
+
+                Ce point vert dit que le flux temps réel est ouvert — rien de
+                plus. Mais dans un produit dont toute la distinction tient entre
+                simulation et réel, un voyant vert marqué « Live » en haut de
+                l'écran se lit comme le mode d'exécution, et le badge « Mode
+                simulation » qui le contredit trois centimètres plus loin ne
+                lève pas l'ambiguïté : il la rend inquiétante.
+              */}
               <span className="text-[--color-muted]">
-                {connection === 'live' ? 'Live' : connection === 'connecting' ? 'Connecting' : 'Offline'}
+                {connection === 'live'
+                  ? 'Connecté'
+                  : connection === 'connecting'
+                    ? 'Connexion…'
+                    : 'Hors ligne'}
               </span>
             </span>
 
             {health && (
               <>
                 <span className="text-[--color-border-bright]">|</span>
-                <span className={statusTone}>System {health.status}</span>
+                <span className={statusTone}>{statusLabel}</span>
                 <span className="text-[--color-border-bright]">|</span>
                 <span className="text-[--color-faint]">
                   En service {Math.floor(health.uptimeSeconds / 3600)}h{' '}

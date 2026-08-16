@@ -75,7 +75,7 @@ export async function assessHealth(deps: HealthDeps): Promise<SystemHealth> {
     checks.push({
       name: 'database',
       status: 'pass',
-      detail: `SQLite repond (${resources.databaseSizeMb} Mo)`,
+      detail: `SQLite répond (${resources.databaseSizeMb} Mo)`,
       latencyMs: Date.now() - dbStart,
     });
   } catch (err) {
@@ -91,14 +91,14 @@ export async function assessHealth(deps: HealthDeps): Promise<SystemHealth> {
   checks.push({
     name: 'memory',
     status: memoryRatio > 0.94 ? 'fail' : memoryRatio > 0.85 ? 'warn' : 'pass',
-    detail: `${resources.memoryUsedMb} / ${resources.memoryTotalMb} Mo utilises (${Math.round(memoryRatio * 100)} %)`,
+    detail: `${resources.memoryUsedMb} / ${resources.memoryTotalMb} Mo utilisés (${Math.round(memoryRatio * 100)} %)`,
   });
 
   // CPU
   checks.push({
     name: 'cpu',
     status: resources.cpuLoad > 0.95 ? 'warn' : 'pass',
-    detail: `charge ${(resources.cpuLoad * 100).toFixed(0)} % des coeurs disponibles`,
+    detail: `charge ${(resources.cpuLoad * 100).toFixed(0)} % des cœurs disponibles`,
   });
 
   // Disk — best effort; not every platform exposes statfs.
@@ -108,10 +108,10 @@ export async function assessHealth(deps: HealthDeps): Promise<SystemHealth> {
     checks.push({
       name: 'disk',
       status: freeGb < 1 ? 'fail' : freeGb < 5 ? 'warn' : 'pass',
-      detail: `${freeGb.toFixed(1)} Go libres dans le repertoire de donnees`,
+      detail: `${freeGb.toFixed(1)} Go libres dans le répertoire de données`,
     });
   } catch {
-    checks.push({ name: 'disk', status: 'pass', detail: "occupation disque non rapportee par cette plateforme" });
+    checks.push({ name: 'disk', status: 'pass', detail: "occupation disque non rapportée par cette plateforme" });
   }
 
   // Orchestrator
@@ -127,7 +127,7 @@ export async function assessHealth(deps: HealthDeps): Promise<SystemHealth> {
   checks.push({
     name: 'events',
     status: resources.eventBacklog > 500 ? 'warn' : 'pass',
-    detail: `${resources.eventBacklog} traitement(s) d'evenement en vol`,
+    detail: `${resources.eventBacklog} traitement(s) d'événement en vol`,
   });
 
   // Inference

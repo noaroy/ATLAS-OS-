@@ -30,6 +30,12 @@ export function LiveBanner({ cockpit }: { cockpit: MissionCockpit }) {
     );
   }
 
+  // Le plafond atteint est un état, pas une valeur limite : la barre saturait
+  // à 100 % sans rien dire, si bien qu'une mission coupée par son budget et une
+  // mission qui l'a tout juste effleuré se ressemblaient. C'est une comparaison,
+  // pas un calcul — le chiffre affiché reste celui du serveur.
+  const capped = cockpit.budget.maxUsd > 0 && cockpit.budget.spentUsd >= cockpit.budget.maxUsd;
+
   return (
     <div className="rounded-lg border-2 border-rose-500/50 bg-rose-500/10 px-4 py-3">
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
@@ -45,10 +51,17 @@ export function LiveBanner({ cockpit }: { cockpit: MissionCockpit }) {
         <span className="text-sm text-rose-100">
           RESTE <strong>{formatUsd(cockpit.budget.remainingUsd)}</strong>
         </span>
+        {capped && (
+          <span className="chip border border-rose-400/60 bg-rose-500/20 font-semibold text-rose-100">
+            PLAFOND ATTEINT — plus aucun appel ne partira
+          </span>
+        )}
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/40">
         <div
-          className="h-full rounded-full bg-rose-400 transition-[width] duration-500"
+          className={`h-full rounded-full transition-[width] duration-500 ${
+            capped ? 'bg-rose-200' : 'bg-rose-400'
+          }`}
           style={{
             width: `${
               cockpit.budget.maxUsd > 0
@@ -105,7 +118,13 @@ export function Cockpit({
           <p className="mt-1.5 text-[0.7rem] leading-relaxed text-[--color-faint]">{search.caveat}</p>
         )}
 
-        <dl className="mt-3 grid grid-cols-3 gap-2">
+        {/*
+          Trois colonnes fixes écrasaient les libellés sous 420 px : « Bridages »
+          passait à la ligne au milieu du mot. Les autres grilles de ce fichier
+          respirent déjà en deux colonnes sur petit écran ; celle-ci ne le
+          faisait pas.
+        */}
+        <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           <Cell label="Requêtes" value={search.queries} />
           <Cell label="Bridages" value={search.rateLimited} tone={search.rateLimited > 0 ? 'warn' : undefined} />
           <Cell label="Échecs" value={search.failures} tone={search.failures > 0 ? 'warn' : undefined} />
@@ -113,6 +132,14 @@ export function Cockpit({
       </Section>
 
       {/* ── L'entonnoir ──────────────────────────────────────────────────── */}
+      {/*
+        Une cellule « Opportunités » affichait `pipeline.candidates` — la même
+        valeur que « Candidats », deux lignes plus haut. Il n'existe pas de
+        second compte : dans ce pipeline, un candidat *est* une opportunité au
+        stade `discovered`. Lire « Candidats 12 · Opportunités 12 » donnait à
+        croire qu'une étape avait converti l'un en l'autre, alors que le second
+        chiffre n'était que le premier répété.
+      */}
       <Section title="Entonnoir">
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Cell label="Candidats" value={pipeline.candidates} />
@@ -122,7 +149,6 @@ export function Cockpit({
           <Cell label="Pages lues" value={pipeline.pagesFetched} />
           <Cell label="Preuves" value={pipeline.evidence.total} />
           <Cell label="Sourcées" value={pipeline.evidence.sourced} tone="good" />
-          <Cell label="Opportunités" value={pipeline.candidates} />
         </dl>
 
         {/*

@@ -38,6 +38,43 @@ export interface PresetCriteria {
   fail: string[];
 }
 
+/**
+ * Ce qu'un preset exige pour être déclaré PASS, au-delà du socle commun.
+ *
+ * Déclaré à côté de l'objectif plutôt que déduit dans l'évaluateur : juger
+ * toutes les validations à la même aune revenait à ne mesurer qu'une seule
+ * chose cinq fois, et VAL-001 était PARTIAL pour n'avoir pas produit un
+ * rapport final que son objectif ne demandait pas.
+ *
+ * Le socle commun — budget, aucune simulation, aucune donnée inventée, aucune
+ * garde violée, statut cohérent — s'applique de toute façon. Un preset dit ce
+ * qu'il exige **en plus**, jamais ce dont il se dispense.
+ */
+export interface PresetGate {
+  requiredSteps: string[];
+  minCandidates: number;
+  minSourcedEvidence: number;
+  minFirsthandEvidence: number;
+  requiresHumanReview: boolean;
+  requiresRealProvider: boolean;
+  budgetStopIsSuccess: boolean;
+}
+
+/**
+ * Le plafond de sortie par appel, pour les validations.
+ *
+ * Le défaut du déploiement est de 8 000 jetons ; les neuf appels de VAL-001 en
+ * ont produit 596 en moyenne, le plus long 1 298. Or l'autorisation réserve le
+ * pire cas — elle bloquait donc sur une réservation treize fois supérieure à la
+ * consommation réelle, et a refusé un appel pour 246 jetons de marge fictive
+ * alors que la mission en avait 21 172 de libres.
+ *
+ * 2 500 laisse presque le double du plus long relevé. Le plafond global du
+ * déploiement n'est pas touché : c'est une calibration de banc d'essai, fondée
+ * sur des mesures de banc d'essai.
+ */
+export const VALIDATION_MAX_OUTPUT_TOKENS_PER_CALL = 2500;
+
 export interface ValidationPreset {
   id: string;
   /** Le rang dans la séquence. Un échec ici rend inutile de payer le suivant. */
@@ -52,6 +89,8 @@ export interface ValidationPreset {
   /** Le mode sous lequel elle doit tourner. */
   mode: 'simulation' | 'live';
   criteria: PresetCriteria;
+  /** La forme exécutable des critères ci-dessus. */
+  gate: PresetGate;
   context: Record<string, unknown>;
   departmentKey: string;
   tags: string[];
@@ -63,6 +102,7 @@ const HAIKU = 'claude-haiku-4-5-20251001';
 const bounded = (overrides: Partial<LivePilotLimits>): LivePilotLimits => ({
   ...LIVE_PILOT_LIMITS,
   model: HAIKU,
+  maxOutputTokensPerCall: VALIDATION_MAX_OUTPUT_TOKENS_PER_CALL,
   ...overrides,
 });
 
@@ -109,6 +149,17 @@ export const VALIDATION_PRESETS: ValidationPreset[] = [
         'onze appels pour trois candidats — la correction n’aurait rien changé',
         'budget dépassé',
       ],
+    },
+    // La découverte et la mesure de proportionnalité : le rapport final ne fait
+    // pas partie de l'objectif, l'exiger reviendrait à mesurer autre chose.
+    gate: {
+      requiredSteps: ['discovery'],
+      minCandidates: 1,
+      minSourcedEvidence: 1,
+      minFirsthandEvidence: 1,
+      requiresHumanReview: false,
+      requiresRealProvider: true,
+      budgetStopIsSuccess: false,
     },
     context: { executionMode: 'live', preset: 'VAL-001-DISCOVERY', budgetUsd: 0.08 },
     departmentKey: 'business-expansion',
@@ -157,6 +208,17 @@ export const VALIDATION_PRESETS: ValidationPreset[] = [
         'la garde déclenchée reste anonyme',
       ],
     },
+    // Aucune étape n'est exigée : c'est l'arrêt qu'on juge, pas le déroulement.
+    // Un plafond atteint proprement est le résultat attendu.
+    gate: {
+      requiredSteps: [],
+      minCandidates: 0,
+      minSourcedEvidence: 0,
+      minFirsthandEvidence: 0,
+      requiresHumanReview: false,
+      requiresRealProvider: true,
+      budgetStopIsSuccess: true,
+    },
     context: { executionMode: 'live', preset: 'VAL-002-ECONOMIC-SAFETY', budgetUsd: 0.12 },
     departmentKey: 'business-expansion',
     tags: ['validation', 'budget', 'live'],
@@ -202,6 +264,18 @@ export const VALIDATION_PRESETS: ValidationPreset[] = [
         'un doublon présenté comme deux candidats',
         'une URL qui ne mentionne pas l’organisation',
       ],
+    },
+    // La qualité se juge sur la chaîne d'analyse, pas sur le rapport : ce sont
+    // enrichment, qualification et scoring qui produisent des preuves et des
+    // scores, et c'est leur solidité qui est en cause.
+    gate: {
+      requiredSteps: ['discovery', 'enrichment', 'qualification', 'scoring'],
+      minCandidates: 3,
+      minSourcedEvidence: 3,
+      minFirsthandEvidence: 3,
+      requiresHumanReview: false,
+      requiresRealProvider: true,
+      budgetStopIsSuccess: false,
     },
     context: { executionMode: 'live', preset: 'VAL-003-QUALITE', budgetUsd: 0.35 },
     departmentKey: 'business-expansion',
@@ -251,6 +325,17 @@ export const VALIDATION_PRESETS: ValidationPreset[] = [
         'aucune décision enregistrée',
       ],
     },
+    // Hermès est jugé sur ses décisions, pas sur le nombre d'étapes traversées.
+    // Une branche abandonnée à bon escient est une réussite d'orchestration.
+    gate: {
+      requiredSteps: ['discovery'],
+      minCandidates: 1,
+      minSourcedEvidence: 1,
+      minFirsthandEvidence: 1,
+      requiresHumanReview: false,
+      requiresRealProvider: true,
+      budgetStopIsSuccess: false,
+    },
     context: { executionMode: 'live', preset: 'VAL-004-HERMES', budgetUsd: 0.35 },
     departmentKey: 'business-expansion',
     tags: ['validation', 'hermes', 'live'],
@@ -296,6 +381,17 @@ export const VALIDATION_PRESETS: ValidationPreset[] = [
         'une opportunité approuvée automatiquement',
         'une absence de résultat enregistrée en mémoire comme un fait de marché',
       ],
+    },
+    // La seule qui exige tout : c'est la reproductibilité de bout en bout qu'on
+    // valide, revue humaine comprise.
+    gate: {
+      requiredSteps: ['discovery', 'enrichment', 'qualification', 'scoring', 'ranking', 'report'],
+      minCandidates: 1,
+      minSourcedEvidence: 1,
+      minFirsthandEvidence: 1,
+      requiresHumanReview: true,
+      requiresRealProvider: true,
+      budgetStopIsSuccess: false,
     },
     context: { executionMode: 'live', preset: 'VAL-005-END-TO-END', budgetUsd: 0.45 },
     departmentKey: 'business-expansion',

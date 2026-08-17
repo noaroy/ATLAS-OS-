@@ -14,7 +14,7 @@
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, formatDuration } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
-import { evaluatePilot, formatPilotReport } from '../packages/runtime/src/pilot-verdict.ts';
+import { evaluatePreset, formatPresetVerdict } from '../packages/runtime/src/preset-verdict.ts';
 import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import { missionEconomics } from '../packages/intelligence/src/economics.ts';
 import { presetById, VALIDATION_PRESETS } from '../packages/departments/src/validation-presets.ts';
@@ -109,7 +109,15 @@ async function main(): Promise<void> {
   const mission = await system.hermes.submit({
     title: `${preset.id} — ${preset.title}`,
     objective: preset.objective,
-    context: preset.context,
+    context: {
+      ...preset.context,
+      // Le plafond de sortie descend jusqu'au registre budgétaire par le
+      // contexte, comme le plafond en dollars : c'est le seul canal qui
+      // resserre sans jamais élargir.
+      ...(preset.limits.maxOutputTokensPerCall
+        ? { maxOutputTokensPerCall: preset.limits.maxOutputTokensPerCall }
+        : {}),
+    },
     departmentKey: preset.departmentKey,
     tags: preset.tags,
     tokenBudget: preset.limits.maxTokens,
@@ -272,17 +280,23 @@ async function main(): Promise<void> {
   }
 
   // ── Verdict ─────────────────────────────────────────────────────────────
-  const pilot = evaluatePilot({
+  // Le verdict lit les critères *de ce preset*, pas une grille unique. Juger
+  // les cinq validations à la même aune revenait à ne mesurer qu'une seule
+  // chose cinq fois — et VAL-001 était PARTIAL pour n'avoir pas produit un
+  // rapport final que son objectif ne demandait pas. Le socle commun, lui,
+  // s'applique sans exception.
+  const verdict = evaluatePreset({
     repos,
     missionId: mission.id,
+    gate: preset.gate,
     maxCostUsd: preset.limits.maxCostUsd,
     spentUsd: cost,
   });
-  console.log(formatPilotReport(pilot));
+  console.log(formatPresetVerdict(verdict));
   console.log();
 
   await system.shutdown('validation terminée');
-  process.exitCode = pilot.verdict === 'PASS' ? 0 : 1;
+  process.exitCode = verdict.verdict === 'PASS' ? 0 : 1;
 }
 
 main().catch((err) => {

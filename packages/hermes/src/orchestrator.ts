@@ -560,8 +560,25 @@ export class HermesEngine {
           : declared
         : base.maxMissionCostUsd;
 
+    // Une mission peut aussi resserrer sa sortie par appel. Ce plafond compte
+    // double : il borne la réponse, et il est *réservé* par l'autorisation, qui
+    // raisonne au pire cas. Un plafond très au-dessus de la consommation réelle
+    // bloque donc des appels que le budget pouvait financer — VAL-001 en a
+    // refusé un pour 246 jetons de marge fictive, avec 21 172 de libres.
+    //
+    // Comme pour les dollars : resserrer seulement, jamais élargir.
+    const declaredOutput = (mission.context as { maxOutputTokensPerCall?: unknown } | null)
+      ?.maxOutputTokensPerCall;
+    const maxOutputTokensPerCall =
+      typeof declaredOutput === 'number' && Number.isFinite(declaredOutput) && declaredOutput > 0
+        ? base.maxOutputTokensPerCall > 0
+          ? Math.min(base.maxOutputTokensPerCall, declaredOutput)
+          : declaredOutput
+        : base.maxOutputTokensPerCall;
+
     return {
       ...base,
+      maxOutputTokensPerCall,
       maxMissionCostUsd: missionCostUsd,
       // Le plafond d'appels suit le travail réel : douze appels forfaitaires
       // ont laissé l'enrichissement de trois candidats en passer onze.

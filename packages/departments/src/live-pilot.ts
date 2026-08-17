@@ -28,6 +28,17 @@ export interface LivePilotLimits {
   maxMissionDurationMs: number;
   /** Le modèle employé. Jamais le plus cher : c'est de l'extraction. */
   model: string;
+  /**
+   * Sortie maximale par appel, en jetons.
+   *
+   * Compte double : elle borne la réponse, et elle est **réservée** par
+   * l'autorisation budgétaire, qui raisonne au pire cas. Un plafond très
+   * au-dessus de la consommation réelle bloque donc des appels que le budget
+   * pouvait financer — VAL-001 a refusé un appel pour 246 jetons de marge
+   * fictive avec 21 172 de libres, parce qu'elle réservait 8 000 jetons de
+   * sortie là où les appels en produisaient 596 en moyenne.
+   */
+  maxOutputTokensPerCall?: number;
 }
 
 /**

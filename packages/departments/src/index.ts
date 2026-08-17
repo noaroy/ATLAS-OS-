@@ -16,6 +16,8 @@ export { DEMO_MISSION, DEMO_MISSION_TAG, type DemoMissionSpec } from './demo-mis
 export { LIVE_PILOT_MISSION, LIVE_PILOT_LIMITS, LIVE_PILOT_NEED, type LivePilotLimits } from './live-pilot.ts';
 export {
   VALIDATION_PRESETS,
+  VALIDATION_MAX_OUTPUT_TOKENS_PER_CALL,
+  type PresetGate,
   presetById,
   totalPresetBudgetUsd,
   type ValidationPreset,

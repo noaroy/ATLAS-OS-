@@ -25,6 +25,34 @@ export {
   type PresetVerdict,
 } from './validation-presets.ts';
 
+export {
+  REVENUE_001,
+  REVENUE_QUALITY_BAR,
+  REVENUE_ENOUGH_PROSPECTS,
+  REVENUE_TARGET_PROSPECTS,
+  meetsQualityBar,
+  whyBelowBar,
+  shouldStopEarly,
+  type RevenuePreset,
+  type QualityBar,
+  type ProspectQuality,
+  type StopDecision,
+  type StopReason,
+} from './revenue-preset.ts';
+
+export {
+  buildPack,
+  detectSignals,
+  approachAngleFor,
+  type Pack,
+  type PackProspect,
+  type PackClaim,
+  type PackAdvice,
+  type PackContact,
+} from './deliverable.ts';
+
+export { packToHtml, packToCsv } from './deliverable-render.ts';
+
 export const DEPARTMENT_KEYS: DepartmentKey[] = DEPARTMENT_DEFINITIONS.map((d) => d.key);
 
 /**

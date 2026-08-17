@@ -74,6 +74,24 @@ export interface AtlasTool<TInput = unknown> {
   parse: z.ZodType<TInput>;
   /** Shares the Skill vocabulary, so one taxonomy describes both. */
   category: SkillCategory;
+  /**
+   * Cet outil clôt-il une unité de travail indépendante ?
+   *
+   * Quand il réussit, tout ce qui a servi à y arriver cesse d'être utile : le
+   * contexte accumulé est remplacé par une ligne de relevé, et l'unité
+   * suivante repart à propre.
+   *
+   * L'enrichissement de VAL-003 l'a montré par la mesure. Chaque candidat
+   * enrichi restait dans la conversation, donc l'entrée croissait à chaque
+   * appel : 5 710 jetons au premier, 32 443 au huitième — 178 584 en tout pour
+   * cinq candidats. Le coût suivait le carré du nombre de candidats, quand le
+   * travail, lui, était strictement proportionnel.
+   *
+   * L'enrichissement de l'entreprise B n'a aucun besoin de savoir ce qui a été
+   * trouvé sur l'entreprise A. Le lui envoyer ne l'aide pas : cela le fait
+   * seulement payer plus cher, et raisonner sur un contexte plus bruyant.
+   */
+  boundary?: boolean;
   execute(input: TInput, ctx: ToolContext): Promise<ToolResult>;
 }
 

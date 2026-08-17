@@ -36,6 +36,68 @@ export const DEFAULT_RELIABILITY: Record<Source['kind'], number> = {
 };
 
 /**
+ * Des suffixes qui ressemblent à un domaine sans désigner quoi que ce soit de
+ * joignable. Les préfixer d'un `https://` fabriquerait une adresse plausible
+ * pour une source qui n'existe pas — exactement ce qu'une preuve ne doit pas
+ * faire. `.example`, `.invalid`, `.test` et `.localhost` sont réservés par la
+ * RFC 2606 précisément pour ne jamais être résolus.
+ */
+const NON_ROUTABLE_TLDS = new Set([
+  'example',
+  'invalid',
+  'test',
+  'localhost',
+  'local',
+  'internal',
+  'lan',
+  'home',
+  'arpa',
+]);
+
+/**
+ * Rend une référence de source utilisable, quand elle ne l'est pas encore.
+ *
+ * Les agents rendent régulièrement `bhs-world.com` là où une adresse complète
+ * est attendue. Ce n'est pas une erreur de fond : le domaine est juste, la
+ * source existe, il manque le protocole. Mais la chaîne n'est pas une URL, donc
+ * la source enregistrée n'en est pas une non plus, et la preuve devient
+ * invérifiable pour un défaut de forme.
+ *
+ * La règle est purement syntaxique et volontairement stricte : mieux vaut
+ * laisser passer un domaine nu que fabriquer une adresse à partir d'une phrase.
+ * Ce qui n'est pas reconnu avec certitude est rendu tel quel, sans altération —
+ * une normalisation qui devine est une invention.
+ *
+ * `https` et non `http` : c'est le défaut du web, et se tromper coûte une
+ * redirection, là où l'inverse coûterait une adresse en clair.
+ */
+export function normaliseSourceRef(ref: string): string {
+  const trimmed = ref.trim();
+  if (!trimmed) return ref;
+
+  // Déjà une adresse — y compris `mailto:` ou `tel:`, qu'on ne touche pas.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  // Un espace signe une phrase, pas un domaine.
+  if (/\s/.test(trimmed)) return trimmed;
+
+  const [authority = ''] = trimmed.split(/[/?#]/, 1);
+  const labels = authority.split('.');
+  if (labels.length < 2) return trimmed;
+
+  const tld = labels.at(-1)!.toLowerCase();
+  // Un TLD est alphabétique et jamais très court : cela écarte « Industrie
+  // 4.0 », « v1.2 » et les numéros de version, qui ont la même forme.
+  if (!/^[a-z]{2,24}$/.test(tld)) return trimmed;
+  if (NON_ROUTABLE_TLDS.has(tld)) return trimmed;
+
+  // Chaque étiquette : alphanumérique ou tiret, jamais bordée d'un tiret.
+  const wellFormed = labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i.test(l));
+  if (!wellFormed) return trimmed;
+
+  return `https://${trimmed}`;
+}
+
+/**
  * Validates and normalises one claim before it is written.
  *
  * Rejects rather than silently clamps where the mistake is a category error —
@@ -49,6 +111,16 @@ export function prepareEvidence(
   if (!draft.field.trim()) throw badRequest('Evidence must name the field it speaks to');
   if (!draft.claim.trim()) throw badRequest('Evidence must state a claim');
 
+  // Un domaine nu est complété avant les contrôles : la discipline porte sur ce
+  // qui sera écrit, et refuser une source pour un protocole manquant serait
+  // sévère sans être utile.
+  const sourceRef = draft.sourceRef ? normaliseSourceRef(draft.sourceRef) : draft.sourceRef;
+
+  // Espaces normalisés à l'écriture, pour que deux copies d'une même phrase se
+  // reconnaissent ensuite sans avoir à être interprétées. Le texte n'est pas
+  // retouché autrement : seule la mise en forme est unifiée.
+  const claim = normaliseSpace(draft.claim);
+
   // In simulation there is no external world to have observed anything in.
   // Downgrading rather than refusing keeps the pipeline demonstrable while
   // making it impossible for simulated output to masquerade as observation.
@@ -57,7 +129,7 @@ export function prepareEvidence(
   if (nature === 'inferred' && !(draft.basis ?? '').trim() && !context.simulated) {
     throw badRequest('An inference must state the basis it was drawn from');
   }
-  if (nature !== 'inferred' && !(draft.sourceRef ?? '').trim() && !context.simulated) {
+  if (nature !== 'inferred' && !(sourceRef ?? '').trim() && !context.simulated) {
     throw badRequest(`An ${nature} claim must cite the source it was read at`);
   }
 
@@ -67,6 +139,8 @@ export function prepareEvidence(
 
   return {
     ...draft,
+    claim,
+    sourceRef,
     nature,
     confidence,
     basis: draft.basis ?? (context.simulated ? 'Simulated inference — no external source' : null),
@@ -129,3 +203,12 @@ export function evidenceAgeDays(evidence: readonly Evidence[], now = Date.now())
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/**
+ * Une seule forme pour un même texte : bords coupés, espaces internes réduits.
+ *
+ * Purement typographique. Deux phrases qui ne different que par un retour a la
+ * ligne sont la meme phrase ; deux phrases qui different par un mot ne le sont
+ * pas, et rien ici ne pretend en juger.
+ */
+export const normaliseSpace = (text: string): string => text.trim().replace(/\s+/g, ' ');

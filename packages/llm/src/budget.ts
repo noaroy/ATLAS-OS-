@@ -96,7 +96,38 @@ export interface LlmCallRecord {
   /** Message d'erreur, jamais de secret : rien de la requête n'est recopié. */
   error: string | null;
   toolCalls: number;
+  /** Sur quoi portait l'appel — un candidat, une unité de travail. */
+  subject: string | null;
+  /**
+   * Le poids du contexte *avant* l'appel, en caractères.
+   *
+   * Mesuré ici parce que c'est ici qu'on tient la requête entière : un appelant
+   * qui déclare lui-même sa taille de contexte déclare ce qu'il croit envoyer,
+   * pas ce qui part. La grandeur est en caractères et non en jetons — le
+   * découpage appartient au fournisseur, et l'inventer donnerait un chiffre
+   * faux là où on veut justement mesurer.
+   */
+  contextChars: number;
+  /** Preuves versées au contexte, ou `null` quand la notion ne s'applique pas. */
+  evidenceCount: number | null;
   createdAt: string;
+}
+
+/**
+ * Le poids de ce qui part réellement au modèle.
+ *
+ * Compte le système et tous les messages, blocs d'outils inclus : c'est
+ * l'accumulation dans ces blocs — pas dans le texte — qui a fait passer
+ * l'enrichissement de 5 710 à 32 443 jetons d'entrée.
+ */
+export function contextCharsOf(request: LlmRequest): number {
+  let total = request.system.length;
+  for (const message of request.messages) {
+    for (const content of message.content) {
+      total += content.type === 'text' ? content.text.length : JSON.stringify(content).length;
+    }
+  }
+  return total;
 }
 
 /** Où les lignes sont écrites. Une fonction, pour que le registre reste testable. */
@@ -436,6 +467,9 @@ export class BudgetLedger {
       ok: true,
       error: null,
       toolCalls: context.toolCalls,
+      subject: request.meta?.subject ?? null,
+      contextChars: contextCharsOf(request),
+      evidenceCount: request.meta?.evidenceCount ?? null,
       createdAt: nowIso(),
     };
     this.#apply(record, totalOf(response.usage), costUsd ?? 0, true);
@@ -472,6 +506,9 @@ export class BudgetLedger {
       ok: false,
       error: error.slice(0, 500),
       toolCalls: 0,
+      subject: request.meta?.subject ?? null,
+      contextChars: contextCharsOf(request),
+      evidenceCount: request.meta?.evidenceCount ?? null,
       createdAt: nowIso(),
     };
     this.#apply(record, totalOf(usage), costUsd ?? 0, false);

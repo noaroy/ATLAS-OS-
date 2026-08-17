@@ -1,0 +1,946 @@
+/**
+ * Schema migrations.
+ *
+ * Migrations are append-only and never edited once released — the `version`
+ * column in `schema_migrations` is the contract. Each entry runs inside a
+ * transaction; a failure leaves the database at the previous version.
+ */
+
+export interface Migration {
+  version: number;
+  name: string;
+  sql: string;
+}
+
+export const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'initial-schema',
+    sql: `
+-- ─── Identity ──────────────────────────────────────────────────────────────
+CREATE TABLE users (
+  id            TEXT PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  role          TEXT NOT NULL CHECK (role IN ('founder','operator','viewer')),
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- Sessions are stored so a token can be revoked immediately.
+CREATE TABLE auth_sessions (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  user_agent TEXT
+);
+CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id);
+CREATE INDEX idx_auth_sessions_expiry ON auth_sessions(expires_at);
+
+-- ─── Runtime settings (mutable configuration) ──────────────────────────────
+CREATE TABLE settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,           -- JSON
+  updated_at TEXT NOT NULL,
+  updated_by TEXT
+);
+
+-- ─── Village geography ─────────────────────────────────────────────────────
+CREATE TABLE buildings (
+  key            TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  department     TEXT NOT NULL,
+  purpose        TEXT NOT NULL,
+  x              REAL NOT NULL,
+  y              REAL NOT NULL,
+  level          INTEGER NOT NULL DEFAULT 1,
+  activity_score REAL NOT NULL DEFAULT 0,
+  status         TEXT NOT NULL DEFAULT 'nominal',
+  unlocked_at    TEXT,
+  sort_order     INTEGER NOT NULL DEFAULT 0
+);
+
+-- ─── Agents ────────────────────────────────────────────────────────────────
+-- Definition and live state share a row: an agent is a singleton actor, and
+-- keeping them together makes the village query a single scan.
+CREATE TABLE agents (
+  key              TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  role             TEXT NOT NULL,
+  tier             TEXT NOT NULL CHECK (tier IN ('director','business','support','evolution')),
+  building         TEXT NOT NULL REFERENCES buildings(key),
+  mission          TEXT NOT NULL,
+  skills           TEXT NOT NULL,    -- JSON array
+  tools            TEXT NOT NULL,    -- JSON array (allow-list)
+  actions          TEXT NOT NULL,    -- JSON array
+  system_prompt    TEXT NOT NULL,
+  model            TEXT,
+  max_steps        INTEGER NOT NULL DEFAULT 8,
+  appearance       TEXT NOT NULL,    -- JSON
+  enabled          INTEGER NOT NULL DEFAULT 1,
+
+  status           TEXT NOT NULL DEFAULT 'available',
+  current_mission  TEXT,
+  current_task     TEXT,
+  current_activity TEXT,
+  location         TEXT NOT NULL,
+  destination      TEXT,
+  last_active_at   TEXT,
+
+  quality_score    REAL NOT NULL DEFAULT 75,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX idx_agents_status ON agents(status);
+CREATE INDEX idx_agents_building ON agents(building);
+
+-- ─── Missions ──────────────────────────────────────────────────────────────
+CREATE TABLE missions (
+  id          TEXT PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  title       TEXT NOT NULL,
+  objective   TEXT NOT NULL,
+  context     TEXT NOT NULL DEFAULT '{}',
+  status      TEXT NOT NULL,
+  priority    TEXT NOT NULL DEFAULT 'normal',
+  created_by  TEXT NOT NULL,
+  plan        TEXT,               -- JSON MissionPlan
+  progress    REAL NOT NULL DEFAULT 0,
+  result      TEXT,               -- JSON MissionResult
+  error       TEXT,
+  tags        TEXT NOT NULL DEFAULT '[]',
+  parent_id   TEXT REFERENCES missions(id) ON DELETE SET NULL,
+  tokens_used INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  started_at  TEXT,
+  finished_at TEXT,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX idx_missions_status ON missions(status);
+CREATE INDEX idx_missions_created ON missions(created_at DESC);
+CREATE INDEX idx_missions_parent ON missions(parent_id);
+
+CREATE TABLE mission_tasks (
+  id           TEXT PRIMARY KEY,
+  mission_id   TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  ref          TEXT NOT NULL,
+  seq          INTEGER NOT NULL,
+  title        TEXT NOT NULL,
+  agent_key    TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  instruction  TEXT NOT NULL,
+  input        TEXT NOT NULL DEFAULT '{}',
+  output       TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  depends_on   TEXT NOT NULL DEFAULT '[]',
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  error        TEXT,
+  tokens_used  INTEGER NOT NULL DEFAULT 0,
+  duration_ms  INTEGER NOT NULL DEFAULT 0,
+  started_at   TEXT,
+  finished_at  TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  UNIQUE (mission_id, ref)
+);
+CREATE INDEX idx_tasks_mission ON mission_tasks(mission_id, seq);
+CREATE INDEX idx_tasks_status ON mission_tasks(status);
+CREATE INDEX idx_tasks_agent ON mission_tasks(agent_key, finished_at DESC);
+
+-- ─── Inter-agent communication ─────────────────────────────────────────────
+CREATE TABLE agent_messages (
+  id              TEXT PRIMARY KEY,
+  mission_id      TEXT REFERENCES missions(id) ON DELETE CASCADE,
+  task_id         TEXT,
+  from_actor      TEXT NOT NULL,
+  to_actor        TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  objective       TEXT NOT NULL,
+  payload         TEXT NOT NULL DEFAULT '{}',
+  expected_output TEXT,
+  status          TEXT NOT NULL DEFAULT 'sent',
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_messages_mission ON agent_messages(mission_id, created_at);
+CREATE INDEX idx_messages_actors ON agent_messages(from_actor, to_actor);
+
+-- ─── Event log ─────────────────────────────────────────────────────────────
+CREATE TABLE events (
+  id         TEXT PRIMARY KEY,
+  type       TEXT NOT NULL,
+  severity   TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  mission_id TEXT,
+  agent_key  TEXT,
+  message    TEXT NOT NULL,
+  payload    TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_events_created ON events(created_at DESC);
+CREATE INDEX idx_events_type ON events(type, created_at DESC);
+CREATE INDEX idx_events_mission ON events(mission_id, created_at DESC);
+CREATE INDEX idx_events_severity ON events(severity, created_at DESC);
+
+-- ─── Memory ────────────────────────────────────────────────────────────────
+CREATE TABLE memory_items (
+  id              TEXT PRIMARY KEY,
+  tier            TEXT NOT NULL CHECK (tier IN ('operational','strategic','business')),
+  kind            TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  metadata        TEXT NOT NULL DEFAULT '{}',
+  tags            TEXT NOT NULL DEFAULT '[]',
+  mission_id      TEXT,
+  agent_key       TEXT,
+  importance      REAL NOT NULL DEFAULT 0.5,
+  confidence      REAL NOT NULL DEFAULT 0.7,
+  access_count    INTEGER NOT NULL DEFAULT 0,
+  last_accessed_at TEXT,
+  expires_at      TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX idx_memory_tier ON memory_items(tier, importance DESC);
+CREATE INDEX idx_memory_mission ON memory_items(mission_id);
+CREATE INDEX idx_memory_expiry ON memory_items(expires_at);
+
+-- Full-text index over title/content/tags. External-content FTS keeps a single
+-- source of truth in memory_items; triggers hold the index in sync.
+CREATE VIRTUAL TABLE memory_fts USING fts5(
+  title, content, tags,
+  content='memory_items',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER memory_ai AFTER INSERT ON memory_items BEGIN
+  INSERT INTO memory_fts(rowid, title, content, tags)
+  VALUES (new.rowid, new.title, new.content, new.tags);
+END;
+CREATE TRIGGER memory_ad AFTER DELETE ON memory_items BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, title, content, tags)
+  VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+END;
+CREATE TRIGGER memory_au AFTER UPDATE ON memory_items BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, title, content, tags)
+  VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+  INSERT INTO memory_fts(rowid, title, content, tags)
+  VALUES (new.rowid, new.title, new.content, new.tags);
+END;
+
+-- ─── Automation ────────────────────────────────────────────────────────────
+CREATE TABLE workflows (
+  id           TEXT PRIMARY KEY,
+  key          TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  external_id  TEXT,
+  webhook_path TEXT,
+  trigger      TEXT NOT NULL,     -- JSON WorkflowTrigger
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  last_run_at  TEXT,
+  last_status  TEXT,
+  run_count    INTEGER NOT NULL DEFAULT 0,
+  next_run_at  TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX idx_workflows_next_run ON workflows(enabled, next_run_at);
+
+CREATE TABLE workflow_runs (
+  id          TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  mission_id  TEXT,
+  status      TEXT NOT NULL,
+  input       TEXT NOT NULL DEFAULT '{}',
+  output      TEXT,
+  error       TEXT,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX idx_workflow_runs ON workflow_runs(workflow_id, started_at DESC);
+
+-- ─── Evolution ─────────────────────────────────────────────────────────────
+CREATE TABLE improvements (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  category    TEXT NOT NULL,
+  rationale   TEXT NOT NULL,
+  evidence    TEXT NOT NULL DEFAULT '{}',
+  change      TEXT NOT NULL,      -- JSON ImprovementChange
+  revert_data TEXT,               -- JSON snapshot for a clean rollback
+  impact      TEXT NOT NULL DEFAULT 'low',
+  risk        TEXT NOT NULL DEFAULT 'low',
+  status      TEXT NOT NULL DEFAULT 'proposed',
+  proposed_by TEXT NOT NULL,
+  decided_by  TEXT,
+  /* Stable hash of the change, so the same proposal is never raised twice. */
+  fingerprint TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  applied_at  TEXT
+);
+CREATE INDEX idx_improvements_status ON improvements(status, created_at DESC);
+CREATE UNIQUE INDEX idx_improvements_open_fingerprint
+  ON improvements(fingerprint) WHERE status IN ('proposed','approved');
+
+-- ─── Operations ────────────────────────────────────────────────────────────
+CREATE TABLE alerts (
+  id           TEXT PRIMARY KEY,
+  level        TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  detail       TEXT NOT NULL DEFAULT '',
+  source       TEXT NOT NULL,
+  acknowledged INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_alerts_open ON alerts(acknowledged, created_at DESC);
+
+CREATE TABLE resource_samples (
+  id              TEXT PRIMARY KEY,
+  cpu_load        REAL NOT NULL,
+  memory_used_mb  REAL NOT NULL,
+  memory_total_mb REAL NOT NULL,
+  db_size_mb      REAL NOT NULL,
+  event_backlog   INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_samples_created ON resource_samples(created_at DESC);
+
+CREATE TABLE backups (
+  id         TEXT PRIMARY KEY,
+  path       TEXT NOT NULL,
+  bytes      INTEGER NOT NULL,
+  trigger    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_backups_created ON backups(created_at DESC);
+`,
+  },
+  {
+    version: 2,
+    name: 'agent-capabilities-and-mission-budget',
+    sql: `
+-- ─── Explicit agent capabilities (replaces tier-based filtering) ───────────
+-- Existing agents keep the ordinary specialist capability; the evolution tier
+-- is corrected below so it is advisory rather than assignable.
+ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '["mission-execution"]';
+
+UPDATE agents
+   SET capabilities = '["system-analysis","advisory"]'
+ WHERE tier = 'evolution';
+
+UPDATE agents
+   SET capabilities = '["mission-execution","system-analysis"]'
+ WHERE key = 'engineer';
+
+-- ─── Per-mission cost control and bounded replanning ───────────────────────
+-- NULL budget means "use the deployment default"; 0 means unlimited.
+ALTER TABLE missions ADD COLUMN token_budget INTEGER;
+ALTER TABLE missions ADD COLUMN replan_count INTEGER NOT NULL DEFAULT 0;
+`,
+  },
+  {
+    version: 3,
+    name: 'constitution-nomenclature-and-skills',
+    sql: `
+-- ─── Article VII — Skills as a first-class registry ───────────────────────
+-- A skill is a reusable technical know-how belonging to the platform. Tools
+-- implement skills; agents declare them; departments draw on them.
+CREATE TABLE skills (
+  key         TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category    TEXT NOT NULL,
+  tools       TEXT NOT NULL DEFAULT '[]',   -- JSON array of tool ids
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX idx_skills_category ON skills(category, key);
+
+-- ─── Nomenclature — "capability" is retired from the vocabulary ───────────
+-- What an agent may be *used for* is a mandate; what it is *able to do* is a
+-- set of skills. Conflating the two under one word made the model unreadable.
+ALTER TABLE agents RENAME COLUMN capabilities TO mandates;
+
+-- Declared skills replace the free-text list and the separate tool allow-list.
+-- The values below reproduce each founding role's previous permissions exactly,
+-- so no agent gains access it did not already have.
+UPDATE agents SET skills = '["memory-recall","memory-curation","web-research"]'                         WHERE key = 'explorer';
+UPDATE agents SET skills = '["memory-recall","memory-curation","scoring"]'                              WHERE key = 'analyst';
+UPDATE agents SET skills = '["memory-recall","memory-curation","web-research","scoring"]'               WHERE key = 'ambassador';
+UPDATE agents SET skills = '["memory-recall","memory-curation","document-production"]'                  WHERE key = 'messenger';
+UPDATE agents SET skills = '["memory-recall","memory-curation","document-production"]'                  WHERE key = 'architect';
+UPDATE agents SET skills = '["memory-recall","memory-curation","mission-inspection"]'                   WHERE key = 'archivist';
+UPDATE agents SET skills = '["system-diagnostics","mission-inspection","workflow-execution","memory-curation"]' WHERE key = 'engineer';
+UPDATE agents SET skills = '["system-diagnostics","mission-inspection","memory-recall","memory-curation"]'      WHERE key = 'evolution-manager';
+
+-- Any agent created before this migration keeps its tools until re-declared
+-- with skills; an empty skill set simply grants nothing.
+UPDATE agents SET skills = '[]'
+ WHERE key NOT IN ('explorer','analyst','ambassador','messenger','architect','archivist','engineer','evolution-manager');
+
+-- The allow-list is now derived from skills, so storing it would invite drift.
+ALTER TABLE agents DROP COLUMN tools;
+`,
+  },
+  {
+    version: 4,
+    name: 'departments-teams-and-business-intelligence',
+    sql: `
+-- ─── Departments and teams (Articles IV and V) ────────────────────────────
+-- A department is a sellable product; everything that distinguishes one from
+-- another is data in these rows, so a new department is a definition rather
+-- than a schema change.
+CREATE TABLE departments (
+  key            TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  tagline        TEXT NOT NULL DEFAULT '',
+  mission        TEXT NOT NULL,
+  building       TEXT NOT NULL,
+  target_types   TEXT NOT NULL DEFAULT '[]',
+  brief_schema   TEXT NOT NULL DEFAULT '{}',
+  playbook       TEXT NOT NULL DEFAULT '[]',
+  scoring_model  TEXT NOT NULL DEFAULT '{}',
+  kpis           TEXT NOT NULL DEFAULT '[]',
+  triggers       TEXT NOT NULL DEFAULT '[]',
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE teams (
+  key            TEXT NOT NULL,
+  department_key TEXT NOT NULL REFERENCES departments(key) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  purpose        TEXT NOT NULL DEFAULT '',
+  stages         TEXT NOT NULL DEFAULT '[]',
+  agent_keys     TEXT NOT NULL DEFAULT '[]',
+  created_at     TEXT NOT NULL,
+  PRIMARY KEY (department_key, key)
+);
+
+-- A mission may belong to a department. Generic objectives keep NULL.
+ALTER TABLE missions ADD COLUMN department_key TEXT REFERENCES departments(key);
+CREATE INDEX idx_missions_department ON missions(department_key, status);
+
+-- ─── Company registry ─────────────────────────────────────────────────────
+-- Shared across missions and departments: a company found while looking for
+-- distributors is the same company later considered as a supplier.
+CREATE TABLE companies (
+  id                 TEXT PRIMARY KEY,
+  canonical_key      TEXT NOT NULL UNIQUE,
+  name               TEXT NOT NULL,
+  legal_name         TEXT,
+  country            TEXT,
+  region             TEXT,
+  city               TEXT,
+  website            TEXT,
+  domain             TEXT,
+  industries         TEXT NOT NULL DEFAULT '[]',
+  size_band          TEXT NOT NULL DEFAULT 'unknown',
+  employees_estimate INTEGER,
+  founded_year       INTEGER,
+  description        TEXT,
+  profile            TEXT NOT NULL DEFAULT '{}',
+  enriched           INTEGER NOT NULL DEFAULT 0,
+  first_seen_at      TEXT NOT NULL,
+  last_verified_at   TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+CREATE INDEX idx_companies_domain  ON companies(domain);
+CREATE INDEX idx_companies_country ON companies(country, name);
+
+CREATE TABLE company_relations (
+  id              TEXT PRIMARY KEY,
+  from_company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  to_company_id   TEXT REFERENCES companies(id) ON DELETE SET NULL,
+  to_name         TEXT,
+  kind            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  confidence      REAL NOT NULL DEFAULT 0.5,
+  evidence_id     TEXT,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_relations_from ON company_relations(from_company_id);
+
+-- ─── Sources and evidence ─────────────────────────────────────────────────
+-- Reliability belongs to the source, not to the claim, so it is stored once
+-- and reused by every piece of evidence citing it.
+CREATE TABLE sources (
+  key         TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  reference   TEXT,
+  reliability REAL NOT NULL DEFAULT 0.5,
+  created_at  TEXT NOT NULL
+);
+
+-- Append-only: a later contradiction is another row, never an edit, so what
+-- ATLAS believed and when survives.
+CREATE TABLE evidence (
+  id             TEXT PRIMARY KEY,
+  company_id     TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  opportunity_id TEXT,
+  mission_id     TEXT,
+  field          TEXT NOT NULL,
+  claim          TEXT NOT NULL,
+  value          TEXT,
+  nature         TEXT NOT NULL,
+  source_key     TEXT NOT NULL,
+  source_ref     TEXT,
+  source_title   TEXT,
+  basis          TEXT,
+  confidence     REAL NOT NULL DEFAULT 0.5,
+  simulated      INTEGER NOT NULL DEFAULT 0,
+  collected_at   TEXT NOT NULL,
+  agent_key      TEXT NOT NULL,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX idx_evidence_company     ON evidence(company_id, field);
+CREATE INDEX idx_evidence_opportunity ON evidence(opportunity_id);
+CREATE INDEX idx_evidence_mission     ON evidence(mission_id);
+
+CREATE TABLE contacts (
+  id          TEXT PRIMARY KEY,
+  company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  role        TEXT,
+  email       TEXT,
+  phone       TEXT,
+  linkedin    TEXT,
+  confidence  REAL NOT NULL DEFAULT 0.5,
+  evidence_id TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX idx_contacts_company ON contacts(company_id);
+
+-- ─── Opportunities ────────────────────────────────────────────────────────
+-- A company considered as a candidate, for one mission, by one department.
+CREATE TABLE opportunities (
+  id              TEXT PRIMARY KEY,
+  mission_id      TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  department_key  TEXT NOT NULL,
+  company_id      TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  target_type     TEXT NOT NULL,
+  stage           TEXT NOT NULL DEFAULT 'discovered',
+  score           REAL,
+  score_detail    TEXT,
+  qualification   TEXT,
+  rank            INTEGER,
+  justification   TEXT,
+  reused_knowledge INTEGER NOT NULL DEFAULT 0,
+  discovered_by   TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  -- One candidate appears once per mission; discovery re-runs are idempotent.
+  UNIQUE (mission_id, company_id)
+);
+CREATE INDEX idx_opportunities_mission ON opportunities(mission_id, stage);
+CREATE INDEX idx_opportunities_rank    ON opportunities(mission_id, rank);
+CREATE INDEX idx_opportunities_company ON opportunities(company_id);
+
+-- ─── Skills the intelligence pipeline needs ───────────────────────────────
+-- Seeding registers the new skills, but an agent already in the database keeps
+-- the skill list it was created with — so the grants are made explicitly here.
+-- Each addition matches the role that already owned that part of the work.
+UPDATE agents
+   SET skills = json_insert(skills, '$[#]', 'company-discovery',
+                                    '$[#]', 'company-enrichment',
+                                    '$[#]', 'evidence-capture')
+ WHERE key = 'explorer'
+   AND NOT EXISTS (SELECT 1 FROM json_each(agents.skills) s WHERE s.value = 'company-discovery');
+
+UPDATE agents
+   SET skills = json_insert(skills, '$[#]', 'opportunity-qualification',
+                                    '$[#]', 'evidence-capture')
+ WHERE key = 'ambassador'
+   AND NOT EXISTS (SELECT 1 FROM json_each(agents.skills) s WHERE s.value = 'opportunity-qualification');
+
+UPDATE agents
+   SET skills = json_insert(skills, '$[#]', 'shortlist-ranking')
+ WHERE key = 'analyst'
+   AND NOT EXISTS (SELECT 1 FROM json_each(agents.skills) s WHERE s.value = 'shortlist-ranking');
+
+-- The generic scoring skill now also provides the opportunity scorer, so the
+-- registry row must be refreshed for agents that already hold it.
+UPDATE skills SET tools = '["score_candidates","score_opportunity"]' WHERE key = 'scoring';
+`,
+  },
+  {
+    version: 5,
+    name: 'human-review-and-contact-discovery',
+    sql: `
+-- ─── Revue humaine ────────────────────────────────────────────────────────
+-- ATLAS produit une shortlist ; un humain décide si elle peut être montrée.
+-- Séparé de la qualification et du score, qui sont les jugements du système :
+-- confondre les deux rendrait impossible de distinguer ce qu'ATLAS a conclu de
+-- ce qu'une personne a accepté.
+ALTER TABLE opportunities ADD COLUMN review TEXT;
+CREATE INDEX idx_opportunities_review ON opportunities(mission_id, stage, rank);
+
+-- La recherche de contacts publics rejoint le savoir-faire de l'Explorer,
+-- qui possède déjà l'enrichissement.
+UPDATE agents
+   SET skills = json_insert(skills, '$[#]', 'contact-discovery')
+ WHERE key = 'explorer'
+   AND NOT EXISTS (SELECT 1 FROM json_each(agents.skills) s WHERE s.value = 'contact-discovery');
+`,
+  },
+  {
+    version: 6,
+    name: 'multi-role-opportunities',
+    sql: `
+-- ─── Une entreprise, plusieurs rôles ──────────────────────────────────────
+-- Une organisation peut réellement être à la fois distributeur et intégrateur.
+-- Elle reste UNE opportunité portant plusieurs rôles : la dupliquer fausserait
+-- l'entonnoir et ferait apparaître deux fois la même entreprise en shortlist.
+ALTER TABLE opportunities ADD COLUMN target_types TEXT NOT NULL DEFAULT '[]';
+
+-- Reprise des missions antérieures : le rôle unique devient un tableau d'un
+-- élément, si bien qu'une ancienne shortlist reste lisible telle quelle.
+UPDATE opportunities
+   SET target_types = json_array(target_type)
+ WHERE target_type IS NOT NULL AND target_type <> '';
+
+ALTER TABLE opportunities DROP COLUMN target_type;
+`,
+  },
+  {
+    version: 7,
+    name: 'economic-safety-and-call-telemetry',
+    sql: `
+-- ─── Préconditions d'étape ────────────────────────────────────────────────
+-- « L'étape amont s'est-elle terminée ? » et « la matière est-elle là ? » sont
+-- deux questions différentes. LIVE #001 a répondu oui à la première et lancé
+-- l'enrichissement sans aucun candidat ; l'agent a improvisé douze minutes.
+-- Une précondition non satisfaite saute l'étape sans le moindre appel au modèle.
+ALTER TABLE mission_tasks ADD COLUMN preconditions TEXT NOT NULL DEFAULT '[]';
+
+-- ─── Comptabilité par appel ───────────────────────────────────────────────
+-- ATLAS n'agrégeait qu'un total de jetons par étape : assez pour constater
+-- qu'une mission avait coûté cher, jamais pour dire quel modèle, quel agent ni
+-- quelle intention l'avaient dépensé — ni pour mesurer le gain d'un cache, la
+-- répartition entrée/sortie étant perdue à l'écriture.
+--
+-- Aucune clé, aucun en-tête, aucun contenu de requête n'est stocké ici : la
+-- table décrit ce qu'un appel a coûté, jamais ce qu'il contenait.
+CREATE TABLE llm_calls (
+  id                 TEXT PRIMARY KEY,
+  mission_id         TEXT REFERENCES missions(id) ON DELETE CASCADE,
+  task_ref           TEXT,
+  agent_key          TEXT,
+  purpose            TEXT NOT NULL,
+  provider           TEXT NOT NULL,
+  model              TEXT NOT NULL,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd           REAL,
+  duration_ms        INTEGER NOT NULL DEFAULT 0,
+  ok                 INTEGER NOT NULL DEFAULT 1,
+  error              TEXT,
+  tool_calls         INTEGER NOT NULL DEFAULT 0,
+  created_at         TEXT NOT NULL
+);
+
+CREATE INDEX idx_llm_calls_mission ON llm_calls(mission_id, created_at);
+CREATE INDEX idx_llm_calls_model ON llm_calls(mission_id, model);
+
+-- ─── Issue de mission ─────────────────────────────────────────────────────
+-- Le statut dit où en est une mission, pas si elle a servi à quelque chose.
+-- LIVE #001 est resté « completed » en ayant coûté 9,15 $ pour zéro candidat.
+-- Reprise des missions antérieures, dans cet ordre de priorité : un budget
+-- épuisé explique mieux une mission vide qu'un simple « aucun résultat ».
+UPDATE missions
+   SET result = json_set(result, '$.outcome',
+         CASE
+           WHEN json_extract(result, '$.budgetExhausted') = 1 THEN 'cancelled-budget'
+           WHEN status = 'failed' THEN 'failed'
+           WHEN (SELECT COUNT(*) FROM opportunities o WHERE o.mission_id = missions.id) = 0
+             THEN 'no-result'
+           ELSE 'success'
+         END)
+ WHERE result IS NOT NULL
+   AND json_valid(result)
+   AND json_extract(result, '$.outcome') IS NULL;
+`,
+  },
+  {
+    version: 8,
+    name: 'tool-call-telemetry',
+    sql: `
+-- ─── Comptabilité des appels d'outils ─────────────────────────────────────
+-- L'événement « agent.tool » est publié en sévérité debug, et le journal
+-- d'événements écarte le debug pour rester lisible. Conséquence : un outil qui
+-- *réussissait* ne laissait aucune trace, et l'économie d'une mission ne
+-- comptait que les échecs — LIVE #001 affichait « 5 appels externes » parce
+-- que les cinq avaient échoué.
+--
+-- Une table dédiée plutôt qu'une promotion du niveau de log : on mesure sans
+-- noyer le journal. Seuls des faits sont conservés — nom, durée, issue — jamais
+-- les arguments ni la réponse.
+CREATE TABLE tool_calls (
+  id          TEXT PRIMARY KEY,
+  mission_id  TEXT REFERENCES missions(id) ON DELETE CASCADE,
+  task_ref    TEXT,
+  agent_key   TEXT,
+  tool        TEXT NOT NULL,
+  category    TEXT,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  error       TEXT,
+  -- Vrai quand l'appel sort d'ATLAS : c'est la part facturée ou dépendante
+  -- d'un tiers, celle qui mérite d'être comptée à part.
+  external    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL
+);
+
+CREATE INDEX idx_tool_calls_mission ON tool_calls(mission_id, created_at);
+CREATE INDEX idx_tool_calls_tool ON tool_calls(mission_id, tool);
+`,
+  },
+  {
+    version: 9,
+    name: 'failed-search-fingerprint',
+    sql: `
+-- ─── Empreinte d'un appel, pour ne pas le refaire ─────────────────────────
+-- LIVE #004 : la recherche a expiré, l'outil a répondu « ne relancez pas la
+-- même recherche, la cause est technique » — et l'agent a relancé deux fois.
+-- Une consigne, même explicite, n'est pas un garde-fou.
+--
+-- L'empreinte permet de refuser un appel identique avant qu'il parte. Elle est
+-- calculée à partir des paramètres significatifs, jamais du texte brut : une
+-- stratégie réellement différente doit rester possible.
+ALTER TABLE tool_calls ADD COLUMN signature TEXT;
+
+-- L'issue métier de l'appel, distincte du simple succès/échec technique :
+-- « rien trouvé » et « n'a pas pu chercher » se corrigent différemment.
+ALTER TABLE tool_calls ADD COLUMN outcome TEXT;
+
+CREATE INDEX idx_tool_calls_signature ON tool_calls(mission_id, tool, signature);
+`,
+  },
+  {
+    version: 10,
+    name: 'mission-decisions',
+    sql: `
+-- ─── Le journal des décisions d'Hermès ────────────────────────────────────
+-- Une mission produit un plan, des étapes et un résultat. Ce qui manquait,
+-- c'est le *pourquoi* : pourquoi ce plan, pourquoi arrêter cette branche,
+-- pourquoi demander une revue humaine. Sans cela, une mission ratée ne se
+-- rejoue qu'en relisant du code, et une mission réussie ne s'explique pas.
+--
+-- Une décision n'est jamais un fait métier. Hermès décide de la stratégie, de
+-- l'ordre, de l'allocation, de la poursuite ou de l'arrêt. Il ne décide pas
+-- qu'une entreprise existe : cela vient d'une source, et evidence_ids relie
+-- la décision aux preuves sur lesquelles elle s'appuie — vide quand il n'y en
+-- a pas, ce qui est en soi une information.
+CREATE TABLE mission_decisions (
+  id           TEXT PRIMARY KEY,
+  mission_id   TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  task_ref     TEXT,
+  -- plan | allocation | continue | stop-branch | replan | escalate | budget | conclude
+  kind         TEXT NOT NULL,
+  decision     TEXT NOT NULL,
+  rationale    TEXT NOT NULL,
+  -- JSON : les identifiants de preuve invoques. Tableau vide quand la decision ne
+  -- s'appuie sur aucune preuve — cas parfaitement légitime pour une décision
+  -- d'organisation, et suspect pour une affirmation métier.
+  evidence_ids TEXT NOT NULL DEFAULT '[]',
+  -- Ce que la décision engageait, au moment où elle a été prise.
+  estimated_cost_usd REAL,
+  impact       TEXT,
+  created_at   TEXT NOT NULL
+);
+
+CREATE INDEX idx_decisions_mission ON mission_decisions(mission_id, created_at);
+
+-- ─── La trace de la revue humaine ─────────────────────────────────────────
+-- L'étape existait, la trace non : on savait qu'une opportunité était
+-- « approved » sans savoir par qui, quand, ni pourquoi.
+ALTER TABLE opportunities ADD COLUMN reviewed_by TEXT;
+ALTER TABLE opportunities ADD COLUMN reviewed_at TEXT;
+ALTER TABLE opportunities ADD COLUMN review_note TEXT;
+`,
+  },
+  {
+    version: 11,
+    name: 'company-data-origin',
+    sql: `
+-- ─── La lignée d'une entreprise ───────────────────────────────────────────
+--
+-- VAL-003, mission réelle, a rendu dix candidats dont quatre fabriqués lors
+-- d'une démonstration cinq jours plus tôt. Le registre de découverte relit la
+-- table \`companies\` et rend tout ce qui correspond au pays et au secteur ; il
+-- n'avait aucun moyen de savoir d'où venait une fiche. Les preuves produites
+-- portaient \`simulated = 0\`, puisque la mission *courante* était réelle : une
+-- donnée fabriquée entrait ainsi dans un résultat réel en se blanchissant au
+-- passage.
+--
+-- Le préfixe « [SIMULÉ] » dans le nom existait déjà. Il n'a rien empêché, et
+-- ne pouvait rien empêcher : c'est un affichage, pas une contrainte. Un nom
+-- se réécrit, se traduit, se tronque — fonder une barrière de sûreté dessus
+-- revient à n'en avoir aucune.
+--
+-- La provenance devient donc une colonne, posée à la création et jamais
+-- recalculée depuis le nom :
+--
+--   live       découverte depuis une source réelle
+--   simulated  fabriquée par le fournisseur de simulation
+--   unknown    indéterminable — interdit en mode réel jusqu'à résolution
+--
+-- \`unknown\` est le défaut délibérément : une fiche dont on ne sait rien ne
+-- doit pas être présumée bonne. Le sens de l'erreur compte — refuser à tort
+-- coûte une question, accepter à tort coûte la confiance dans tout le reste.
+ALTER TABLE companies ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'unknown';
+
+CREATE INDEX idx_companies_origin ON companies(data_origin);
+
+-- ─── Reclassement des données existantes ──────────────────────────────────
+--
+-- Deux règles déterministes, dans cet ordre. Aucune heuristique, aucune
+-- supposition : ce qui ne tombe sous aucune des deux reste \`unknown\`.
+
+-- 1. Le domaine \`.example\` est réservé par la RFC 2606 et ne peut jamais
+--    résoudre. Une fiche qui en porte un n'a pas pu être découverte sur le web
+--    réel — c'est le seul marqueur structurel dont on dispose, et il est sûr.
+UPDATE companies
+   SET data_origin = 'simulated'
+ WHERE website LIKE '%.example%'
+    OR domain  LIKE '%.example%'
+    OR domain  LIKE '%.example';
+
+-- 2. Une fiche dont *toutes* les missions d'origine se sont déclarées réelles
+--    est réelle. Le « toutes » compte : une seule mission non déclarée suffit à
+--    rendre la lignée douteuse, et le doute se classe \`unknown\`.
+UPDATE companies
+   SET data_origin = 'live'
+ WHERE data_origin = 'unknown'
+   AND EXISTS (
+     SELECT 1 FROM evidence e JOIN missions m ON m.id = e.mission_id
+      WHERE e.company_id = companies.id
+        AND m.context LIKE '%"executionMode":"live"%'
+   )
+   AND NOT EXISTS (
+     SELECT 1 FROM evidence e JOIN missions m ON m.id = e.mission_id
+      WHERE e.company_id = companies.id
+        AND m.context NOT LIKE '%"executionMode":"live"%'
+   );
+`,
+  },
+  {
+    version: 12,
+    name: 'memory-data-origin',
+    sql: `
+-- ─── La lignée d'une connaissance ─────────────────────────────────────────
+--
+-- La mémoire est relue par toute mission future *avant* toute recherche. Une
+-- connaissance fabriquée pendant une démonstration y devient, au deuxième
+-- usage, « ce qu'ATLAS sait » : elle n'est plus une sortie de modèle, elle est
+-- un fait établi que le raisonnement suivant tient pour acquis.
+--
+-- C'est la même faille que pour les entreprises, une couche plus haut, et elle
+-- est pire : une fiche fabriquée se repère à son domaine, une phrase fabriquée
+-- ne se repère à rien.
+--
+--   live       tirée de faits réels et sourcés
+--   simulated  produite pendant une démonstration
+--   unknown    provenance indéterminable — interdite en mode réel
+--
+-- \`unknown\` est le défaut, comme pour les entreprises et pour la même raison :
+-- une connaissance dont on ignore l'origine ne doit pas être présumée bonne.
+ALTER TABLE memory_items ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'unknown';
+
+CREATE INDEX idx_memory_origin ON memory_items(data_origin, tier);
+
+-- ─── Reclassement des connaissances existantes ────────────────────────────
+--
+-- Trois règles déterministes, dans cet ordre. Aucune ne lit le texte comme une
+-- preuve : le marqueur « [SIMULÉ] » peut servir de signal d'audit, jamais de
+-- règle de sûreté — il était déjà là pendant tout l'incident.
+
+-- 1. Une connaissance qui cite une entreprise de lignée simulée est simulée,
+--    quelle que soit la mission qui l'a écrite.
+UPDATE memory_items
+   SET data_origin = 'simulated'
+ WHERE EXISTS (
+   SELECT 1 FROM companies c
+    WHERE c.data_origin = 'simulated'
+      AND c.name IS NOT NULL
+      AND instr(memory_items.content, c.name) > 0
+ );
+
+-- 2. Sinon, la mission d'origine décide — si elle s'est déclarée.
+UPDATE memory_items
+   SET data_origin = 'live'
+ WHERE data_origin = 'unknown'
+   AND mission_id IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM missions m
+      WHERE m.id = memory_items.mission_id
+        AND m.context LIKE '%"executionMode":"live"%'
+   );
+
+UPDATE memory_items
+   SET data_origin = 'simulated'
+ WHERE data_origin = 'unknown'
+   AND mission_id IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM missions m
+      WHERE m.id = memory_items.mission_id
+        AND m.context LIKE '%"executionMode":"simulation"%'
+   );
+
+-- 3. Tout le reste — sans mission d'origine, ou mission au mode non déclaré —
+--    reste \`unknown\`. On ne devine pas : une connaissance orpheline est
+--    exactement le cas où l'invention serait la plus tentante et la plus
+--    coûteuse.
+`,
+  },
+  {
+    version: 13,
+    name: 'llm-call-subject-and-context',
+    sql: `
+-- ─── Ce qu'un candidat a coûté ────────────────────────────────────────────
+--
+-- La comptabilité s'arrêtait à l'étape. « L'enrichissement a coûté 0,116 $ »
+-- ne dit pas si dix candidats ont coûté un centime chacun, ou si l'un d'eux en
+-- a mangé neuf — et c'est pourtant la seule décomposition qui permette de
+-- décider quoi arrêter.
+--
+-- VAL-003 l'a payé trois fois : l'entrée de l'enrichissement passait de 5 710
+-- jetons au premier candidat à 32 443 au huitième, 178 584 au total pour cinq
+-- candidats. Le total par étape était visible ; sa forme ne l'était pas. Un
+-- coût qui croît comme le carré du travail ressemble, sur une seule ligne
+-- d'agrégat, à un coût simplement élevé.
+--
+--   subject         sur quoi portait l'appel — un candidat, une unité
+--   context_chars   le poids de ce qui est parti, avant l'appel
+--   evidence_count  les preuves versées au contexte
+--
+-- \`context_chars\` est en caractères, pas en jetons : le découpage appartient
+-- au fournisseur, et l'estimer donnerait un chiffre inventé là où toute la
+-- valeur de la colonne tient à ce qu'elle est mesurée.
+--
+-- \`evidence_count\` accepte NULL, et \`subject\` aussi. Un plan n'injecte aucune
+-- preuve et ne porte sur aucun candidat : \`0\` y affirmerait une mesure qui n'a
+-- pas été faite, quand NULL dit ce qui est — la question ne se posait pas.
+-- Les lignes antérieures à cette migration sont dans le même cas, et le
+-- restent : rien n'est rétro-calculé sur des appels dont on n'a pas gardé le
+-- contexte.
+ALTER TABLE llm_calls ADD COLUMN subject        TEXT;
+ALTER TABLE llm_calls ADD COLUMN context_chars  INTEGER;
+ALTER TABLE llm_calls ADD COLUMN evidence_count INTEGER;
+
+-- Lire « ce qu'a coûté ce candidat » doit rester une requête, pas un parcours.
+CREATE INDEX idx_llm_calls_subject ON llm_calls(mission_id, subject);
+`,
+  },
+];

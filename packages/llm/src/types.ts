@@ -48,6 +48,23 @@ export interface LlmCallMeta {
   agentKey?: string | null;
   /** Nature de l'appel : `plan`, `brief`, `agent-step`, `discovery`… */
   purpose: string;
+  /**
+   * Sur quoi porte l'appel : un candidat, une entreprise, une unité de travail.
+   *
+   * Sans lui, la comptabilité s'arrête à l'étape. « L'enrichissement a coûté
+   * 0,116 $ » ne dit pas si dix candidats ont coûté un centime chacun ou si
+   * l'un d'eux en a mangé neuf. C'est pourtant la seule décomposition qui
+   * permette de décider quoi arrêter.
+   */
+  subject?: string | null;
+  /**
+   * Combien de preuves ont été versées au contexte de cet appel.
+   *
+   * Absent quand la notion n'a pas de sens pour l'appel — un plan n'en injecte
+   * aucune. `0` signifierait « aucune preuve », ce qui est une mesure ; ne pas
+   * savoir n'en est pas une.
+   */
+  evidenceCount?: number | null;
 }
 
 export interface LlmRequest {

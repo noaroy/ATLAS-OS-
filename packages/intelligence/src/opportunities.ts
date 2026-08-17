@@ -370,6 +370,23 @@ export class OpportunityService {
     draft: EvidenceDraft;
   }): Evidence {
     const prepared = prepareEvidence(input.draft, { simulated: this.deps.simulated });
+
+    // La même phrase, déjà écrite sur cette entreprise : on rend l'existante.
+    //
+    // Une copie n'ajoute rien à ce qui est su, mais elle compte dans la force
+    // de la preuve, où la largeur joue : trois exemplaires d'une même source y
+    // ressemblent à trois corroborations. C'est le seul endroit où répéter
+    // change la conclusion, et c'est donc le seul où il faut l'empêcher.
+    //
+    // Rendre l'existante plutôt que lever : l'agent n'a rien fait de mal, il
+    // est simplement repassé sur un candidat déjà documenté.
+    const identical = this.deps.repos.companies.findIdenticalEvidence(
+      input.companyId,
+      prepared.field,
+      prepared.claim,
+    );
+    if (identical) return identical;
+
     const source = this.#ensureSource(input.sourceKind, prepared.sourceRef ?? null);
 
     const evidence = this.deps.repos.companies.appendEvidence({

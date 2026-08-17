@@ -1,7 +1,11 @@
 node_modules/
 dist/
-data/
-!data/.gitkeep
+# Ancré à la racine : sans le « / » initial, ce motif exclut *tout* répertoire
+# nommé « data », à n'importe quelle profondeur — et il a silencieusement exclu
+# `packages/data/`, soit toute la couche de persistance, du dépôt. La base
+# runtime, elle, vit bien à la racine.
+/data/
+!/data/.gitkeep
 .env
 .env.*
 !.env.example

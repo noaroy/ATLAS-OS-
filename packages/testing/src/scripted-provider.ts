@@ -61,7 +61,13 @@ export class ScriptedProvider implements LlmProvider {
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
     const index = this.calls.length;
-    this.calls.push(request);
+    // Le tableau de messages appartient à l'appelant, qui le fait évoluer d'un
+    // tour à l'autre — et le remet à plat lorsqu'une unité de travail se
+    // referme. En garder la référence ferait pointer tous les appels capturés
+    // sur le même objet : un test qui compare deux tours lirait deux fois son
+    // état final et croirait à une constance qui n'existe pas. On fige donc ce
+    // qui a réellement été envoyé.
+    this.calls.push({ ...request, messages: structuredClone(request.messages) });
 
     const reply = await this.#handler({ request, index });
 

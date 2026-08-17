@@ -6,7 +6,7 @@ import type { MemoryService } from '@atlas/memory';
 import type { LlmMessage, LlmProvider, LlmContent, LlmServerTool } from '@atlas/llm';
 import { textOf, toolCallsOf, totalTokens } from '@atlas/llm';
 import type { DiscoveryService, OpportunityService } from '@atlas/intelligence';
-import type { AutomationGateway, ToolContext } from './tool-types.ts';
+import type { AtlasTool, AutomationGateway, ToolContext } from './tool-types.ts';
 import type { ToolRegistry } from './tools.ts';
 
 /**
@@ -98,6 +98,54 @@ function stableJson(value: unknown): string {
  * because every turn must be observable: each tool call becomes an event, a
  * village journey, and a line in the mission audit trail.
  */
+
+/**
+ * Les unités de travail closes par ce tour d'outils.
+ *
+ * Un outil `boundary` qui échoue ne clôt rien : l'unité n'est pas terminée, et
+ * effacer le contexte ferait perdre à l'agent ce qu'il venait d'apprendre en
+ * essayant.
+ */
+/**
+ * Combien de preuves ces appels versent au contexte.
+ *
+ * Lit la charge utile plutôt que le résultat : c'est ce que l'agent a envoyé
+ * qui pèse dans le contexte du tour suivant, et qui y restera tant qu'aucune
+ * frontière ne se ferme.
+ */
+function evidenceCountIn(calls: Array<{ input: unknown }>): number {
+  let total = 0;
+  for (const call of calls) {
+    const evidence = (call.input as { evidence?: unknown } | null)?.evidence;
+    if (Array.isArray(evidence)) total += evidence.length;
+  }
+  return total;
+}
+
+function boundariesClosedIn(
+  calls: Array<{ id: string; name: string; input: unknown }>,
+  tools: AtlasTool[],
+  results: LlmContent[],
+): string[] {
+  const closed: string[] = [];
+  for (const call of calls) {
+    const tool = tools.find((t) => t.name === call.name);
+    if (!tool?.boundary) continue;
+    const result = results.find(
+      (r): r is Extract<LlmContent, { type: 'tool_result' }> =>
+        r.type === 'tool_result' && r.toolUseId === call.id,
+    );
+    if (!result || result.isError) continue;
+
+    const subject =
+      (call.input as { opportunityId?: string; name?: string } | null)?.opportunityId ??
+      (call.input as { name?: string } | null)?.name ??
+      '(sans référence)';
+    closed.push(`${call.name} → ${subject}`);
+  }
+  return closed;
+}
+
 export class AgentRuntime {
   #log: Logger;
 
@@ -158,6 +206,26 @@ export class AgentRuntime {
     let consecutiveToolFailures = 0;
     let stoppedEarly: string | null = null;
 
+    /**
+     * Les unités de travail déjà closes, en une ligne chacune.
+     *
+     * C'est tout ce qui subsiste d'un candidat enrichi : de quoi ne pas le
+     * refaire, et rien de plus. Le détail est en base, où il a sa place.
+     */
+    const completedUnits: string[] = [];
+    // Cette étape itère-t-elle sur des unités indépendantes ? Si oui, chaque
+    // appel porte sur l'une d'elles, et la comptabilité peut le dire. Sinon,
+    // parler de « sujet » inventerait un découpage qui n'existe pas.
+    const iterates = tools.some((t) => t.boundary);
+    /**
+     * Les preuves presentes dans le contexte au moment de l'appel.
+     *
+     * C'est la grandeur qui montre l'isolement à l'œuvre : sans lui elle croît
+     * avec le nombre de candidats déjà traités ; avec lui elle retombe à zéro à
+     * chaque frontière franchie.
+     */
+    let evidenceInContext = 0;
+
     for (let step = 1; step <= agent.maxSteps; step++) {
       if (input.signal?.aborted) throw new AtlasError('TIMEOUT', 'Task cancelled');
 
@@ -189,6 +257,12 @@ export class AgentRuntime {
               taskRef: task.ref,
               agentKey: agent.key,
               purpose: 'agent-step',
+              // L'ordinal, pas le nom : le candidat traité n'est connu qu'une
+              // fois l'outil appelé, et une comptabilité ne peut pas attendre
+              // le résultat de ce qu'elle mesure. La position dans la séquence,
+              // elle, est certaine avant de partir.
+              subject: iterates ? `${task.ref}#${completedUnits.length + 1}` : null,
+              evidenceCount: iterates ? evidenceInContext : null,
             },
             signal,
           }),
@@ -289,6 +363,28 @@ export class AgentRuntime {
       }
 
       messages.push({ role: 'user', content: results });
+
+      // ── Frontière d'unité de travail ────────────────────────────────────
+      //
+      // Un outil marqué `boundary` clôt un travail indépendant. Ce qui a servi
+      // à y arriver — pages récupérées, recherches, brouillons — n'aide en rien
+      // l'unité suivante ; le renvoyer la fait seulement payer plus cher et
+      // raisonner sur un contexte plus bruyant.
+      //
+      // VAL-003 l'a mesuré : l'entrée de l'enrichissement passait de 5 710
+      // jetons au premier candidat à 32 443 au huitième, soit 178 584 pour
+      // cinq candidats. Le coût suivait le carré du nombre de candidats quand
+      // le travail, lui, restait proportionnel.
+      evidenceInContext += evidenceCountIn(calls);
+
+      const closed = boundariesClosedIn(calls, tools, results);
+      if (closed.length > 0) {
+        completedUnits.push(...closed);
+        this.#resetToBoundary(messages, completedUnits, agent);
+        // Le contexte vient d'être remis à plat : les preuves qui y figuraient
+        // sont parties avec lui.
+        evidenceInContext = 0;
+      }
 
       // ── Contexte borné ──────────────────────────────────────────────────
       // Chaque tour rejoue tout ce qui précède. LIVE #005 a produit un appel à
@@ -566,6 +662,56 @@ export class AgentRuntime {
    * Un agent n'a pas besoin de relire trois pages web pour se souvenir qu'il
    * les a lues. Il a besoin de savoir qu'il les a lues, et ce qu'il en a tiré.
    */
+  /**
+   * Remet le contexte à propre après une unité de travail close.
+   *
+   * Ne subsistent que le briefing immuable — la mission, les critères, ce que
+   * l'agent doit produire — et un relevé d'une ligne par unité terminée. Le
+   * détail de chaque unité est en base, où il a sa place ; le renvoyer au
+   * modèle ne lui apprend rien qu'il puisse encore utiliser.
+   *
+   * C'est ce qui rend le coût proportionnel au nombre de candidats plutôt qu'à
+   * son carré : la taille du contexte du dixième candidat ne dépend plus des
+   * neuf précédents.
+   */
+  #resetToBoundary(messages: LlmMessage[], completed: string[], agent: AgentDefinition): void {
+    const before = messages.length;
+
+    const reset: LlmMessage[] = [
+      // Le briefing d'origine, inchangé : c'est la seule chose immuable dont
+      // l'agent a besoin d'un bout à l'autre.
+      messages[0]!,
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '# Travail déjà terminé',
+              `${completed.length} unité(s) close(s). Le détail est enregistré ; vous n'avez pas à le relire.`,
+              '',
+              // Borné : un relevé qui grandit sans fin recréerait exactement le
+              // problème qu'il résout, en plus lent.
+              ...completed.slice(-25).map((line) => `- ${line}`),
+              '',
+              'Passez à la suivante, ou concluez si tout est traité.',
+            ].join('\n'),
+          },
+        ],
+      },
+    ];
+
+    messages.length = 0;
+    messages.push(...reset);
+
+    this.#log.debug('contexte remis à propre après une unité close', {
+      agent: agent.key,
+      completed: completed.length,
+      before,
+      after: reset.length,
+    });
+  }
+
   #compactIfNeeded(messages: LlmMessage[], agent: AgentDefinition): void {
     const ceiling = this.deps.config.search.discoveryMaxContextTokens;
     if (ceiling <= 0 || messages.length <= 3) return;

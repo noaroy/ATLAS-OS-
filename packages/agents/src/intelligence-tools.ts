@@ -357,6 +357,11 @@ const enrichCompany: AtlasTool<{
     'ATLAS caps the confidence of anything you mark as inferred and refuses an unsourced observation, ' +
     'so state honestly how you know each thing.',
   category: 'research',
+  // Un candidat enrichi est une unité de travail close. Ce qui a servi à y
+  // arriver — pages récupérées, recherches, brouillons — n'aide en rien le
+  // candidat suivant, et le lui renvoyer faisait croître l'entrée de 5 710 à
+  // 32 443 jetons entre le premier appel et le huitième.
+  boundary: true,
   inputSchema: {
     type: 'object',
     properties: {

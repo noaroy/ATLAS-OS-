@@ -18,6 +18,37 @@ relire, pas des envois programmés.
 | **Formats** | Une page HTML à lire, un CSV à importer |
 | **Coût de production** | 0,12 $ de plafond machine, plus la relecture humaine |
 
+### Une tension mesurée, à trancher avant la première vente
+
+Projection tirée des appels réellement facturés (`node scripts/estimate-revenue.mjs`) :
+
+| Prospects livrés | Attendu | Pire cas | Tient dans 0,12 $ ? |
+|---|---|---|---|
+| 3 | 0,0638 $ | 0,0957 $ | oui |
+| 4 | 0,0814 $ | 0,1200 $ | à la limite |
+| 5 | 0,0991 $ | 0,1444 $ | seulement si l'attendu se confirme |
+
+« Attendu » projette avec le premier appel de chaque étape — le seul dont le
+contexte ne portait rien d'accumulé, donc le seul représentatif d'après le
+correctif d'isolement. « Pire cas » projette avec la moyenne historique, qui
+porte encore l'accumulation supprimée.
+
+**Conséquence commerciale :** 0,12 $ achète 3 à 4 prospects de façon sûre, et 5
+seulement si le correctif tient ce que la mesure hors ligne annonce. Promettre
+cinq fermement avant de l'avoir constaté une fois est un risque de non-tenue dès
+la première vente.
+
+Deux issues, au choix :
+
+- **Annoncer « 3 à 5 prospects »** et livrer ce que le marché offre. Honnête tout
+  de suite, un peu moins vendeur.
+- **Porter le plafond à 0,15 $** et garder la promesse de cinq. La marge reste
+  très large à 49 €, et le vrai coût de ce produit est la relecture humaine, pas
+  les appels au modèle.
+
+La seconde option est la plus cohérente avec l'objectif — mais elle modifie un
+plafond que vous avez fixé, donc elle vous revient.
+
 Le prix de lancement est bas et assumé comme tel : il achète les premiers
 retours clients, pas une marge. Ce qu'il faut apprendre de ces premières ventes,
 c'est si le livrable déclenche réellement une prise de contact — pas s'il est

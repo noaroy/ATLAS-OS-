@@ -95,3 +95,119 @@ describe('le plafond de dépense est un mur', () => {
     assert.doesNotThrow(() => closed.authorise(request(40_000)));
   });
 });
+
+/**
+ * Le plafond, éprouvé sur toute la plage qu'ATLAS emploie.
+ *
+ * Un seul montant testé ne prouve rien : la faille venait de ce que la
+ * projection touchait *toujours* le plafond, quel qu'il soit. Ce qu'il faut
+ * démontrer est une propriété — aucune séquence d'appels ne peut le franchir —
+ * pas un cas particulier.
+ */
+describe('le plafond tient à tous les montants employés', () => {
+  const CAPS = [0.01, 0.02, 0.04, 0.15];
+  /** Des tailles d'entrée qui vont du bref au contexte accumulé. */
+  const SIZES = [800, 4_000, 12_000, 30_000];
+
+  for (const cap of CAPS) {
+    for (const size of SIZES) {
+      test(`plafond ${cap.toFixed(2)} $ · entrée ~${size} jetons`, () => {
+        const ledger = new BudgetLedger();
+        ledger.open('mis_test', { ...DEFAULT_BUDGET_LIMITS, maxMissionCostUsd: cap });
+
+        let total = 0;
+        let refused = false;
+        // Vingt tours : bien plus qu'une mission réelle n'en fait, pour que
+        // l'arrêt vienne du plafond et non de la fin de la boucle.
+        for (let turn = 0; turn < 20; turn++) {
+          const call = request(size * 4);
+          let planned: number;
+          try {
+            ledger.authorise(call);
+            planned = ledger.cappedMaxTokens(call);
+          } catch {
+            refused = true;
+            break;
+          }
+          // Le fournisseur honore le plafond de sortie qu'on lui donne : c'est
+          // le contrat de `maxTokens`, et l'ignorer testerait autre chose.
+          const record = ledger.record(call, response(size, planned), {
+            provider: 'anthropic',
+            durationMs: 5,
+            toolCalls: 0,
+          });
+          total += record.costUsd ?? 0;
+        }
+
+        assert.ok(refused, `le registre doit finir par refuser (total ${total.toFixed(5)} $)`);
+        assert.ok(
+          total <= cap,
+          `plafond ${cap} $ franchi : ${total.toFixed(5)} $ dépensés`,
+        );
+      });
+    }
+  }
+
+  test('la sortie autorisée rétrécit à mesure que le budget se consomme', () => {
+    // Un plafond serré, pour que le budget morde avant le plafond de sortie
+    // par appel : à budget large, `maxTokens` reste la contrainte active et le
+    // test ne mesurerait rien.
+    const ledger = new BudgetLedger();
+    ledger.open('mis_test', { ...DEFAULT_BUDGET_LIMITS, maxMissionCostUsd: 0.01 });
+
+    const call = request(4_000 * 4);
+    const first = ledger.cappedMaxTokens(call);
+    assert.ok(first < 2500, `le budget doit déjà brider la sortie : ${first}`);
+
+    ledger.record(call, response(4_000, first), { provider: 'anthropic', durationMs: 5, toolCalls: 0 });
+    const second = ledger.cappedMaxTokens(call);
+
+    assert.ok(second < first, `la sortie doit rétrécir : ${first} puis ${second}`);
+  });
+
+  test('un refus n’est pas réessayable', () => {
+    // Réessayer après un refus coûterait précisément ce que le refus vient
+    // d'éviter. Le code d'erreur le dit, pour que rien en amont ne le rejoue.
+    const ledger = new BudgetLedger();
+    ledger.open('mis_test', { ...DEFAULT_BUDGET_LIMITS, maxMissionCostUsd: 0.0001 });
+
+    assert.throws(
+      () => ledger.authorise(request(40_000)),
+      (err: unknown) => {
+        const e = err as { code?: string; retryable?: boolean };
+        assert.equal(e.code, 'BUDGET_EXCEEDED');
+        assert.notEqual(e.retryable, true, 'un refus budgétaire ne se réessaie pas');
+        return true;
+      },
+    );
+  });
+
+  test('l’estimation d’entrée est conservatrice, jamais optimiste', () => {
+    // Une garde bâtie sur un comptage optimiste se franchit exactement quand
+    // elle compte le plus. On vérifie donc que le refus arrive *avant* que le
+    // coût réel n'atteigne le plafond, même si l'entrée réelle dépasse
+    // l'estimation de 20 %.
+    const ledger = new BudgetLedger();
+    ledger.open('mis_test', { ...DEFAULT_BUDGET_LIMITS, maxMissionCostUsd: 0.02 });
+
+    let total = 0;
+    for (let turn = 0; turn < 20; turn++) {
+      const call = request(6_000 * 4);
+      let planned: number;
+      try {
+        ledger.authorise(call);
+        planned = ledger.cappedMaxTokens(call);
+      } catch {
+        break;
+      }
+      // L'entrée réellement facturée dépasse l'estimation d'un cinquième.
+      total +=
+        ledger.record(call, response(Math.round(6_000 * 1.2), planned), {
+          provider: 'anthropic',
+          durationMs: 5,
+          toolCalls: 0,
+        }).costUsd ?? 0;
+    }
+    assert.ok(total <= 0.02, `plafond franchi malgré la marge : ${total.toFixed(5)} $`);
+  });
+});

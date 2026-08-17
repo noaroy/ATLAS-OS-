@@ -30,3 +30,15 @@ export {
   type MissionReport,
   type Measured,
 } from './mission-report.ts';
+
+export {
+  validateStagePostcondition,
+  contractFor,
+  STAGE_CONTRACTS,
+  type StageContract,
+  type StageCheck,
+  type StageCheckContext,
+  type PostconditionResult,
+} from './stage-contract.ts';
+
+export { DeterministicPipeline, type PipelineDeps, type StageOutcome } from './pipeline.ts';

@@ -122,7 +122,11 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   };
   const settings = () => repos.settings.runtime(defaults);
 
-  const memory = new MemoryService(repos.memory, events, logger);
+  // La mémoire reçoit le mode : en réel, elle ne rend au raisonnement que des
+  // connaissances de lignée établie. Sans cela, une leçon écrite pendant une
+  // démonstration entre dans le prompt d'une mission réelle et y devient une
+  // prémisse — la mémoire est relue avant toute recherche.
+  const memory = new MemoryService(repos.memory, events, logger, config.llm.mode);
 
   // ─── Sûreté économique ──────────────────────────────────────────────────
   // Le registre est branché une seule fois, ici, et le provider brut n'est

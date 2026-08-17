@@ -120,6 +120,11 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
   //
   // Une conclusion réelle ne peut donc pas reposer sur une entité de lignée
   // `simulated` ou `unknown`, quel que soit le drapeau des preuves.
+  // La mémoire écrite par cette mission : si une connaissance non-`live` en est
+  // sortie, c'est qu'une prémisse douteuse a traversé le raisonnement.
+  const missionMemory = mode === 'live' ? repos.memory.forMission(missionId) : [];
+  const tainted = missionMemory.filter((m) => m.dataOrigin !== 'live');
+
   const contaminated =
     mode === 'live'
       ? opportunities.filter((o) => {
@@ -200,6 +205,22 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
               .map((o) => repos.companies.get(o.companyId)?.name ?? o.companyId)
               .slice(0, 3)
               .join(', ')}`,
+      foundational: true,
+      required: true,
+    },
+    {
+      // Une mémoire non-`live` produite par une mission réelle signale qu'une
+      // conclusion métier s'est appuyée sur une prémisse dont la provenance
+      // n'est pas établie. La barrière de lecture devrait l'avoir empêché ;
+      // ceci est le filet qui le vérifie après coup.
+      label: 'aucune mémoire de lignée douteuse',
+      met: tainted.length === 0,
+      observed:
+        mode === 'live'
+          ? tainted.length === 0
+            ? `${missionMemory.length} connaissance(s) de lignée réelle`
+            : `${tainted.length} connaissance(s) ${[...new Set(tainted.map((m) => m.dataOrigin))].join('/')}`
+          : 'mode simulation — lignée non exigée',
       foundational: true,
       required: true,
     },

@@ -22,6 +22,18 @@ export interface RememberInput {
   agentKey?: AgentKey | null;
   importance?: number;
   confidence?: number;
+  /**
+   * Ce qui étaye cette connaissance, quand elle prétend décrire le monde.
+   *
+   * Une mémoire de palier `business` affirme un fait de marché ; sans preuve
+   * sourcée derrière, elle n'est qu'une sortie de modèle promue au rang de
+   * fait — et relue comme tel par toutes les missions suivantes.
+   *
+   * Les paliers `operational` et `strategic` n'en ont pas besoin : « cette
+   * stratégie de recherche n'a rien donné » est une leçon sur nous, pas une
+   * affirmation sur le monde.
+   */
+  evidenceIds?: string[];
 }
 
 export interface MemoryRetention {
@@ -46,13 +58,28 @@ const OPERATIONAL_TTL_MS = 1000 * 60 * 60 * 24 * 30;
  */
 export class MemoryService {
   #log: Logger;
+  /** Combien de connaissances la barrière a écartées, pour la télémétrie. */
+  #excluded = 0;
 
   constructor(
     private readonly repo: MemoryRepository,
     private readonly events: EventBus,
     logger: Logger,
+    /**
+     * Le mode d'exécution du déploiement.
+     *
+     * Passé à la construction, comme pour le registre d'entreprises : une
+     * barrière qui dépend d'un paramètre d'appel est une barrière qu'un
+     * appelant peut oublier.
+     */
+    private readonly mode: 'live' | 'simulation' = 'live',
   ) {
     this.#log = logger.child({ scope: 'memory' });
+  }
+
+  /** Ce que la barrière a écarté depuis le démarrage. Lecture seule. */
+  get excludedCount(): number {
+    return this.#excluded;
   }
 
   /**
@@ -64,6 +91,31 @@ export class MemoryService {
     const tier = input.tier ?? inferTier(input.kind);
     const importance = input.importance ?? defaultImportance(input.kind);
 
+    // ── La barrière d'écriture ────────────────────────────────────────────
+    //
+    // La lignée vient du déploiement, jamais de l'appelant — exactement comme
+    // le drapeau `simulated` des preuves. Un agent ne doit pas pouvoir
+    // déclarer que sa production est réelle.
+    //
+    // Et une connaissance *métier* écrite en mode réel n'obtient la lignée
+    // `live` que si des preuves l'étayent. Sans elles, elle reste `unknown` :
+    // une conclusion de modèle sans source n'est pas un fait de marché, et la
+    // mémoriser comme tel est précisément la façon dont une invention devient
+    // indétectable au deuxième usage.
+    //
+    // Les leçons opérationnelles et stratégiques échappent à cette exigence :
+    // elles parlent de nous, pas du monde. « Cette stratégie de recherche n'a
+    // rien produit lors de la mission X » est vrai sans qu'aucune source
+    // externe ait à l'attester.
+    const claimsAboutTheWorld = tier === 'business';
+    const backed = (input.evidenceIds?.length ?? 0) > 0;
+    const dataOrigin: MemoryItem['dataOrigin'] =
+      this.mode === 'simulation'
+        ? 'simulated'
+        : claimsAboutTheWorld && !backed
+          ? 'unknown'
+          : 'live';
+
     const existing = this.repo.findSimilar(tier, input.title);
     if (existing) {
       const reinforced = Math.min(1, existing.importance + 0.08);
@@ -74,12 +126,22 @@ export class MemoryService {
         tags: dedupe([...existing.tags, ...(input.tags ?? [])]),
         metadata: { ...existing.metadata, ...(input.metadata ?? {}) },
       });
-      this.#log.debug('memory reinforced', { id: existing.id, title: input.title });
+      // `update` ne touche pas à `data_origin`, et `...existing` la conserve :
+      // renforcer une connaissance ne change pas d'où elle vient. Une mission
+      // réelle qui recroise une leçon écrite en démonstration ne doit pas
+      // pouvoir la promouvoir au rang de fait réel — c'est le blanchiment que
+      // cette colonne existe pour empêcher, un étage au-dessus des entreprises.
+      this.#log.debug('memory reinforced', {
+        id: existing.id,
+        title: input.title,
+        origin: existing.dataOrigin,
+      });
       return { ...existing, content: input.content, importance: reinforced };
     }
 
     const item = this.repo.insert({
       tier,
+      dataOrigin,
       kind: input.kind,
       title: input.title.slice(0, 200),
       content: input.content,
@@ -106,9 +168,38 @@ export class MemoryService {
     return item;
   }
 
-  /** Ranked recall. Marks hits as accessed so useful knowledge gains weight. */
+  /**
+   * Ranked recall. Marks hits as accessed so useful knowledge gains weight.
+   *
+   * ── La barrière de lecture ──────────────────────────────────────────────
+   *
+   * En mode réel, seule une connaissance de lignée `live` est rendue au
+   * raisonnement. `simulated` et `unknown` sont écartées sans distinction.
+   *
+   * C'est ici que la barrière compte le plus, et pas dans l'écriture : la
+   * mémoire est relue *avant* toute recherche, et une connaissance fabriquée
+   * qui entre dans un prompt n'est plus une sortie de modèle — elle est une
+   * prémisse que le raisonnement suivant tient pour acquise. Une fiche
+   * d'entreprise fabriquée se repère à son domaine ; une phrase fabriquée ne
+   * se repère à rien.
+   *
+   * Ce qui est écarté est compté et journalisé — l'audit doit pouvoir voir
+   * qu'une connaissance a été retenue à la porte, sans que son contenu entre.
+   */
   recall(query: MemoryQuery): MemoryHit[] {
-    const hits = this.repo.search(query);
+    const raw = this.repo.search(query);
+    const hits = this.mode === 'live' ? raw.filter((h) => h.dataOrigin === 'live') : raw;
+
+    const excluded = raw.length - hits.length;
+    if (excluded > 0) {
+      this.#excluded += excluded;
+      this.#log.debug('connaissances écartées par la barrière de lignée', {
+        excluded,
+        kept: hits.length,
+        origins: [...new Set(raw.filter((h) => h.dataOrigin !== 'live').map((h) => h.dataOrigin))],
+      });
+    }
+
     if (hits.length > 0) {
       this.repo.markAccessed(hits.map((h) => h.id));
       this.events.publish({

@@ -276,7 +276,7 @@ describe('le socle commun ne se contourne pas', () => {
     });
 
     const foundation = verdict.criteria.filter((c) => c.foundational);
-    assert.equal(foundation.length, 6, 'les six critères du socle doivent apparaître');
+    assert.equal(foundation.length, 7, 'les sept critères du socle doivent apparaître');
     for (const c of foundation) assert.equal(c.required, true);
   });
 });

@@ -254,3 +254,69 @@ describe('non-régression — données simulées persistantes puis mission réel
     assert.equal(result.candidates.length, 0);
   });
 });
+
+/**
+ * Les tables dérivées : la provenance se remonte, elle ne se duplique pas.
+ *
+ * `opportunities`, `contacts` et `company_relations` n'ont pas de colonne de
+ * lignée, et ne doivent pas en avoir : chacune pend à une `company`, dont la
+ * lignée fait foi. Dupliquer la colonne créerait deux vérités à maintenir, et
+ * c'est le second exemplaire qui dérive.
+ *
+ * Ce que ces tests protègent, c'est que le chemin de remontée existe vraiment
+ * — une dérivation qu'on ne peut pas calculer ne protège rien.
+ */
+describe('tables dérivées — la lignée se remonte jusqu’à company', () => {
+  test('une opportunité remonte à la lignée de son entreprise', () => {
+    const simulated = knownCompany('Fabriquée GmbH', 'simulated', { domain: 'sim-9000.example' });
+    const mission = repos.missions.create({
+      title: 'test',
+      objective: 'o'.repeat(40),
+      createdBy: 'test',
+    });
+    const { opportunity } = repos.opportunities.register({
+      missionId: mission.id,
+      companyId: simulated.id,
+      departmentKey: 'business-expansion',
+      targetTypes: ['distributor'],
+      discoveredBy: 'test',
+    });
+
+    const resolved = repos.companies.get(
+      repos.opportunities.get(opportunity.id)!.companyId,
+    );
+    assert.equal(resolved!.dataOrigin, 'simulated', 'la remontée doit être calculable');
+  });
+
+  test('un contact remonte à la lignée de son entreprise', () => {
+    const simulated = knownCompany('Fabriquée GmbH', 'simulated', { domain: 'sim-9001.example' });
+    const contact = repos.companies.addContact({
+      companyId: simulated.id,
+      name: 'Personne Inventée',
+      role: null,
+      email: null,
+      phone: null,
+      linkedin: null,
+      confidence: 0.5,
+      evidenceId: null,
+    } as never);
+
+    const resolved = repos.companies.get((contact as { companyId: string }).companyId);
+    assert.equal(resolved!.dataOrigin, 'simulated');
+  });
+
+  test('aucune de ces tables ne duplique la colonne', () => {
+    // Une seconde copie de la vérité finirait par diverger de la première, et
+    // c'est toujours la copie qu'on lit au mauvais moment.
+    for (const table of ['opportunities', 'contacts', 'company_relations']) {
+      const columns = repos.db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all()
+        .map((c) => (c as { name: string }).name);
+      assert.ok(
+        !columns.includes('data_origin'),
+        `${table} ne doit pas dupliquer la lignée : elle se remonte via company`,
+      );
+    }
+  });
+});

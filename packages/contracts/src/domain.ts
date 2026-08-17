@@ -1,3 +1,4 @@
+import type { DataOrigin } from './business.ts';
 /**
  * Core domain vocabulary of ATLAS OS.
  *
@@ -452,6 +453,15 @@ export interface MemoryItem {
   tags: string[];
   missionId: MissionId | null;
   agentKey: AgentKey | null;
+  /**
+   * La lignée de cette connaissance. Posée à l'écriture, jamais réévaluée.
+   *
+   * La mémoire est relue avant toute recherche : une connaissance fabriquée
+   * pendant une démonstration devient, au deuxième usage, « ce qu'ATLAS sait ».
+   * Une fiche fabriquée se repère à son domaine ; une phrase fabriquée ne se
+   * repère à rien — d'où la colonne.
+   */
+  dataOrigin: DataOrigin;
   /** 0..1 — governs retention, promotion, and recall ranking. */
   importance: number;
   confidence: number;

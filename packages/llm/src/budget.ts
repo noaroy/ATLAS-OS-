@@ -78,6 +78,31 @@ export function proportionalCallsPerStep(candidates: number, maxCallsPerStep: nu
   return Math.min(maxCallsPerStep, Math.max(4, candidates * 2));
 }
 
+/**
+ * De combien l'estimation d'entrée peut se tromper, et dans quel sens.
+ *
+ * `estimateInputTokens` compte des caractères et divise par quatre. C'est une
+ * approximation raisonnable, mais elle sous-estime — le découpage réel produit
+ * plus de jetons sur du texte structuré, du JSON, de l'allemand. Une garde
+ * économique bâtie sur une estimation optimiste n'est pas une garde.
+ *
+ * SALVAGE-001 : entrée estimée puis facturée 13 119 jetons sur le dernier
+ * appel, pour un plafond que la projection déclarait tenu.
+ */
+const INPUT_ESTIMATE_SAFETY = 1.2;
+
+/**
+ * La part du budget restant qu'un seul appel ne peut pas planifier de dépenser.
+ *
+ * 15 % : assez pour qu'un appel dont l'entrée a été sous-estimée reste sous le
+ * plafond, assez peu pour ne pas gaspiller le budget d'une petite mission.
+ *
+ * Sans cette réserve, chaque appel est planifié pour consommer exactement tout
+ * ce qui reste, et le garde de `authorise` compare alors le plafond à
+ * lui-même — il ne peut plus refuser.
+ */
+const COST_RESERVE = 0.15;
+
 /** Une ligne de comptabilité : un appel, ce qu'il a coûté, ce qu'il servait. */
 export interface LlmCallRecord {
   missionId: string | null;
@@ -260,8 +285,17 @@ export class BudgetLedger {
     // L'entrée est due quoi qu'il arrive : elle est payée avant que le premier
     // jeton de sortie n'existe. Ce qui reste après elle est le seul budget
     // réellement disponible pour la réponse.
-    const inputCost = (estimateInputTokens(request) / 1_000_000) * pricing.input;
-    const forOutput = remaining - inputCost;
+    const inputCost =
+      ((estimateInputTokens(request) * INPUT_ESTIMATE_SAFETY) / 1_000_000) * pricing.input;
+    // La réserve, et c'est elle qui fait du plafond un mur.
+    //
+    // Sans elle, chaque appel est planifié pour consommer *exactement* tout ce
+    // qui reste. Le garde de `authorise` compare alors « dépensé + projeté »
+    // au plafond, c'est-à-dire le plafond au plafond : il ne peut pas refuser,
+    // par construction. Les deux mécanismes s'annulaient, et SALVAGE-001 a
+    // dépensé 0,0597 $ sur un plafond de 0,04 $ sans qu'un seul refus soit
+    // consigné.
+    const forOutput = remaining * (1 - COST_RESERVE) - inputCost;
     if (forOutput <= 0) return 0;
 
     return Math.floor((forOutput / pricing.output) * 1_000_000);
@@ -381,7 +415,14 @@ export class BudgetLedger {
     }
 
     if (limits.maxMissionCostUsd > 0) {
-      const worstCost = worstCaseCostUsd(request.model, estimatedInput, plannedOutput);
+      // L'entrée est majorée de la marge d'erreur de son estimation : un
+      // plafond calculé sur un comptage optimiste se franchit exactement quand
+      // il compte le plus.
+      const worstCost = worstCaseCostUsd(
+        request.model,
+        Math.ceil(estimatedInput * INPUT_ESTIMATE_SAFETY),
+        plannedOutput,
+      );
       // Un modèle sans tarif connu ne peut pas être plafonné en dollars ; le
       // plafond en jetons reste, lui, toujours applicable.
       if (worstCost !== null && spend.costUsd + worstCost > limits.maxMissionCostUsd) {

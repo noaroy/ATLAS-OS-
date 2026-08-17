@@ -36,6 +36,15 @@ const SCORING_MODEL: ScoringModel = {
   dimensions: [
     { key: 'fit', label: 'Adéquation au profil', weight: 0.6, description: 'Correspondance à la cible.' },
     { key: 'reach', label: 'Couverture géographique', weight: 0.4, description: 'Étendue du territoire couvert.' },
+    // Calculée par la plateforme, comme en production : c'est le contraste
+    // entre elle et les notes du modèle qui révèle une erreur d'échelle.
+    {
+      key: 'evidence-quality',
+      label: 'Qualité des preuves',
+      weight: 0.2,
+      description: 'À quel point l’évaluation est sourcée.',
+      computed: true,
+    },
   ],
   shortlistThreshold: 50,
   narrative: 'Adéquation au profil, pondérée par la couverture.',
@@ -130,23 +139,24 @@ beforeEach(() => {
       targetTypes: ['distributor'],
       discoveredBy: 'test',
     });
-    for (const field of ['existence', 'sector']) {
-      repos.companies.appendEvidence({
-        companyId: company.id,
-        opportunityId: opportunity.id,
+    // Par le service, et non par le dépôt : c'est lui qui enregistre la source
+    // avec sa fiabilité, et la dimension calculée `evidence-quality` en dépend.
+    // Écrire en direct donnerait une qualité de preuve artificiellement basse,
+    // et le test mesurerait alors la fixture plutôt que le pipeline.
+    for (const field of ['existence', 'sector', 'portfolio', 'capabilities']) {
+      intelligence.recordEvidence({
         missionId,
-        field,
-        claim: `${name} — ${field} établi par une source consultable.`,
-        value: null,
-        nature: 'reported',
-        sourceKey: 'src_test',
-        sourceRef: `https://candidat-${i}.de/${field}`,
-        sourceTitle: null,
-        basis: null,
-        confidence: 0.8,
-        simulated: false,
-        collectedAt: new Date().toISOString(),
+        opportunityId: opportunity.id,
+        companyId: company.id,
         agentKey: 'explorer',
+        sourceKind: 'company-website',
+        draft: {
+          field,
+          claim: `${name} — ${field} établi par une source consultable.`,
+          nature: 'observed',
+          sourceRef: `https://candidat-${i}.de/${field}`,
+          confidence: 0.85,
+        },
       });
     }
     opportunityIds.push(opportunity.id);
@@ -465,5 +475,94 @@ describe('l’export ne livre que ce qui est vendable', () => {
     });
     assert.equal(result.passed, false);
     assert.match(result.diagnostic, /identité « conflict »/);
+  });
+});
+
+/**
+ * La notation hors échelle, telle que le micro-run l'a produite.
+ *
+ * Le prompt listait les dimensions sans dire sur quoi noter. Le modèle a noté
+ * de 0 à 10, la plateforme pondère sur 100, et les totaux sont sortis dix fois
+ * trop bas — 14,8 et 13,98 pour un seuil de sélection à 45. Les évaluations
+ * elles-mêmes étaient justes et sourcées : seul l'ordre de grandeur était faux.
+ *
+ * Rien ne s'en apercevait avant le classement, qui rendait alors une liste vide
+ * sans expliquer pourquoi. Le contrôle appartient au scoring, là où l'erreur se
+ * produit et où elle se corrige.
+ */
+describe('la notation doit être sur la bonne échelle', () => {
+  test('le prompt de notation dit explicitement l’échelle', async () => {
+    let i = 0;
+    await pipelineWith(
+      new Scripted(() => withRealEvidence(goodVerdict('qualified'), opportunityIds[i++]!)),
+    ).qualify({ missionId, opportunityIds, agentKey: 'ambassador', objective: 'DE.' });
+
+    const provider = new Scripted(() => withRealEvidence(goodScore, opportunityIds[0]!));
+    await pipelineWith(provider).score({
+      missionId,
+      opportunityIds: [opportunityIds[0]!],
+      agentKey: 'analyst',
+      objective: 'DE.',
+      model: SCORING_MODEL,
+    });
+
+    const request = provider.requests[0]!;
+    const sent = `${request.system}\n${request.messages
+      .flatMap((m) => m.content)
+      .map((c) => (c.type === 'text' ? c.text : ''))
+      .join('\n')}`;
+
+    assert.match(sent, /SUR 100/, 'l’échelle doit être énoncée sans ambiguïté');
+    assert.match(sent, /jamais une échelle sur 10/i, 'l’erreur constatée doit être nommée');
+    assert.match(sent, /chacune sur 100/, 'la consigne doit être répétée avec la liste');
+  });
+
+  test('une notation sur 10 est refusée au lieu de vider le classement', async () => {
+    let i = 0;
+    await pipelineWith(
+      new Scripted(() => withRealEvidence(goodVerdict('qualified'), opportunityIds[i++]!)),
+    ).qualify({ missionId, opportunityIds, agentKey: 'ambassador', objective: 'DE.' });
+
+    // Les valeurs exactes que le micro-run a rendues.
+    const onTen = JSON.stringify({
+      assessments: [
+        { dimension: 'fit', value: 9, rationale: 'Gamme compatible.', confidence: 0.9, evidenceIds: ['placeholder'] },
+        { dimension: 'reach', value: 6, rationale: 'Couverture régionale.', confidence: 0.7, evidenceIds: ['placeholder'] },
+      ],
+    });
+
+    let j = 0;
+    const outcome = await pipelineWith(
+      new Scripted(() => withRealEvidence(onTen, opportunityIds[j++]!)),
+    ).score({
+      missionId,
+      opportunityIds,
+      agentKey: 'analyst',
+      objective: 'DE.',
+      model: SCORING_MODEL,
+    });
+
+    assert.equal(outcome.succeeded, false, 'une notation hors échelle ne doit pas passer');
+    assert.match(outcome.postcondition.diagnostic, /probablement sur 10 et non sur 100/);
+  });
+
+  test('une notation correcte n’est pas prise pour une erreur d’échelle', async () => {
+    let i = 0;
+    await pipelineWith(
+      new Scripted(() => withRealEvidence(goodVerdict('qualified'), opportunityIds[i++]!)),
+    ).qualify({ missionId, opportunityIds, agentKey: 'ambassador', objective: 'DE.' });
+
+    let j = 0;
+    const outcome = await pipelineWith(
+      new Scripted(() => withRealEvidence(goodScore, opportunityIds[j++]!)),
+    ).score({
+      missionId,
+      opportunityIds,
+      agentKey: 'analyst',
+      objective: 'DE.',
+      model: SCORING_MODEL,
+    });
+
+    assert.equal(outcome.succeeded, true, outcome.postcondition.diagnostic);
   });
 });

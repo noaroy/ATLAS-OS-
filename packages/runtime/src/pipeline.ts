@@ -93,7 +93,14 @@ const SCORING_SCHEMA = {
         type: 'object',
         properties: {
           dimension: { type: 'string', maxLength: 60 },
-          value: { type: 'number', minimum: 0, maximum: 100 },
+          value: {
+            type: 'number',
+            minimum: 0,
+            maximum: 100,
+            description:
+              'Note sur 100, où 0 = inadapté et 100 = idéal. Jamais sur 10 : la pondération ' +
+              'est appliquée ensuite par la plateforme.',
+          },
           rationale: { type: 'string', maxLength: 600 },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
           evidenceIds: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 40 } },
@@ -211,7 +218,22 @@ export class DeterministicPipeline {
       (id) => this.deps.repos.opportunities.get(id)?.qualification?.verdict === 'qualified',
     );
 
-    const dimensions = input.model.dimensions.map((d) => `- ${d.key} : ${d.label}`).join('\n');
+    // L'échelle et le poids, explicitement.
+    //
+    // Le micro-run l'a payé : le prompt listait « - sector-fit : Adéquation
+    // sectorielle » sans dire sur quoi noter. Le modèle a noté de 0 à 10, la
+    // plateforme pondère sur 100, et les totaux sont sortis dix fois trop bas —
+    // 14,8 et 13,98 pour un seuil de sélection à 45. Aucun candidat classé,
+    // alors que les évaluations elles-mêmes étaient justes et bien sourcées.
+    //
+    // La seule dimension correcte était `evidence-quality`, calculée par la
+    // plateforme : 81, contribution 8,1. C'est ce contraste qui a désigné la
+    // cause — et c'est pourquoi elle est exclue de la liste ci-dessous : un
+    // agent n'a pas à la fournir.
+    const dimensions = input.model.dimensions
+      .filter((d) => !d.computed)
+      .map((d) => `- ${d.key} (${d.label}, poids ${d.weight}) : ${d.description ?? ''}`)
+      .join('\n');
 
     for (const opportunityId of toScore) {
       const brief = this.#candidateBrief(opportunityId);
@@ -227,11 +249,15 @@ export class DeterministicPipeline {
         subject: opportunityId,
         schema: SCORING_SCHEMA,
         system:
-          "Vous notez l'adéquation d'un candidat, dimension par dimension. ATLAS calcule la " +
-          'pondération et le total : donnez chaque axe, sa valeur, sa raison et les preuves ' +
-          "qui la portent. Une note sans preuve citée n'a pas de valeur.",
+          "Vous notez l'adéquation d'un candidat, dimension par dimension. " +
+          'CHAQUE NOTE EST SUR 100 : 0 signifie inadapté, 50 acceptable, 100 idéal. ' +
+          "N'employez jamais une échelle sur 10 — la pondération et le total sont calculés " +
+          'ensuite par ATLAS. Donnez chaque axe, sa valeur, sa raison et les preuves qui la ' +
+          "portent : une note sans preuve citée n'a pas de valeur.",
         prompt:
-          `# Objectif\n${input.objective}\n\n# Dimensions attendues\n${dimensions}\n\n# Candidat\n${brief}`,
+          `# Objectif\n${input.objective}\n\n` +
+          `# Dimensions à noter, chacune sur 100\n${dimensions}\n\n` +
+          `# Candidat\n${brief}`,
       });
 
       if (!result.value) {

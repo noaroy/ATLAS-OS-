@@ -135,6 +135,31 @@ const SCORING: StageContract = {
       }
       const grounded = detail.components.some((c) => (c.evidenceIds?.length ?? 0) > 0);
       if (!grounded) missing.push(`${nameOf(ctx, id)} : aucune dimension ne cite de preuve`);
+
+      // ── Notation hors échelle ────────────────────────────────────────────
+      //
+      // Le micro-run a rendu des totaux de 14,8 et 13,98 pour un seuil de 45 :
+      // le modèle avait noté de 0 à 10 quand la plateforme pondère sur 100.
+      // Les évaluations étaient justes, leurs rationales sourcées — seul
+      // l'ordre de grandeur était faux, et rien ne s'en apercevait avant le
+      // classement, qui rendait alors une liste vide sans dire pourquoi.
+      //
+      // Le contraste est la signature : les dimensions calculées par la
+      // plateforme restent sur 100 pendant que celles du modèle plafonnent à
+      // 10. Un candidat réellement mauvais sur tous les axes déclencherait
+      // aussi ce contrôle — c'est acceptable, parce qu'il ne serait de toute
+      // façon pas retenu, et qu'un diagnostic explicite vaut mieux qu'un
+      // classement vide.
+      const judged = detail.components.filter((c) => !c.computed);
+      const computed = detail.components.filter((c) => c.computed);
+      const highestJudged = Math.max(0, ...judged.map((c) => c.value));
+      const highestComputed = Math.max(0, ...computed.map((c) => c.value));
+      if (judged.length > 0 && highestJudged <= 10 && highestComputed > 30) {
+        missing.push(
+          `${nameOf(ctx, id)} : notation probablement sur 10 et non sur 100 ` +
+            `(plus haute note du modèle ${highestJudged}, dimension calculée ${highestComputed})`,
+        );
+      }
     }
     return {
       ok: missing.length === 0 && toScore.length > 0,

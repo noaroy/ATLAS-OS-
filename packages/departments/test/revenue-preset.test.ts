@@ -118,9 +118,12 @@ describe('l’arrêt anticipé', () => {
 });
 
 describe('les bornes du preset', () => {
-  test('le budget est de 0,12 $ et le modèle n’est pas le plus cher', () => {
-    assert.equal(REVENUE_001.limits.maxCostUsd, 0.12);
-    assert.equal(REVENUE_001.context.budgetUsd, 0.12);
+  test('le budget est de 0,15 $ et le modèle n’est pas le plus cher', () => {
+    // 0,12 $ ne finançait cinq prospects que si l'attendu se confirmait ; le
+    // pire cas mesuré était à 0,1444 $. La promesse commerciale portant sur
+    // cinq, le plafond couvre le pire cas plutôt que l'espoir.
+    assert.equal(REVENUE_001.limits.maxCostUsd, 0.15);
+    assert.equal(REVENUE_001.context.budgetUsd, 0.15);
     assert.match(REVENUE_001.limits.model, /haiku/);
   });
 

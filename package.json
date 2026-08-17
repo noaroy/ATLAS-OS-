@@ -32,6 +32,7 @@
     "live:retry": "tsx scripts/live-retry.ts",
     "live:resume": "tsx scripts/live-resume.ts",
     "val": "tsx scripts/validation-run.ts",
+    "revenue": "tsx scripts/revenue-run.ts",
     "searxng:verify": "tsx scripts/searxng-verify.ts",
     "searxng:up": "docker compose -f deployment/searxng-local.yml up -d",
     "searxng:down": "docker compose -f deployment/searxng-local.yml down",

@@ -88,13 +88,22 @@ export interface RevenuePreset {
 }
 
 /**
- * Le budget : 0,12 $, et c'est un mur.
+ * Le budget : 0,15 $, et c'est un mur.
  *
- * Calibré sur ce que VAL-002 a réellement consommé, pas sur une estimation
- * prudente. Haiku facture 0,80 $ le million de jetons d'entrée et 4 $ en
- * sortie ; l'isolement du contexte ayant supprimé l'accumulation quadratique,
- * cinq candidats coûtent désormais cinq fois un candidat, et non vingt-cinq
- * fois.
+ * Calibré sur ce qui a réellement été facturé, pas sur une estimation prudente.
+ * La projection tirée de `llm_calls` donnait 0,0991 $ attendu pour cinq
+ * prospects et 0,1444 $ au pire cas — le pire cas projetant avec des moyennes
+ * qui portent encore l'accumulation supprimée par l'isolement. 0,12 $ ne
+ * finançait donc cinq prospects que si l'attendu se confirmait, et la promesse
+ * commerciale porte sur cinq.
+ *
+ * 0,15 $ couvre le pire cas mesuré avec une marge de 4 %. C'est un plafond, pas
+ * une cible : la règle d'arrêt anticipé coupe dès que cinq prospects vendables
+ * sont réunis, et le reste du budget n'est pas dépensé.
+ *
+ * Haiku facture 0,80 $ le million de jetons d'entrée et 4 $ en sortie ;
+ * l'isolement du contexte ayant supprimé l'accumulation quadratique, cinq
+ * candidats coûtent désormais cinq fois un candidat, et non vingt-cinq fois.
  *
  * `maxCandidates` est à 8 alors que le pack en vise 5 : la découverte doit
  * pouvoir écarter les candidats faibles sans que le pack se retrouve court. Ce
@@ -119,7 +128,7 @@ export const REVENUE_001: RevenuePreset = {
     ...LIVE_PILOT_LIMITS,
     model: 'claude-haiku-4-5-20251001',
     maxOutputTokensPerCall: VALIDATION_MAX_OUTPUT_TOKENS_PER_CALL,
-    maxCostUsd: 0.12,
+    maxCostUsd: 0.15,
     maxTokens: 120_000,
     maxSearchQueries: 4,
     maxSearchResults: 10,
@@ -138,7 +147,7 @@ export const REVENUE_001: RevenuePreset = {
   context: {
     executionMode: 'live',
     preset: 'REVENUE-001-DE-B2B',
-    budgetUsd: 0.12,
+    budgetUsd: 0.15,
     deliverable: 'Pack Expansion B2B Allemagne',
   },
   departmentKey: 'business-expansion',

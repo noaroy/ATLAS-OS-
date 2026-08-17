@@ -15,3 +15,7 @@ dist/
 apps/console/dist/
 .claude/settings.local.json
 graphify-out/
+# Les livrables produits pour un client : régénérables depuis la base, et
+# susceptibles de porter des données commerciales qui n'ont rien à faire dans
+# l'historique du dépôt.
+/out/

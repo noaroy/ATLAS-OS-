@@ -102,6 +102,10 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
   const sourced = evidence.filter((e) => Boolean(e.sourceRef));
   const simulated = evidence.filter((e) => e.simulated);
   const firsthand = evidence.filter((e) => e.nature === 'observed' || e.nature === 'reported');
+  // Une affirmation de première main sans source est une donnée inventée. Une
+  // inférence sans source ne l'est pas : elle est dérivée, et sa nature le dit.
+  const unsourcedFirsthand = firsthand.filter((e) => !e.sourceRef);
+  const inferredCount = evidence.filter((e) => e.nature === 'inferred').length;
   const unsupported = repos.decisions.unsupportedClaims(missionId);
 
   const statusOf = (ref: string): string => tasks.find((t) => t.ref === ref)?.status ?? 'absent';
@@ -137,10 +141,27 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
       required: true,
     },
     {
-      // Une donnée inventée se reconnaît à ce qu'aucune source ne la porte.
-      label: 'aucune donnée inventée',
-      met: evidence.length === 0 || sourced.length === evidence.length,
-      observed: `${sourced.length} sourcée(s) sur ${evidence.length}`,
+      // Une donnée inventée se reconnaît à ce qu'aucune source ne la porte —
+      // mais seulement pour ce qui prétend rapporter le monde.
+      //
+      // Ce critère exigeait d'abord une source sur *chaque* preuve, et VAL-002
+      // a échoué sur une inférence : « business model », dérivée de ce que les
+      // autres preuves montraient. Une inférence n'a pas de source propre par
+      // construction — c'est tout ce qui la distingue d'une observation, et
+      // c'est pourquoi `EvidenceNature` sépare les trois natures.
+      //
+      // Exiger une URL sur une inférence ne la rendrait pas plus solide : cela
+      // pousserait à en fabriquer une, ce qui est exactement le défaut qu'on
+      // cherche à empêcher. Le durcissement reste entier là où il compte : une
+      // preuve `observed` ou `reported` sans source **est** une donnée
+      // inventée, et disqualifie.
+      label: 'aucune affirmation de première main sans source',
+      met: unsourcedFirsthand.length === 0,
+      observed:
+        unsourcedFirsthand.length === 0
+          ? `${sourced.length} sourcée(s) sur ${evidence.length}` +
+            (inferredCount > 0 ? ` · ${inferredCount} inférence(s)` : '')
+          : `${unsourcedFirsthand.length} affirmation(s) sans source`,
       foundational: true,
       required: true,
     },

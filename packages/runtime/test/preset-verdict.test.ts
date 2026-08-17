@@ -243,7 +243,9 @@ describe('le socle commun ne se contourne pas', () => {
     assert.match(verdict.rationale, /budget/);
   });
 
-  test('une donnée sans source disqualifie', () => {
+  test('une donnée de première main sans source disqualifie', () => {
+    // `realCandidate` produit une preuve `observed` : sans source, elle
+    // prétend rapporter le monde sans que rien ne l'atteste.
     const id = missionWith({ discovery: 'succeeded' });
     realCandidate(id, 0, { sourced: false });
 
@@ -255,7 +257,7 @@ describe('le socle commun ne se contourne pas', () => {
       spentUsd: 0.01,
     });
     assert.equal(verdict.verdict, 'FAIL');
-    assert.match(verdict.rationale, /inventée/);
+    assert.match(verdict.rationale, /première main sans source/);
   });
 
   test('chaque critère du socle est marqué comme tel', () => {
@@ -311,5 +313,105 @@ describe('calibration des validations', () => {
         preset.gate.budgetStopIsSuccess;
       assert.ok(demandsSomething, `${preset.id} n'exige rien`);
     }
+  });
+});
+
+/**
+ * La frontière entre une inférence et une invention.
+ *
+ * Le socle exigeait une source sur *chaque* preuve, et VAL-002 a échoué sur une
+ * inférence — « business model », dérivée de ce que les autres preuves
+ * montraient. Une inférence n'a pas de source propre par construction ; c'est
+ * tout ce qui la distingue d'une observation.
+ *
+ * Le critère a donc été précisé après ce FAIL, et ces tests existent pour que
+ * la précision n'ait pas ouvert une porte : une affirmation de première main
+ * sans source reste disqualifiante.
+ */
+describe('inférence et invention ne se confondent pas', () => {
+  const permissive = {
+    ...DEFAULT_GATE,
+    requiredSteps: [],
+    minCandidates: 0,
+    minSourcedEvidence: 0,
+    minFirsthandEvidence: 0,
+    requiresHumanReview: false,
+    requiresRealProvider: false,
+  };
+
+  /** Une preuve d'une nature donnée, avec ou sans source. */
+  function evidenceOf(missionId: string, nature: 'observed' | 'reported' | 'inferred', sourced: boolean): void {
+    const { company } = repos.companies.upsert({
+      canonicalKey: `e-${nature}-${sourced}`,
+      name: `Société ${nature}`,
+      country: 'DE',
+    });
+    const { opportunity } = repos.opportunities.register({
+      missionId,
+      companyId: company.id,
+      departmentKey: 'business-expansion',
+      targetTypes: ['distributor'],
+      discoveredBy: 'search',
+    });
+    repos.companies.appendEvidence({
+      companyId: company.id,
+      opportunityId: opportunity.id,
+      missionId,
+      field: nature === 'inferred' ? 'business model' : 'existence',
+      claim: 'une affirmation',
+      value: null,
+      nature,
+      sourceKey: 'searxng',
+      sourceRef: sourced ? 'https://exemple.de/page' : null,
+      sourceTitle: null,
+      basis: nature === 'inferred' ? 'déduit des preuves collectées' : null,
+      confidence: 0.7,
+      simulated: false,
+      collectedAt: new Date().toISOString(),
+      agentKey: 'scout',
+    });
+  }
+
+  const verdictFor = (id: string) =>
+    evaluatePreset({ repos, missionId: id as never, gate: permissive, maxCostUsd: 0.12, spentUsd: 0.01 });
+
+  test('une inférence sans source ne disqualifie pas', () => {
+    // Le cas exact de VAL-002. Exiger une URL sur une inférence pousserait à en
+    // fabriquer une — le défaut même qu'on cherche à empêcher.
+    const id = missionWith({ discovery: 'succeeded' });
+    evidenceOf(id, 'observed', true);
+    evidenceOf(id, 'inferred', false);
+
+    assert.notEqual(verdictFor(id).verdict, 'FAIL');
+  });
+
+  test('une observation sans source disqualifie toujours', () => {
+    // Le durcissement reste entier là où il compte.
+    const id = missionWith({ discovery: 'succeeded' });
+    evidenceOf(id, 'observed', false);
+
+    const verdict = verdictFor(id);
+    assert.equal(verdict.verdict, 'FAIL');
+    assert.match(verdict.rationale, /première main sans source/);
+  });
+
+  test('un rapport de tiers sans source disqualifie aussi', () => {
+    // `reported` prétend rapporter le monde autant qu'`observed` : sans source,
+    // rien ne le distingue d'une affirmation gratuite.
+    const id = missionWith({ discovery: 'succeeded' });
+    evidenceOf(id, 'reported', false);
+
+    assert.equal(verdictFor(id).verdict, 'FAIL');
+  });
+
+  test('le compte des inférences reste visible dans le rapport', () => {
+    // Une inférence acceptée ne doit pas devenir invisible : le lecteur doit
+    // pouvoir juger sur quelle proportion de dérivé repose la conclusion.
+    const id = missionWith({ discovery: 'succeeded' });
+    evidenceOf(id, 'observed', true);
+    evidenceOf(id, 'inferred', false);
+
+    const criterion = verdictFor(id).criteria.find((c) => c.label.includes('première main sans source'))!;
+    assert.match(criterion.observed, /inférence/);
   });
 });

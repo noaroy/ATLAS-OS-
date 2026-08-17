@@ -90,6 +90,27 @@ export {
   TEASER_FACT_LIMIT,
 } from './client-report-render.ts';
 
+export {
+  EVIDENCE_TRANSLATIONS,
+  translationMap,
+  type EvidenceTranslation,
+} from './translations.ts';
+
+export {
+  canStartProduction,
+  canDeliver,
+  orderEconomics,
+  type CustomerOrder,
+  type PaymentStatus,
+  type OrderStatus,
+  type DeliveryStatus,
+  type ProductionDecision,
+  type ProductionRefusal,
+  type DeliveryFacts,
+  type DeliveryDecision,
+  type OrderEconomics,
+} from './customer-flow.ts';
+
 export const DEPARTMENT_KEYS: DepartmentKey[] = DEPARTMENT_DEFINITIONS.map((d) => d.key);
 
 /**

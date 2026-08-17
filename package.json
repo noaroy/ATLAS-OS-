@@ -36,6 +36,7 @@
     "salvage": "tsx scripts/salvage-run.ts",
     "micro": "tsx scripts/micro-run.ts",
     "production": "tsx scripts/production-run.ts",
+    "review": "tsx scripts/review-report.ts",
     "searxng:verify": "tsx scripts/searxng-verify.ts",
     "searxng:up": "docker compose -f deployment/searxng-local.yml up -d",
     "searxng:down": "docker compose -f deployment/searxng-local.yml down",

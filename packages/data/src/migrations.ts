@@ -1044,4 +1044,35 @@ CREATE INDEX idx_reports_state ON client_reports(state, generated_at DESC);
 CREATE INDEX idx_reports_mission ON client_reports(mission_id);
 `,
   },
+  {
+    version: 16,
+    name: 'order-payment-and-delivery',
+    sql: `
+-- ─── Le règlement, distingué du statut de commande ────────────────────────
+--
+-- \`status\` disait où en était la commande ; il ne disait pas si l'argent était
+-- arrivé. Confondre les deux fait démarrer une production payante sur un
+-- prospect qui hésite encore — et une dépense engagée ne se reprend pas.
+--
+--   NONE       rien n'a été demandé, l'extrait est parti et c'est tout
+--   PENDING    la commande est passée, le règlement attendu
+--   CONFIRMED  le règlement a été constaté, à la main
+--   REFUNDED · CANCELLED
+--
+-- \`PENDING\` n'autorise aucune dépense. La nuance entre « on attend le
+-- paiement » et « on peut commencer en attendant » est exactement celle qui
+-- coûte de l'argent quand on la laisse au jugement.
+--
+-- \`payment_reference\` porte ce qui a été constaté — virement, lien, espèces.
+-- Aucun encaissement n'est branché : cette colonne se remplit à la main, et
+-- c'est délibéré.
+ALTER TABLE client_orders ADD COLUMN customer_email    TEXT;
+ALTER TABLE client_orders ADD COLUMN customer_company  TEXT;
+ALTER TABLE client_orders ADD COLUMN payment_status    TEXT NOT NULL DEFAULT 'NONE';
+ALTER TABLE client_orders ADD COLUMN payment_reference TEXT;
+ALTER TABLE client_orders ADD COLUMN delivery_status   TEXT NOT NULL DEFAULT 'NOT_READY';
+
+CREATE INDEX idx_orders_payment ON client_orders(payment_status);
+`,
+  },
 ];

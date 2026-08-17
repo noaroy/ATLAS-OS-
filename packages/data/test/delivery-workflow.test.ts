@@ -157,8 +157,10 @@ describe('le workflow de commande', () => {
       market: 'Allemagne',
       priceCents: 4900,
     });
-    const paid = repos.orders.markPaid(order.id);
+    const paid = repos.orders.markPaid(order.id, 'VIR-2026-08-17-001');
     assert.equal(paid.status, 'paid');
+    assert.equal(paid.paymentStatus, 'CONFIRMED');
+    assert.equal(paid.paymentReference, 'VIR-2026-08-17-001');
     assert.ok(paid.paidAt);
   });
 

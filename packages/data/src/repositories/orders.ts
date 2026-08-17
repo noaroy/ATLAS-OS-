@@ -34,10 +34,25 @@ export type ReportState =
   | 'REJECTED'
   | 'DELIVERED';
 
+export type PaymentStatus = 'NONE' | 'PENDING' | 'CONFIRMED' | 'REFUNDED' | 'CANCELLED';
+export type DeliveryStatus = 'NOT_READY' | 'READY_TO_DELIVER' | 'DELIVERED';
+
 export interface ClientOrder {
   id: string;
   clientName: string;
   clientContact: string | null;
+  email: string | null;
+  company: string | null;
+  /**
+   * L'état du règlement, distinct de celui de la commande.
+   *
+   * Les confondre fait démarrer une production payante sur un prospect qui
+   * hésite encore, et une dépense engagée ne se reprend pas.
+   */
+  paymentStatus: PaymentStatus;
+  /** Ce qui a été constaté : virement, lien, espèces. Rempli à la main. */
+  paymentReference: string | null;
+  deliveryStatus: DeliveryStatus;
   brief: string;
   market: string;
   /** En centimes : un montant en flottant finit par dériver. */
@@ -94,6 +109,11 @@ interface OrderRow {
   id: string;
   client_name: string;
   client_contact: string | null;
+  customer_email: string | null;
+  customer_company: string | null;
+  payment_status: PaymentStatus;
+  payment_reference: string | null;
+  delivery_status: DeliveryStatus;
   brief: string;
   market: string;
   price_cents: number | null;
@@ -134,6 +154,11 @@ const toOrder = (row: OrderRow): ClientOrder => ({
   id: row.id,
   clientName: row.client_name,
   clientContact: row.client_contact,
+  email: row.customer_email,
+  company: row.customer_company,
+  paymentStatus: (row.payment_status ?? 'NONE') as PaymentStatus,
+  paymentReference: row.payment_reference,
+  deliveryStatus: (row.delivery_status ?? 'NOT_READY') as DeliveryStatus,
   brief: row.brief,
   market: row.market,
   priceCents: row.price_cents,
@@ -178,6 +203,8 @@ export class OrderRepository {
   createOrder(input: {
     clientName: string;
     clientContact?: string | null;
+    email?: string | null;
+    company?: string | null;
     brief: string;
     market: string;
     priceCents?: number | null;
@@ -188,6 +215,11 @@ export class OrderRepository {
       id: id('ord'),
       client_name: input.clientName,
       client_contact: input.clientContact ?? null,
+      customer_email: input.email ?? null,
+      customer_company: input.company ?? null,
+      payment_status: 'NONE',
+      payment_reference: null,
+      delivery_status: 'NOT_READY',
       brief: input.brief,
       market: input.market,
       price_cents: input.priceCents ?? null,
@@ -200,9 +232,13 @@ export class OrderRepository {
     };
     this.db
       .prepare(
-        `INSERT INTO client_orders (id, client_name, client_contact, brief, market, price_cents,
+        `INSERT INTO client_orders (id, client_name, client_contact, customer_email,
+                                    customer_company, payment_status, payment_reference,
+                                    delivery_status, brief, market, price_cents,
                                     currency, paid_at, status, mission_id, created_at, updated_at)
-         VALUES (@id, @client_name, @client_contact, @brief, @market, @price_cents,
+         VALUES (@id, @client_name, @client_contact, @customer_email,
+                 @customer_company, @payment_status, @payment_reference,
+                 @delivery_status, @brief, @market, @price_cents,
                  @currency, @paid_at, @status, @mission_id, @created_at, @updated_at)`,
       )
       .run(row);
@@ -231,12 +267,32 @@ export class OrderRepository {
    * sans autorisation explicite, et un statut « payé » qu'ATLAS pourrait poser
    * seul serait un statut auquel on ne peut pas se fier.
    */
-  markPaid(orderId: string, at = nowIso()): ClientOrder {
+  markPaid(orderId: string, reference: string, at = nowIso()): ClientOrder {
     this.db
       .prepare(
-        `UPDATE client_orders SET paid_at = ?, status = 'paid', updated_at = ? WHERE id = ?`,
+        `UPDATE client_orders SET paid_at = ?, status = 'paid', payment_status = 'CONFIRMED',
+                                  payment_reference = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(at, nowIso(), orderId);
+      .run(at, reference, nowIso(), orderId);
+    const order = this.getOrder(orderId);
+    if (!order) throw invalidState(`Commande « ${orderId} » introuvable`);
+    return order;
+  }
+
+  /** Pose l'état du règlement sans toucher au reste — utile pour PENDING. */
+  setPaymentStatus(orderId: string, status: PaymentStatus): ClientOrder {
+    this.db
+      .prepare('UPDATE client_orders SET payment_status = ?, updated_at = ? WHERE id = ?')
+      .run(status, nowIso(), orderId);
+    const order = this.getOrder(orderId);
+    if (!order) throw invalidState(`Commande « ${orderId} » introuvable`);
+    return order;
+  }
+
+  setDeliveryStatus(orderId: string, status: DeliveryStatus): ClientOrder {
+    this.db
+      .prepare('UPDATE client_orders SET delivery_status = ?, updated_at = ? WHERE id = ?')
+      .run(status, nowIso(), orderId);
     const order = this.getOrder(orderId);
     if (!order) throw invalidState(`Commande « ${orderId} » introuvable`);
     return order;

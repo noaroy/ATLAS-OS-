@@ -53,6 +53,43 @@ export {
 
 export { packToHtml, packToCsv } from './deliverable-render.ts';
 
+export {
+  canTransition,
+  reviewVerdict,
+  reportEconomics,
+  REVIEW_CHECKLIST,
+  PIPELINE_VERSION,
+  USD_PER_EUR,
+  type ReportState,
+  type ReviewItem,
+  type ReviewOutcome,
+  type ReviewVerdict,
+  type ReportCost,
+  type ReportEconomics,
+  type ReportProvenance,
+} from './delivery.ts';
+
+export {
+  buildClientReport,
+  fieldLabel,
+  looksFrench,
+  isNamed,
+  type ClientReport,
+  type ReportProspect,
+  type ReportClaim,
+  type ReportDimension,
+  type ReportContact,
+  type ReportSummary,
+  type ReportEntry,
+} from './client-report.ts';
+
+export {
+  reportToHtml,
+  reportToCsv,
+  teaserToHtml,
+  TEASER_FACT_LIMIT,
+} from './client-report-render.ts';
+
 export const DEPARTMENT_KEYS: DepartmentKey[] = DEPARTMENT_DEFINITIONS.map((d) => d.key);
 
 /**

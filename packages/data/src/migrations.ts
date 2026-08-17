@@ -976,4 +976,72 @@ ALTER TABLE companies ADD COLUMN identity_status TEXT NOT NULL DEFAULT 'ok';
 CREATE INDEX idx_companies_identity ON companies(identity_status);
 `,
   },
+  {
+    version: 15,
+    name: 'client-orders-and-reports',
+    sql: `
+-- ─── La commande, et le rapport qui en sort ───────────────────────────────
+--
+-- Le moteur sait produire. Ces deux tables décrivent ce qui entoure la
+-- production : qui a commandé, ce qui a été promis, qui a relu, et ce qui est
+-- réellement parti.
+--
+-- La distinction compte parce qu'un rapport conforme à ses contrats techniques
+-- peut rester invendable — une source morte, une traduction qui déforme, un
+-- contact de standard présenté comme un interlocuteur. Ces défauts ne se
+-- détectent qu'en lisant, et \`state\` garde la trace de qui a lu.
+CREATE TABLE client_orders (
+  id             TEXT PRIMARY KEY,
+  client_name    TEXT NOT NULL,
+  client_contact TEXT,
+  -- Le besoin, dans les mots du client. Ce qui a été promis se relit ici.
+  brief          TEXT NOT NULL,
+  market         TEXT NOT NULL,
+  -- Le prix convenu, en centimes : un montant en flottant finit par dériver.
+  price_cents    INTEGER,
+  currency       TEXT NOT NULL DEFAULT 'EUR',
+  -- Aucun encaissement automatique. Ce drapeau est posé à la main, après
+  -- constatation, et rien dans ATLAS ne le pose seul.
+  paid_at        TEXT,
+  status         TEXT NOT NULL DEFAULT 'teaser-sent',
+  mission_id     TEXT REFERENCES missions(id) ON DELETE SET NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX idx_orders_status ON client_orders(status, created_at DESC);
+
+CREATE TABLE client_reports (
+  id                TEXT PRIMARY KEY,
+  order_id          TEXT REFERENCES client_orders(id) ON DELETE CASCADE,
+  mission_id        TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  -- GENERATED · PENDING_REVIEW · APPROVED_FOR_DELIVERY · REJECTED · DELIVERED
+  --
+  -- Il n'existe aucune transition de GENERATED vers DELIVERED : c'est tout
+  -- l'objet de cette colonne. Un rapport ne part pas sans que quelqu'un ait
+  -- engagé sa parole dessus.
+  state             TEXT NOT NULL DEFAULT 'GENERATED',
+  html_path         TEXT,
+  csv_path          TEXT,
+  teaser_path       TEXT,
+  -- La traçabilité : de quoi refaire le rapport, ou le défendre.
+  pipeline_version  TEXT NOT NULL,
+  scoring_version   TEXT NOT NULL,
+  execution_mode    TEXT NOT NULL,
+  evidence_ids      TEXT NOT NULL DEFAULT '[]',
+  sources           TEXT NOT NULL DEFAULT '[]',
+  cost_usd          REAL,
+  candidates        INTEGER NOT NULL DEFAULT 0,
+  retained          INTEGER NOT NULL DEFAULT 0,
+  reviewer          TEXT,
+  review_notes      TEXT,
+  review_passed     TEXT NOT NULL DEFAULT '[]',
+  approved_at       TEXT,
+  delivered_at      TEXT,
+  generated_at      TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX idx_reports_state ON client_reports(state, generated_at DESC);
+CREATE INDEX idx_reports_mission ON client_reports(mission_id);
+`,
+  },
 ];

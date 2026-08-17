@@ -566,3 +566,96 @@ describe('la notation doit être sur la bonne échelle', () => {
     assert.equal(outcome.succeeded, true, outcome.postcondition.diagnostic);
   });
 });
+
+/**
+ * Ce qui ne doit jamais atteindre un client qui paie.
+ *
+ * Les postconditions vérifient que le pipeline a produit ses artefacts. Ces
+ * contrôles-ci vérifient que ce qu'il a produit peut être vendu — deux
+ * questions différentes, et la seconde a coûté à REVENUE-001 une fiche qui
+ * mélangeait deux entreprises réelles.
+ */
+describe('les gardes de livraison', () => {
+  const readyToExport = async () => {
+    let i = 0;
+    await pipelineWith(
+      new Scripted(() => withRealEvidence(goodVerdict('qualified'), opportunityIds[i++]!)),
+    ).qualify({ missionId, opportunityIds, agentKey: 'ambassador', objective: 'DE.' });
+    let j = 0;
+    await pipelineWith(new Scripted(() => withRealEvidence(goodScore, opportunityIds[j++]!))).score({
+      missionId,
+      opportunityIds,
+      agentKey: 'analyst',
+      objective: 'DE.',
+      model: SCORING_MODEL,
+    });
+    pipelineWith(new Scripted(() => '')).rank({
+      missionId,
+      opportunityIds,
+      agentKey: 'analyst',
+      model: SCORING_MODEL,
+    });
+  };
+
+  test('une preuve simulée interdit la livraison', async () => {
+    await readyToExport();
+
+    const first = repos.opportunities.require(opportunityIds[0]!);
+    const evidence = repos.companies.evidenceForOpportunity(first.id)[0]!;
+    // Le drapeau que porterait une preuve produite en démonstration.
+    repos.companies.appendEvidence({
+      companyId: first.companyId,
+      opportunityId: first.id,
+      missionId,
+      field: 'demo',
+      claim: 'Affirmation produite pendant une démonstration.',
+      value: null,
+      nature: 'reported',
+      sourceKey: evidence.sourceKey,
+      sourceRef: 'https://exemple.de/demo',
+      sourceTitle: null,
+      basis: null,
+      confidence: 0.5,
+      simulated: true,
+      collectedAt: new Date().toISOString(),
+      agentKey: 'explorer',
+    });
+
+    const result = validateStagePostcondition('export', {
+      repos,
+      missionId,
+      opportunityIds,
+      artifacts: ['out/rapport.html'],
+    });
+    assert.equal(result.passed, false);
+    assert.match(result.diagnostic, /preuve\(s\) simulée\(s\)/);
+  });
+
+  test('une lignée non réelle interdit la livraison', async () => {
+    await readyToExport();
+
+    // Une fiche de démonstration qui se serait glissée dans le classement.
+    const first = repos.opportunities.require(opportunityIds[0]!);
+    repos.companies.setIdentityStatus(first.companyId, 'pending-review');
+
+    const result = validateStagePostcondition('export', {
+      repos,
+      missionId,
+      opportunityIds,
+      artifacts: ['out/rapport.html'],
+    });
+    assert.equal(result.passed, false);
+    assert.match(result.diagnostic, /identité « pending-review »/);
+  });
+
+  test('un dossier propre passe', async () => {
+    await readyToExport();
+    const result = validateStagePostcondition('export', {
+      repos,
+      missionId,
+      opportunityIds,
+      artifacts: ['out/rapport.html'],
+    });
+    assert.equal(result.passed, true, result.diagnostic);
+  });
+});

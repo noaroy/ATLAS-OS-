@@ -74,6 +74,82 @@ for (const row of drifted) {
   }
 }
 
+// ── 1 bis. Le nom d'une entreprise sur le domaine d'une autre ──────────────
+//
+// La dérive clé/domaine ne voit qu'une moitié du problème. La fiche que
+// REVENUE-001 a réellement livrée portait la clé `d:bhs-corrugated.com` ET le
+// domaine `bhs-corrugated.com` — parfaitement cohérentes entre elles — sous le
+// nom « Heidelberg Druckmaschinen AG ». Rien ne dérivait ; tout était faux.
+//
+// Le contrôle porte donc sur le nom face au domaine. Un chevauchement de
+// racine suffit à disculper : « Lilie GmbH » / lilie.de, « Hagenauer+Denk KG »
+// / hagenauer-denk.de, « SYS TEC electronic AG » / systec-electronic.com. Sans
+// aucun mot commun, la fiche décrit deux entreprises à la fois.
+//
+// Le test est volontairement permissif : beaucoup d'entreprises ont un domaine
+// sans rapport avec leur nom, et les mettre toutes en quarantaine viderait le
+// registre. Seule l'absence *totale* de recoupement déclenche.
+const tokens = (text) =>
+  (text ?? '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((t) => t.length >= 4);
+
+const LEGAL = new Set(['gmbh', 'kg', 'ohg', 'mbh', 'group', 'holding', 'gruppe', 'corp']);
+
+const incoherent = db
+  .prepare(
+    `SELECT id, name, domain, canonical_key, identity_status
+       FROM companies
+      WHERE data_origin = 'live' AND domain IS NOT NULL AND identity_status = 'ok'`,
+  )
+  .all()
+  .filter((row) => {
+    const nameTokens = tokens(row.name).filter((t) => !LEGAL.has(t));
+    const domainTokens = tokens(root(row.domain));
+    if (nameTokens.length === 0) return false;
+
+    const overlap = nameTokens.some((n) =>
+      domainTokens.some((d) => d.includes(n) || n.includes(d)),
+    );
+    if (overlap) return false;
+
+    // Les sigles courts, que le seuil de quatre lettres écarte à tort.
+    //
+    // « BHS Corrugated » sur bhs-world.com est bien la bonne entreprise ; le
+    // premier segment du domaine suffit à l'établir. La comparaison se fait
+    // ici sur le nom entier, sans filtre de longueur — c'est justement le mot
+    // court qui porte le lien. Trois lettres au minimum : en deçà, la
+    // coïncidence devient plus probable que la parenté.
+    const flatName = (row.name ?? '')
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+    const firstLabel = root(row.domain).split('-')[0] ?? '';
+    if (firstLabel.length >= 3 && flatName.includes(firstLabel)) return false;
+
+    return true;
+  });
+
+say('');
+say(`Noms sans rapport avec leur domaine : ${incoherent.length}`);
+for (const row of incoherent) {
+  say(`  ${row.name}`);
+  say(`    domaine « ${row.domain} » — aucun mot commun avec le nom`);
+  if (APPLY) {
+    db.prepare('UPDATE companies SET identity_status = ?, updated_at = ? WHERE id = ?').run(
+      'conflict',
+      new Date().toISOString(),
+      row.id,
+    );
+    say(`    → mise en conflit`);
+  }
+}
+
 // ── 2. Les contacts dupliqués ──────────────────────────────────────────────
 //
 // Mêmes signatures que la déduplication à l'écriture : adresse, téléphone,

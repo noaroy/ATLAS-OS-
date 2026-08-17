@@ -35,6 +35,7 @@
     "revenue": "tsx scripts/revenue-run.ts",
     "salvage": "tsx scripts/salvage-run.ts",
     "micro": "tsx scripts/micro-run.ts",
+    "production": "tsx scripts/production-run.ts",
     "searxng:verify": "tsx scripts/searxng-verify.ts",
     "searxng:up": "docker compose -f deployment/searxng-local.yml up -d",
     "searxng:down": "docker compose -f deployment/searxng-local.yml down",

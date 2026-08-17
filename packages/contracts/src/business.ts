@@ -109,6 +109,15 @@ export interface Company {
    * `live` : ce serait exactement le blanchiment que cette colonne empêche.
    */
   dataOrigin: DataOrigin;
+  /**
+   * L'état de l'identité de cette fiche.
+   *
+   * `conflict` quand deux sources se contredisent sur ce qui *établit* qui est
+   * cette entreprise — domaine, pays, ville, raison sociale. Une fiche en
+   * conflit n'est pas fausse : elle est indécidable, et livrer un dossier
+   * indécidable à un client est pire que ne rien livrer.
+   */
+  identityStatus: 'ok' | 'conflict' | 'pending-review';
   firstSeenAt: string;
   /** Last time a fact about this company was observed at a source. */
   lastVerifiedAt: string | null;

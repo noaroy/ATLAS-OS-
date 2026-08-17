@@ -63,6 +63,99 @@ export interface CandidateDraft {
   roles?: string[];
 }
 
+/**
+ * Le profil de client recherché, sous forme de contrainte et non de consigne.
+ *
+ * REVENUE-001 a retenu DIVUS GmbH, à Eppan (Südtirol, **Italie**), pour une
+ * mission dont l'objectif disait « allemands ». L'agent l'avait vu, et l'a
+ * écrit dans la preuve : « basée en Italie (Südtirol), pas en Allemagne.
+ * Retenue malgré tout car elle opère en Europe ».
+ *
+ * Le comportement est honnête, la décision est fausse — et surtout, elle
+ * n'était pas la sienne à prendre. Une contrainte formulée en prose dans un
+ * objectif est une préférence : le modèle la pèse contre d'autres
+ * considérations et peut conclure qu'elle cède. Une contrainte structurée ne
+ * se pèse pas, elle s'applique.
+ *
+ * Le filtre agit **avant** l'enrichissement, là où le candidat n'a encore rien
+ * coûté. Rejeter après avoir documenté revient à payer pour jeter.
+ */
+export interface IcpConstraint {
+  /** Les pays acceptés, en clair. Vide = aucune contrainte de pays. */
+  countries?: string[];
+}
+
+/**
+ * Normalise un pays pour la comparaison.
+ *
+ * Les sources écrivent « Germany », « Deutschland », « DE », « Allemagne ». Une
+ * comparaison littérale rejetterait des candidats corrects, ce qui rendrait le
+ * filtre plus nuisible que le défaut qu'il corrige.
+ */
+const COUNTRY_ALIASES: Readonly<Record<string, string>> = {
+  de: 'de',
+  deu: 'de',
+  germany: 'de',
+  deutschland: 'de',
+  allemagne: 'de',
+  fr: 'fr',
+  fra: 'fr',
+  france: 'fr',
+  frankreich: 'fr',
+  it: 'it',
+  ita: 'it',
+  italy: 'it',
+  italia: 'it',
+  italie: 'it',
+  italien: 'it',
+  at: 'at',
+  aut: 'at',
+  austria: 'at',
+  osterreich: 'at',
+  autriche: 'at',
+  ch: 'ch',
+  che: 'ch',
+  switzerland: 'ch',
+  schweiz: 'ch',
+  suisse: 'ch',
+};
+
+export function normaliseCountry(country: string | null | undefined): string | null {
+  if (!country) return null;
+  const key = country
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z]/g, '');
+  if (!key) return null;
+  return COUNTRY_ALIASES[key] ?? key;
+}
+
+/**
+ * Ce candidat entre-t-il dans le profil recherché ?
+ *
+ * Un pays inconnu **passe** : c'est une information manquante, pas une
+ * information contraire, et la qualification est l'étape faite pour trancher.
+ * Rejeter sur une absence écarterait des candidats corrects mal documentés.
+ */
+export function icpRejection(
+  candidate: { name: string; country?: string | null },
+  icp: IcpConstraint | undefined,
+): string | null {
+  if (!icp?.countries?.length) return null;
+  const wanted = icp.countries.map(normaliseCountry).filter(Boolean) as string[];
+  if (wanted.length === 0) return null;
+
+  const actual = normaliseCountry(candidate.country);
+  if (!actual) return null;
+  if (wanted.includes(actual)) return null;
+
+  return (
+    `hors profil recherché : pays « ${candidate.country} », attendu ` +
+    `${icp.countries.join(' ou ')}. La contrainte est structurée et ne se négocie pas.`
+  );
+}
+
 export interface DiscoveryInput {
   missionId: string;
   departmentKey: string;
@@ -72,6 +165,8 @@ export interface DiscoveryInput {
   candidates: CandidateDraft[];
   /** Beyond this age, stored knowledge is re-verified rather than reused. */
   freshnessDays?: number;
+  /** Le profil recherché, appliqué avant toute écriture coûteuse. */
+  icp?: IcpConstraint;
 }
 
 export interface DiscoveryOutcome {
@@ -129,6 +224,21 @@ export class OpportunityService {
     for (const candidate of input.candidates) {
       const name = candidate.name?.trim();
       if (!name) continue;
+
+      // ── Le profil recherché, avant toute écriture ──────────────────────
+      //
+      // Ici et pas plus loin : un candidat hors profil rejeté après
+      // enrichissement a déjà coûté ce qu'on voulait éviter. Et le rejet est
+      // déterministe — aucune formulation, si convaincante soit-elle, ne le
+      // renverse.
+      const outOfProfile = icpRejection(
+        { name, country: candidate.country ?? null },
+        input.icp,
+      );
+      if (outOfProfile) {
+        outcome.rejected.push({ name, reason: outOfProfile });
+        continue;
+      }
 
       const domain = normaliseDomain(candidate.website);
       const identity = { name, domain, country: candidate.country ?? null };
@@ -300,15 +410,19 @@ export class OpportunityService {
     evidence?: Array<EvidenceDraft & { sourceKind?: SourceKind }>;
     contacts?: Array<Omit<Contact, 'id' | 'companyId' | 'createdAt' | 'evidenceId'>>;
     relations?: Array<{ kind: string; toName: string; description: string; confidence?: number }>;
-  }): { company: Company; evidenceAdded: number } {
+  }): { company: Company; evidenceAdded: number; identityConflicts: string[] } {
     const { repos } = this.deps;
     const opportunity = repos.opportunities.require(input.opportunityId);
 
     const patch = input.patch ?? {};
-    const company = repos.companies.enrich(opportunity.companyId, {
-      ...patch,
-      domain: patch.website ? normaliseDomain(patch.website) : undefined,
-    });
+    // L'enrichissement complète ce qui manque ; il ne redéfinit jamais qui est
+    // cette entreprise. Un correctif qui prétend changer le domaine ou le pays
+    // d'une fiche connue signale qu'on parle d'une autre société — la fiche
+    // passe alors en conflit plutôt que d'absorber la contradiction.
+    const { company, conflicts: identityConflicts } = repos.companies.enrich(
+      opportunity.companyId,
+      { ...patch, domain: patch.website ? normaliseDomain(patch.website) : undefined },
+    );
 
     let evidenceAdded = 0;
     for (const draft of input.evidence ?? []) {
@@ -352,7 +466,7 @@ export class OpportunityService {
       repos.opportunities.setStage(opportunity.id, 'enriched');
     }
 
-    return { company, evidenceAdded };
+    return { company, evidenceAdded, identityConflicts };
   }
 
   /**

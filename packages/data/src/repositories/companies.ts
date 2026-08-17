@@ -32,6 +32,7 @@ interface CompanyRow {
   profile: string;
   enriched: number;
   data_origin: string;
+  identity_status: string;
   first_seen_at: string;
   last_verified_at: string | null;
   created_at: string;
@@ -56,6 +57,7 @@ const toCompany = (row: CompanyRow): Company => ({
   profile: fromJson<Record<string, unknown>>(row.profile, {}),
   enriched: toBool(row.enriched),
   dataOrigin: (row.data_origin ?? 'unknown') as Company['dataOrigin'],
+  identityStatus: (row.identity_status ?? 'ok') as Company['identityStatus'],
   firstSeenAt: row.first_seen_at,
   lastVerifiedAt: row.last_verified_at,
   createdAt: row.created_at,
@@ -126,6 +128,8 @@ export interface UpsertCompanyInput {
    * pas ne doit pas pouvoir faire passer son ignorance pour une garantie.
    */
   dataOrigin?: Company['dataOrigin'];
+  /** L'état d'identité, quand l'appelant a de quoi le poser. */
+  identityStatus?: Company['identityStatus'];
 }
 
 /**
@@ -170,6 +174,7 @@ export class CompanyRepository {
         profile: toJson(input.profile ?? {}),
         enriched: fromBool(input.enriched ?? false),
         data_origin: input.dataOrigin ?? 'unknown',
+        identity_status: input.identityStatus ?? 'ok',
         first_seen_at: now,
         last_verified_at: null,
         created_at: now,
@@ -180,11 +185,11 @@ export class CompanyRepository {
           `INSERT INTO companies (id, canonical_key, name, legal_name, country, region, city,
                                   website, domain, industries, size_band, employees_estimate,
                                   founded_year, description, profile, enriched, data_origin,
-                                  first_seen_at, last_verified_at, created_at, updated_at)
+                                  identity_status, first_seen_at, last_verified_at, created_at, updated_at)
            VALUES (@id, @canonical_key, @name, @legal_name, @country, @region, @city,
                    @website, @domain, @industries, @size_band, @employees_estimate,
                    @founded_year, @description, @profile, @enriched, @data_origin,
-                   @first_seen_at, @last_verified_at, @created_at, @updated_at)`,
+                   @identity_status, @first_seen_at, @last_verified_at, @created_at, @updated_at)`,
         )
         .run(row);
       return { company: toCompany(row), created: true };
@@ -218,17 +223,58 @@ export class CompanyRepository {
     return { company: merged, created: false };
   }
 
-  /** Applies enrichment, which — unlike a sighting — may replace known fields. */
-  enrich(companyId: CompanyId, patch: Partial<UpsertCompanyInput>): Company {
+  /**
+   * Applies enrichment — which may complete what is unknown, never rewrite what
+   * establishes identity.
+   *
+   * `enrich` remplaçait tous les champs, domaine et ville compris. C'est par là
+   * que la fiche `d:heidelberg.com` a fini avec le domaine `bhs-corrugated.com`
+   * et la ville de BHS Corrugated : un enrichissement a réécrit l'identité
+   * d'une fiche existante, et la clé canonique — figée à la création — n'a
+   * jamais été recalculée, donc rien ne s'en est aperçu.
+   *
+   * Documenter une entreprise et décider *de quelle entreprise il s'agit* sont
+   * deux opérations distinctes. La première est le travail de l'enrichissement ;
+   * la seconde ne lui appartient pas. Un correctif qui prétend changer le
+   * domaine ou le pays d'une fiche connue ne l'améliore pas : il indique que
+   * l'agent parle d'une autre entreprise.
+   *
+   * Les champs d'identité sont donc **complétés seulement s'ils sont vides**.
+   * Une tentative de remplacement est refusée, consignée, et marque la fiche
+   * `conflict` — visible, auditable, et exclue des livrables jusqu'à revue.
+   */
+  enrich(
+    companyId: CompanyId,
+    patch: Partial<UpsertCompanyInput>,
+  ): { company: Company; conflicts: string[] } {
     const existing = this.require(companyId);
+    const conflicts: string[] = [];
+
+    /** Complète un champ d'identité ; refuse et consigne toute réécriture. */
+    const identityField = <K extends 'legalName' | 'country' | 'city' | 'domain' | 'website'>(
+      field: K,
+      incoming: Company[K] | null | undefined,
+    ): Company[K] => {
+      const current = existing[field];
+      if (incoming == null || incoming === '') return current;
+      if (current == null || current === '') return incoming as Company[K];
+      if (String(current).trim().toLowerCase() === String(incoming).trim().toLowerCase()) {
+        return current;
+      }
+      conflicts.push(`${field} : « ${String(current)} » ≠ « ${String(incoming)} »`);
+      return current;
+    };
+
     const updated: Company = {
       ...existing,
-      legalName: patch.legalName ?? existing.legalName,
-      country: patch.country ?? existing.country,
+      legalName: identityField('legalName', patch.legalName),
+      country: identityField('country', patch.country),
+      city: identityField('city', patch.city),
+      website: identityField('website', patch.website),
+      domain: identityField('domain', patch.domain),
+      // La région n'établit pas l'identité : deux sources peuvent la nommer
+      // différemment pour un même lieu sans que rien ne cloche.
       region: patch.region ?? existing.region,
-      city: patch.city ?? existing.city,
-      website: patch.website ?? existing.website,
-      domain: patch.domain ?? existing.domain,
       industries: patch.industries?.length ? patch.industries : existing.industries,
       sizeBand: patch.sizeBand ?? existing.sizeBand,
       employeesEstimate: patch.employeesEstimate ?? existing.employeesEstimate,
@@ -236,10 +282,18 @@ export class CompanyRepository {
       description: patch.description ?? existing.description,
       profile: { ...existing.profile, ...(patch.profile ?? {}) },
       enriched: true,
+      identityStatus: conflicts.length > 0 ? 'conflict' : existing.identityStatus,
       updatedAt: nowIso(),
     };
     this.#write(updated);
-    return updated;
+    return { company: updated, conflicts };
+  }
+
+  /** Met une fiche en quarantaine, ou l'en sort après revue humaine. */
+  setIdentityStatus(companyId: CompanyId, status: Company['identityStatus']): void {
+    this.db
+      .prepare('UPDATE companies SET identity_status = ?, updated_at = ? WHERE id = ?')
+      .run(status, nowIso(), companyId);
   }
 
   /** Records that a fact about this company was observed at a source just now. */
@@ -310,7 +364,8 @@ export class CompanyRepository {
            city = @city, website = @website, domain = @domain, industries = @industries,
            size_band = @size_band, employees_estimate = @employees_estimate,
            founded_year = @founded_year, description = @description, profile = @profile,
-           enriched = @enriched, updated_at = @updated_at
+           enriched = @enriched, identity_status = @identity_status,
+           updated_at = @updated_at
          WHERE id = @id`,
         // `data_origin` est absente de cette liste, et doit le rester : la
         // lignée se pose à la création et ne se réévalue jamais. L'ajouter ici
@@ -326,6 +381,7 @@ export class CompanyRepository {
         website: company.website,
         domain: company.domain,
         industries: toJson(company.industries),
+        identity_status: company.identityStatus,
         size_band: company.sizeBand,
         employees_estimate: company.employeesEstimate,
         founded_year: company.foundedYear,
@@ -498,7 +554,26 @@ export class CompanyRepository {
 
   // ─── Contacts ───────────────────────────────────────────────────────────
 
+  /**
+   * Ajoute un contact, ou rend celui qui existe déjà.
+   *
+   * REVENUE-001 a écrit huit contacts sur Hagenauer+Denk : quatre paires
+   * identiques, mêmes adresse et téléphone. Un agent qui repasse sur une
+   * entreprise relit la même page de contact et la reconsigne à l'identique.
+   *
+   * Un doublon n'est pas seulement inesthétique dans un livrable — il fausse le
+   * jugement. « Huit contacts » suggère une organisation bien documentée là où
+   * il y en a deux, et le client s'en aperçoit à la première tentative.
+   *
+   * Quatre signatures, testées dans l'ordre : adresse, téléphone, profil
+   * LinkedIn, puis nom + rôle. La première qui correspond suffit — deux entrées
+   * partageant une adresse sont la même personne, quel que soit l'orthographe
+   * du nom. Tout est syntaxique : aucune comparaison n'appelle le modèle.
+   */
   addContact(input: Omit<Contact, 'id' | 'createdAt'>): Contact {
+    const existing = this.#findMatchingContact(input);
+    if (existing) return this.#completeContact(existing, input);
+
     const contact: Contact = { ...input, id: id('cnt'), createdAt: nowIso() };
     this.db
       .prepare(
@@ -520,6 +595,77 @@ export class CompanyRepository {
         created_at: contact.createdAt,
       });
     return contact;
+  }
+
+  /**
+   * Complète un contact connu avec ce que la nouvelle observation apporte.
+   *
+   * Deux relevés d'un même contact rapportent souvent des canaux différents :
+   * l'un l'adresse, l'autre le téléphone. Rendre simplement l'existant ferait
+   * de la déduplication une perte d'information — le client recevrait un
+   * contact joignable par un seul canal alors que deux étaient connus.
+   *
+   * Ne remplit que le vide. Un canal déjà renseigné n'est jamais réécrit : la
+   * même règle que pour l'identité d'une entreprise, et pour la même raison.
+   */
+  #completeContact(existing: Contact, incoming: Omit<Contact, 'id' | 'createdAt'>): Contact {
+    const merged: Contact = {
+      ...existing,
+      name: existing.name.trim() || incoming.name,
+      role: existing.role ?? incoming.role,
+      email: existing.email ?? incoming.email,
+      phone: existing.phone ?? incoming.phone,
+      linkedin: existing.linkedin ?? incoming.linkedin,
+      confidence: Math.max(existing.confidence, incoming.confidence),
+      evidenceId: existing.evidenceId ?? incoming.evidenceId,
+    };
+
+    const unchanged =
+      merged.name === existing.name &&
+      merged.role === existing.role &&
+      merged.email === existing.email &&
+      merged.phone === existing.phone &&
+      merged.linkedin === existing.linkedin &&
+      merged.confidence === existing.confidence &&
+      merged.evidenceId === existing.evidenceId;
+    if (unchanged) return existing;
+
+    this.db
+      .prepare(
+        `UPDATE contacts SET name = @name, role = @role, email = @email, phone = @phone,
+                             linkedin = @linkedin, confidence = @confidence, evidence_id = @evidence_id
+          WHERE id = @id`,
+      )
+      .run({
+        id: merged.id,
+        name: merged.name,
+        role: merged.role,
+        email: merged.email,
+        phone: merged.phone,
+        linkedin: merged.linkedin,
+        confidence: merged.confidence,
+        evidence_id: merged.evidenceId,
+      });
+    return merged;
+  }
+
+  /** Le contact déjà enregistré qui désigne la même personne, s'il existe. */
+  #findMatchingContact(input: Omit<Contact, 'id' | 'createdAt'>): Contact | null {
+    const candidates = this.contactsFor(input.companyId);
+    if (candidates.length === 0) return null;
+
+    const email = normaliseEmail(input.email);
+    const phone = normalisePhone(input.phone);
+    const linkedin = normaliseLinkedIn(input.linkedin);
+    const person = normalisePerson(input.name, input.role);
+
+    for (const other of candidates) {
+      if (email && normaliseEmail(other.email) === email) return other;
+      if (phone && normalisePhone(other.phone) === phone) return other;
+      if (linkedin && normaliseLinkedIn(other.linkedin) === linkedin) return other;
+      if (person && normalisePerson(other.name, other.role) === person) return other;
+    }
+    return null;
   }
 
   contactsFor(companyId: CompanyId): Contact[] {
@@ -605,3 +751,50 @@ export class CompanyRepository {
     }));
   }
 }
+
+// ─── Signatures de contact ──────────────────────────────────────────────────
+//
+// Purement typographiques. Elles rapprochent deux écritures d'une même donnée,
+// jamais deux données différentes : « +49 8323 96600 » et « 08323 96600 » sont
+// le même numéro, « Anna Weber » et « A. Weber » ne sont pas rapprochées.
+
+const normaliseEmail = (email: string | null): string | null =>
+  email?.trim().toLowerCase() || null;
+
+/**
+ * Ne garde que les chiffres, et laisse tomber le préfixe international.
+ *
+ * « +49 8323 96600 » et « 08323 96600 » sont composés différemment mais
+ * joignent la même personne. Comparer les huit derniers chiffres rapproche les
+ * deux sans confondre deux lignes distinctes.
+ */
+const normalisePhone = (phone: string | null): string | null => {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  return digits.length >= 8 ? digits.slice(-8) : null;
+};
+
+const normaliseLinkedIn = (url: string | null): string | null => {
+  if (!url) return null;
+  const path = url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '');
+  return path.replace(/\/+$/, '') || null;
+};
+
+/**
+ * Nom et rôle réunis — la signature la plus faible, et la dernière essayée.
+ *
+ * Deux « Contact général » sans coordonnées sur la même entreprise sont la
+ * même entrée : ni l'un ni l'autre ne désigne quelqu'un.
+ */
+const normalisePerson = (name: string, role: string | null): string | null => {
+  const clean = (text: string): string =>
+    text
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  const person = clean(name);
+  if (!person) return null;
+  return `${person}|${clean(role ?? '')}`;
+};
+

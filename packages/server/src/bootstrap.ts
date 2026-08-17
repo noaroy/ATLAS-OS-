@@ -83,6 +83,15 @@ export interface AtlasSystem {
    * journal que personne ne relit après un redémarrage.
    */
   recovery: RecoveryReport;
+  /**
+   * Le runtime d'agent, et le registre budgétaire qui le borne.
+   *
+   * Exposés pour les missions au plan fixe — une reprise, un sauvetage — qui
+   * doivent exécuter des étapes précises sans passer par la planification
+   * d'Hermès, laquelle coûte un appel au modèle avant même de commencer.
+   */
+  runtime: AgentRuntime;
+  ledger: BudgetLedger;
   settings(): RuntimeSettings;
   shutdown(reason: string): Promise<void>;
 }
@@ -364,6 +373,8 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     searchFabric: engine,
     inferenceFabric: inference,
     recovery,
+    runtime,
+    ledger,
     settings,
     shutdown,
   };

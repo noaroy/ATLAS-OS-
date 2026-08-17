@@ -20,7 +20,21 @@ afterEach(() => {
 });
 
 /** A mission and task pair, persisted so tool context has something real. */
-function scenario(sys: TestSystem, agentKey: string): { mission: Mission; task: MissionTask } {
+/**
+ * Une étape de test, sur une action volontairement hors pipeline.
+ *
+ * Ces tests éprouvent la boucle d'outils du runtime, pas la sémantique d'une
+ * étape commerciale. Les faire tourner sous `research` les soumettrait au
+ * périmètre de la découverte — qui exclut `memory_remember` et
+ * `create_document`, et pour de bonnes raisons — ce qui mesurerait la
+ * restriction au lieu de la boucle. Le périmètre par action a ses propres
+ * tests, dans `step-scope.test.ts`.
+ */
+function scenario(
+  sys: TestSystem,
+  agentKey: string,
+  action = 'exercise',
+): { mission: Mission; task: MissionTask } {
   const mission = sys.repos.missions.create({
     title: 'Runtime test',
     objective: 'Exercise the agent runtime directly.',
@@ -31,7 +45,7 @@ function scenario(sys: TestSystem, agentKey: string): { mission: Mission; task: 
       ref: 'only',
       title: 'The step under test',
       agentKey,
-      action: 'research',
+      action,
       instruction: 'Do the thing the test needs.',
       input: {},
       dependsOn: [],

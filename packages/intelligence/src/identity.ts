@@ -148,6 +148,139 @@ export function canonicalKey(input: {
   return `n:${country}:${name}`;
 }
 
+/** Ce qu'on sait d'une entreprise au moment de décider si c'est bien elle. */
+export interface IdentityEvidence {
+  name: string;
+  domain?: string | null;
+  website?: string | null;
+  legalName?: string | null;
+  country?: string | null;
+  city?: string | null;
+  /** Numéro de registre du commerce, quand il est connu. */
+  registryId?: string | null;
+}
+
+export type IdentityVerdict =
+  /** La même organisation, établie sur des signaux qui ne se contredisent pas. */
+  | 'same'
+  /** Deux organisations distinctes — un signal fort les sépare. */
+  | 'different'
+  /** Rien ne tranche : ni assez d'accord pour fusionner, ni de quoi séparer. */
+  | 'uncertain';
+
+export interface IdentityAssessment {
+  verdict: IdentityVerdict;
+  /** 0..1 — ce que valent les accords constatés. */
+  confidence: number;
+  agreements: string[];
+  conflicts: string[];
+}
+
+/**
+ * S'agit-il de la même entreprise ?
+ *
+ * REVENUE-001 a produit une fiche nommée « Heidelberg Druckmaschinen AG »
+ * portant le domaine `bhs-corrugated.com` et la ville de BHS Corrugated. Deux
+ * fabricants allemands réels, tous deux de lignée `live` — la barrière de
+ * lignée ne pouvait rien voir, et n'avait rien à voir : le problème n'est pas
+ * la provenance, c'est l'identité.
+ *
+ * Trois principes, dans cet ordre :
+ *
+ *   1. **Un désaccord fort tranche seul.** Deux domaines différents désignent
+ *      deux organisations, point. C'est le cas explicitement interdit :
+ *      l'entreprise A ne peut pas hériter du domaine de l'entreprise B.
+ *   2. **Un accord fort ne suffit pas s'il est seul.** Un nom identique dans
+ *      deux pays différents n'établit rien : « Meyer GmbH » existe partout.
+ *   3. **L'incertitude reste l'incertitude.** Elle n'est pas arrondie vers la
+ *      fusion sous prétexte que fusionner est plus commode.
+ *
+ * Purement déterministe : aucune comparaison n'appelle le modèle. Un verdict
+ * d'identité doit pouvoir être rejoué à l'identique et expliqué à un client.
+ */
+export function assessIdentity(a: IdentityEvidence, b: IdentityEvidence): IdentityAssessment {
+  const agreements: string[] = [];
+  const conflicts: string[] = [];
+
+  const domainA = a.domain ?? normaliseDomain(a.website);
+  const domainB = b.domain ?? normaliseDomain(b.website);
+  const nameA = normaliseName(a.name);
+  const nameB = normaliseName(b.name);
+  const legalA = a.legalName ? normaliseName(a.legalName) : null;
+  const legalB = b.legalName ? normaliseName(b.legalName) : null;
+  const countryA = a.country?.trim().toLowerCase() || null;
+  const countryB = b.country?.trim().toLowerCase() || null;
+  const cityA = a.city?.trim().toLowerCase() || null;
+  const cityB = b.city?.trim().toLowerCase() || null;
+
+  // ── Ce qui sépare, quoi qu'il en soit par ailleurs ──────────────────────
+  if (a.registryId && b.registryId && a.registryId.trim() !== b.registryId.trim()) {
+    conflicts.push(`identifiants légaux différents (${a.registryId} ≠ ${b.registryId})`);
+    return { verdict: 'different', confidence: 0, agreements, conflicts };
+  }
+  if (domainA && domainB && domainA !== domainB) {
+    conflicts.push(`domaines différents (${domainA} ≠ ${domainB})`);
+    return { verdict: 'different', confidence: 0, agreements, conflicts };
+  }
+  if (countryA && countryB && countryA !== countryB) {
+    conflicts.push(`pays différents (${a.country} ≠ ${b.country})`);
+    return { verdict: 'different', confidence: 0, agreements, conflicts };
+  }
+
+  // ── Ce qui rapproche ────────────────────────────────────────────────────
+  let score = 0;
+  if (a.registryId && b.registryId) {
+    agreements.push(`même identifiant légal (${a.registryId})`);
+    score += 0.6;
+  }
+  if (domainA && domainB) {
+    agreements.push(`même domaine (${domainA})`);
+    score += 0.55;
+  }
+  if (legalA && legalB && legalA === legalB) {
+    agreements.push('même raison sociale');
+    score += 0.35;
+  }
+  if (nameA && nameB && nameA === nameB) {
+    agreements.push('même nom normalisé');
+    score += 0.3;
+  } else if (nameA && nameB && !legalA && !legalB) {
+    // Des noms qui divergent quand rien d'autre ne les rattache : signal
+    // faible, mais c'est exactement le cas Heidelberg / BHS quand un seul des
+    // deux côtés porte un domaine.
+    conflicts.push(`noms sans rapport (« ${nameA} » ≠ « ${nameB} »)`);
+    score -= 0.25;
+  }
+  if (countryA && countryB) {
+    agreements.push(`même pays (${a.country})`);
+    score += 0.1;
+  }
+  if (cityA && cityB) {
+    if (cityA === cityB) {
+      agreements.push(`même ville (${a.city})`);
+      score += 0.1;
+    } else {
+      conflicts.push(`villes différentes (${a.city} ≠ ${b.city})`);
+      score -= 0.2;
+    }
+  }
+
+  const confidence = Math.max(0, Math.min(1, score));
+
+  // Le seuil est haut, et il doit l'être : le coût d'une fusion erronée est un
+  // dossier client mêlant deux entreprises, découvert par le client. Le coût
+  // d'une fusion manquée est une fiche en double, découverte par nous.
+  if (confidence >= 0.6 && conflicts.length === 0) {
+    return { verdict: 'same', confidence, agreements, conflicts };
+  }
+  return { verdict: 'uncertain', confidence, agreements, conflicts };
+}
+
+/** La fusion n'est autorisée que sur une identité établie. */
+export function canMerge(assessment: IdentityAssessment): boolean {
+  return assessment.verdict === 'same';
+}
+
 /**
  * Whether two candidates are the same organisation.
  *

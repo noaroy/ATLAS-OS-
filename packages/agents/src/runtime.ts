@@ -7,6 +7,7 @@ import type { LlmMessage, LlmProvider, LlmContent, LlmServerTool } from '@atlas/
 import { textOf, toolCallsOf, totalTokens } from '@atlas/llm';
 import type { DiscoveryService, OpportunityService } from '@atlas/intelligence';
 import type { AtlasTool, AutomationGateway, ToolContext } from './tool-types.ts';
+import { toolsForAction, withheldFrom } from './step-scope.ts';
 import type { ToolRegistry } from './tools.ts';
 
 /**
@@ -179,12 +180,19 @@ export class AgentRuntime {
 
     // The allow-list is derived from the skills the agent declares, so a
     // granted tool always has a declared skill behind it (Article VII).
-    const allowedTools = this.deps.repos.agents.toolsFor(agent.key);
+    //
+    // Puis l'étape resserre : la compétence dit ce qu'un agent *sait* faire,
+    // l'action dit ce qu'on lui demande *maintenant*. REVENUE-001 a montré ce
+    // que coûte l'union des deux — l'explorateur a enrichi et cherché des
+    // contacts pendant la découverte, épuisant 116 257 des 120 000 jetons de
+    // la mission avant que la qualification ne démarre.
+    const agentTools = this.deps.repos.agents.toolsFor(agent.key);
+    const allowedTools = toolsForAction(task.action, agentTools);
     const tools = this.deps.registry.forAgent(allowedTools);
     const serverTools = this.#serverToolsFor(tools);
 
     const messages: LlmMessage[] = [
-      { role: 'user', content: [{ type: 'text', text: this.#buildBriefing(input) }] },
+      { role: 'user', content: [{ type: 'text', text: this.#buildBriefing(input, agentTools) }] },
     ];
 
     const artifacts: MissionArtifact[] = [];
@@ -833,7 +841,7 @@ export class AgentRuntime {
   }
 
   /** The assignment itself: instruction, inputs, upstream results, prior knowledge. */
-  #buildBriefing(input: AgentRunInput): string {
+  #buildBriefing(input: AgentRunInput, agentTools: readonly string[] = []): string {
     const { mission, task, upstream } = input;
     const sections: string[] = [
       `# Objectif de la mission\n${mission.objective}`,
@@ -872,6 +880,21 @@ export class AgentRuntime {
           '',
           "**Ne refaites pas leur travail.** Vous n'avez pas été mandaté pour cela, et le produire ici le laisserait hors du pipeline : il ne serait ni vérifié, ni tracé, ni exploitable par la suite.",
           "Faites ce que votre étape permet avec ce que vous avez réellement reçu, puis dites clairement ce qui manquait. Un constat d'absence est un résultat valable.",
+        ].join('\n'),
+      );
+    }
+
+    // Un outil retiré sans explication se réclame tour après tour, ce qui coûte
+    // exactement ce que la restriction voulait économiser. Mieux vaut dire
+    // franchement que ce travail appartient à une autre étape.
+    const withheld = withheldFrom(task.action, agentTools);
+    if (withheld.length > 0) {
+      sections.push(
+        [
+          '# Ce qui ne relève pas de cette étape',
+          `Non disponibles ici : ${withheld.join(', ')}.`,
+          '',
+          "Ce n'est pas un manque à combler : ces travaux appartiennent aux étapes suivantes, qui les feront avec le budget prévu pour cela. Faire ici ce qui revient à plus tard consomme le budget de la mission entière et laisse le pipeline sans score ni verdict.",
         ].join('\n'),
       );
     }

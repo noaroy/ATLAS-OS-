@@ -943,4 +943,37 @@ ALTER TABLE llm_calls ADD COLUMN evidence_count INTEGER;
 CREATE INDEX idx_llm_calls_subject ON llm_calls(mission_id, subject);
 `,
   },
+  {
+    version: 14,
+    name: 'company-identity-status',
+    sql: `
+-- ─── L'identité d'une entreprise ──────────────────────────────────────────
+--
+-- REVENUE-001 a produit une fiche nommée « Heidelberg Druckmaschinen AG »
+-- portant le domaine \`bhs-corrugated.com\` et la ville de BHS Corrugated. Deux
+-- fabricants allemands réels, distincts, tous deux de lignée \`live\`.
+--
+-- La barrière de lignée ne pouvait rien voir, et n'avait rien à voir : la
+-- provenance des deux fiches était irréprochable. Ce qui a cédé est ailleurs —
+-- \`enrich()\` remplaçait tous les champs, domaine et ville compris, et la clé
+-- canonique est figée à la création. Un enrichissement a donc réécrit
+-- l'identité d'une fiche existante sans que rien ne recalcule sa clé.
+--
+--   ok              rien ne se contredit
+--   conflict        deux sources se contredisent sur ce qui établit l'identité
+--   pending-review   mis de côté en attendant un arbitrage humain
+--
+-- \`ok\` est le défaut, contrairement à \`data_origin\` où le défaut est
+-- \`unknown\`. La différence est délibérée : une lignée non déclarée est un
+-- silence suspect, alors qu'une identité sans contradiction constatée est
+-- simplement une identité sans contradiction constatée. On ne met pas en
+-- quarantaine tout le registre pour un défaut qui touche une fiche.
+--
+-- Rien n'est rétro-marqué : les contradictions passées n'ont pas été
+-- consignées, et les inventer maintenant reviendrait à fabriquer un audit.
+ALTER TABLE companies ADD COLUMN identity_status TEXT NOT NULL DEFAULT 'ok';
+
+CREATE INDEX idx_companies_identity ON companies(identity_status);
+`,
+  },
 ];

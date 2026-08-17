@@ -94,6 +94,9 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
   const { repos, missionId, gate } = input;
 
   const mission = repos.missions.get(missionId);
+  const mode = (mission?.context as { executionMode?: unknown } | null)?.executionMode === 'live'
+    ? 'live'
+    : 'simulation';
   const tasks = repos.missions.tasksFor(missionId);
   const opportunities = repos.opportunities.forMission(missionId);
   const evidence = repos.companies.evidenceForMission(missionId);
@@ -107,6 +110,23 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
   const unsourcedFirsthand = firsthand.filter((e) => !e.sourceRef);
   const inferredCount = evidence.filter((e) => e.nature === 'inferred').length;
   const unsupported = repos.decisions.unsupportedClaims(missionId);
+
+  // ── La lignée des entités utilisées ──────────────────────────────────────
+  //
+  // Le socle vérifiait `evidence.simulated`, et cela ne suffisait pas :
+  // VAL-003 a produit quatre candidats fabriqués dont les preuves portaient
+  // `simulated = 0`, puisque la mission *courante* était réelle. Le drapeau
+  // décrit qui a écrit la ligne, pas d'où vient l'entité qu'elle décrit.
+  //
+  // Une conclusion réelle ne peut donc pas reposer sur une entité de lignée
+  // `simulated` ou `unknown`, quel que soit le drapeau des preuves.
+  const contaminated =
+    mode === 'live'
+      ? opportunities.filter((o) => {
+          const company = repos.companies.get(o.companyId);
+          return !company || company.dataOrigin !== 'live';
+        })
+      : [];
 
   const statusOf = (ref: string): string => tasks.find((t) => t.ref === ref)?.status ?? 'absent';
   const cancelled = tasks.filter((t) => t.status === 'cancelled');
@@ -162,6 +182,24 @@ export function evaluatePreset(input: PresetVerdictInput): PresetVerdictReport {
           ? `${sourced.length} sourcée(s) sur ${evidence.length}` +
             (inferredCount > 0 ? ` · ${inferredCount} inférence(s)` : '')
           : `${unsourcedFirsthand.length} affirmation(s) sans source`,
+      foundational: true,
+      required: true,
+    },
+    {
+      // Le drapeau `simulated` d'une preuve dit qui l'a écrite ; il ne dit pas
+      // d'où vient l'entreprise qu'elle décrit. Les quatre candidats fabriqués
+      // de VAL-003 passaient tous les contrôles pour cette seule raison.
+      label: 'aucune entité de lignée douteuse',
+      met: contaminated.length === 0,
+      observed:
+        contaminated.length === 0
+          ? mode === 'live'
+            ? `${opportunities.length} entité(s) de lignée réelle`
+            : 'mode simulation — lignée non exigée'
+          : `${contaminated.length} entité(s) simulated/unknown : ${contaminated
+              .map((o) => repos.companies.get(o.companyId)?.name ?? o.companyId)
+              .slice(0, 3)
+              .join(', ')}`,
       foundational: true,
       required: true,
     },

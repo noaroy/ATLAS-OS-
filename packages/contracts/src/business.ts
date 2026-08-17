@@ -63,6 +63,24 @@ export const COMPANY_SIZE_BANDS: readonly CompanySizeBand[] = [
  * looking for distributors is the same company later considered as a supplier.
  * That is what makes prior work reusable instead of re-bought (Article XI).
  */
+/**
+ * D'où vient une fiche d'entreprise.
+ *
+ * VAL-003, mission réelle, a rendu quatre candidats fabriqués lors d'une
+ * démonstration cinq jours plus tôt : le registre de découverte relisait la
+ * table sans savoir ce qu'il y trouvait, et les preuves produites portaient
+ * `simulated = 0` puisque la mission *courante* était réelle. Une donnée
+ * fabriquée entrait dans un résultat réel en se blanchissant au passage.
+ *
+ * `unknown` est le défaut délibérément : une fiche dont on ne sait rien n'est
+ * pas présumée bonne. Le sens de l'erreur compte — refuser à tort coûte une
+ * question, accepter à tort coûte la confiance dans tout le reste.
+ *
+ * Jamais recalculée depuis le nom. Le préfixe « [SIMULÉ] » existait déjà et
+ * n'a rien empêché : un nom s'affiche, il ne contraint pas.
+ */
+export type DataOrigin = 'live' | 'simulated' | 'unknown';
+
 export interface Company {
   id: CompanyId;
   /** Normalised identity used for deduplication. Unique. */
@@ -84,6 +102,13 @@ export interface Company {
   profile: Record<string, unknown>;
   /** Whether anything is known beyond the name that identified it. */
   enriched: boolean;
+  /**
+   * La lignée de cette fiche. Posée à la création, jamais réévaluée.
+   *
+   * Une mission réelle ne peut pas transformer une fiche `simulated` en
+   * `live` : ce serait exactement le blanchiment que cette colonne empêche.
+   */
+  dataOrigin: DataOrigin;
   firstSeenAt: string;
   /** Last time a fact about this company was observed at a source. */
   lastVerifiedAt: string | null;

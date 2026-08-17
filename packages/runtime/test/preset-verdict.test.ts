@@ -76,6 +76,9 @@ function realCandidate(missionId: string, index: number, options: { simulated?: 
     name: `Candidat ${index} GmbH`,
     country: 'DE',
     website: `https://candidat-${index}.de`,
+    // Un candidat réel doit porter une lignée réelle : le socle refuse
+    // désormais toute entité `simulated` ou `unknown` en mode réel.
+    dataOrigin: 'live',
   });
   const { opportunity } = repos.opportunities.register({
     missionId,
@@ -273,7 +276,7 @@ describe('le socle commun ne se contourne pas', () => {
     });
 
     const foundation = verdict.criteria.filter((c) => c.foundational);
-    assert.equal(foundation.length, 5, 'les cinq critères du socle doivent apparaître');
+    assert.equal(foundation.length, 6, 'les six critères du socle doivent apparaître');
     for (const c of foundation) assert.equal(c.required, true);
   });
 });
@@ -345,6 +348,7 @@ describe('inférence et invention ne se confondent pas', () => {
       canonicalKey: `e-${nature}-${sourced}`,
       name: `Société ${nature}`,
       country: 'DE',
+      dataOrigin: 'live',
     });
     const { opportunity } = repos.opportunities.register({
       missionId,
@@ -413,5 +417,96 @@ describe('inférence et invention ne se confondent pas', () => {
 
     const criterion = verdictFor(id).criteria.find((c) => c.label.includes('première main sans source'))!;
     assert.match(criterion.observed, /inférence/);
+  });
+});
+
+/**
+ * Le socle vérifie la lignée des entités, pas seulement le drapeau des preuves.
+ *
+ * VAL-003 a produit quatre candidats fabriqués dont les preuves portaient
+ * `simulated = 0`, puisque la mission *courante* était réelle. Le drapeau dit
+ * qui a écrit la ligne ; il ne dit pas d'où vient l'entreprise qu'elle décrit.
+ */
+describe('contamination de lignée dans un verdict LIVE', () => {
+  const permissive = {
+    ...DEFAULT_GATE,
+    requiredSteps: [],
+    minCandidates: 0,
+    minSourcedEvidence: 0,
+    minFirsthandEvidence: 0,
+    requiresHumanReview: false,
+    requiresRealProvider: false,
+  };
+
+  /** Un candidat dont la lignée est décidée par le test. */
+  function candidateWithOrigin(missionId: string, origin: 'live' | 'simulated' | 'unknown'): void {
+    const { company } = repos.companies.upsert({
+      canonicalKey: `orig-${origin}`,
+      name: `Société ${origin}`,
+      country: 'DE',
+      website: `https://societe-${origin}.de`,
+      dataOrigin: origin,
+    });
+    const { opportunity } = repos.opportunities.register({
+      missionId,
+      companyId: company.id,
+      departmentKey: 'business-expansion',
+      targetTypes: ['distributor'],
+      discoveredBy: 'search',
+    });
+    repos.companies.appendEvidence({
+      companyId: company.id,
+      opportunityId: opportunity.id,
+      missionId,
+      field: 'existence',
+      claim: 'existe',
+      value: null,
+      nature: 'observed',
+      sourceKey: 'searxng',
+      sourceRef: `https://societe-${origin}.de/about`,
+      sourceTitle: null,
+      basis: null,
+      confidence: 0.8,
+      // Le drapeau dit « réelle » : c'est précisément le blanchiment observé.
+      simulated: false,
+      collectedAt: new Date().toISOString(),
+      agentKey: 'scout',
+    });
+  }
+
+  const verdictFor = (id: string) =>
+    evaluatePreset({ repos, missionId: id as never, gate: permissive, maxCostUsd: 0.35, spentUsd: 0.1 });
+
+  test('une entité simulée fait échouer le verdict, malgré des preuves marquées réelles', () => {
+    const id = missionWith({ discovery: 'succeeded' });
+    candidateWithOrigin(id, 'simulated');
+
+    const verdict = verdictFor(id);
+    assert.equal(verdict.verdict, 'FAIL');
+    assert.match(verdict.rationale, /lignée douteuse/);
+  });
+
+  test('une entité de provenance inconnue fait échouer le verdict', () => {
+    const id = missionWith({ discovery: 'succeeded' });
+    candidateWithOrigin(id, 'unknown');
+
+    assert.equal(verdictFor(id).verdict, 'FAIL');
+  });
+
+  test('une entité réelle passe', () => {
+    const id = missionWith({ discovery: 'succeeded' });
+    candidateWithOrigin(id, 'live');
+
+    assert.notEqual(verdictFor(id).verdict, 'FAIL');
+  });
+
+  test('la lignée n’est pas exigée en mode simulation', () => {
+    // Une démonstration assumée n'a pas à prétendre à une lignée réelle.
+    const id = missionWith({ discovery: 'succeeded' }, { executionMode: 'simulation' });
+    candidateWithOrigin(id, 'simulated');
+
+    const criterion = verdictFor(id).criteria.find((c) => c.label.includes('lignée douteuse'))!;
+    assert.equal(criterion.met, true);
+    assert.match(criterion.observed, /simulation/);
   });
 });

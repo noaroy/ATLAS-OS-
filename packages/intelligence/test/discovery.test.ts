@@ -176,6 +176,9 @@ describe('la combinaison des providers', () => {
       domain: 'deja-connue.de',
       industries: ['Équipement industriel'],
       enriched: true,
+      // La lignée doit être déclarée : une fiche de provenance inconnue est
+      // désormais refusée en mode réel, et c'est la propriété qu'on veut.
+      dataOrigin: 'live',
     });
     sys.repos.companies.markVerified(company.id);
 

@@ -18,6 +18,21 @@ import type {
  *
  * Il ne rend que des entreprises réellement enrichies : une simple mention
  * laissée par une mission précédente n'est pas une découverte.
+ *
+ * ── La barrière de lignée ──────────────────────────────────────────────────
+ *
+ * En mode réel, il ne rend **que** des fiches de lignée `live`. VAL-003 a
+ * montré pourquoi : quatre entreprises fabriquées lors d'une démonstration
+ * cinq jours plus tôt sont ressorties comme candidats d'une mission réelle,
+ * parce que ce provider relisait la table sans savoir ce qu'il y trouvait.
+ *
+ * `unknown` est refusé au même titre que `simulated`. Une fiche dont la
+ * provenance n'est pas établie n'est pas présumée bonne : le sens de l'erreur
+ * compte, et accepter à tort coûte la confiance dans tout le reste.
+ *
+ * Le préfixe « [SIMULÉ] » du nom n'est jamais consulté. Il existait déjà
+ * pendant tout l'incident et n'a rien empêché — un nom s'affiche, il ne
+ * contraint pas.
  */
 export class RegistryDiscoveryProvider implements DiscoveryProvider {
   readonly key = 'registry';
@@ -25,7 +40,16 @@ export class RegistryDiscoveryProvider implements DiscoveryProvider {
   readonly kind = 'registry' as const;
   readonly synthetic = false;
 
-  constructor(private readonly repos: Repositories) {}
+  constructor(
+    private readonly repos: Repositories,
+    /**
+     * Le mode d'exécution du déploiement.
+     *
+     * Passé à la construction plutôt que lu par requête : la barrière ne doit
+     * pas dépendre d'un paramètre qu'un appelant pourrait omettre.
+     */
+    private readonly mode: 'live' | 'simulation' = 'live',
+  ) {}
 
   availability(): Availability {
     const known = this.repos.companies.count();
@@ -46,6 +70,10 @@ export class RegistryDiscoveryProvider implements DiscoveryProvider {
     for (const country of query.countries.length ? query.countries : [undefined]) {
       for (const company of this.repos.companies.search({ country, limit: query.limit * 3 })) {
         if (!company.enriched) continue;
+        // La barrière de lignée. En mode réel, seule une fiche dont la
+        // provenance est établie comme réelle peut ressortir — `simulated` et
+        // `unknown` sont écartées sans distinction.
+        if (this.mode === 'live' && company.dataOrigin !== 'live') continue;
         if (seen.has(company.id)) continue;
         if (!matchesIndustry(company.industries, query.industries)) continue;
 

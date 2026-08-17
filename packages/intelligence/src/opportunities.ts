@@ -80,6 +80,14 @@ export interface DiscoveryOutcome {
   duplicates: Array<{ name: string; mergedInto: string }>;
   /** Companies answered from the registry instead of being researched again. */
   reusedCount: number;
+  /**
+   * Candidats écartés par la barrière de lignée.
+   *
+   * Distincts des doublons : un doublon est la même entreprise vue deux fois,
+   * un rejet de lignée est une fiche qu'on refuse de considérer comme réelle.
+   * Les confondre masquerait précisément ce que cette barrière protège.
+   */
+  rejected: Array<{ name: string; reason: string }>;
 }
 
 export interface IntelligenceDeps {
@@ -115,7 +123,7 @@ export class OpportunityService {
 
     const { repos } = this.deps;
     const freshnessDays = input.freshnessDays ?? DEFAULT_FRESHNESS_DAYS;
-    const outcome: DiscoveryOutcome = { registered: [], duplicates: [], reusedCount: 0 };
+    const outcome: DiscoveryOutcome = { registered: [], duplicates: [], reusedCount: 0, rejected: [] };
     const accepted: Array<{ name: string; domain: string | null; country: string | null }> = [];
 
     for (const candidate of input.candidates) {
@@ -137,6 +145,27 @@ export class OpportunityService {
       const known = repos.companies.getByCanonicalKey(key);
       const reused = Boolean(known && this.#isFresh(known, freshnessDays));
 
+      // ── Défense en profondeur : la lignée, avant toute écriture ─────────
+      //
+      // La barrière principale est dans le provider de registre, qui n'a pas le
+      // droit de rendre une fiche fabriquée en mode réel. Celle-ci est la
+      // seconde : même si un provider laissait passer une lignée simulée — par
+      // un chemin qu'on n'a pas prévu, ou un provider ajouté demain — aucune
+      // opportunité réelle n'est construite dessus.
+      //
+      // Un seul filtre suffirait tant qu'on n'oublie rien. VAL-003 a montré ce
+      // que vaut cette hypothèse : la découverte relisait la table depuis des
+      // mois sans que personne y voie un chemin d'entrée.
+      if (known && !this.deps.simulated && known.dataOrigin !== 'live') {
+        outcome.rejected.push({
+          name,
+          reason:
+            `lignée « ${known.dataOrigin} » : cette fiche ne provient pas d'une source réelle ` +
+            `et ne peut pas servir de candidat à une mission réelle.`,
+        });
+        continue;
+      }
+
       const { company } = repos.companies.upsert({
         canonicalKey: key,
         name,
@@ -147,6 +176,10 @@ export class OpportunityService {
         domain,
         industries: candidate.industries ?? [],
         description: candidate.description ?? null,
+        // La lignée vient du déploiement, jamais de l'appelant — exactement
+        // comme le drapeau `simulated` des preuves. Un agent ne doit pas
+        // pouvoir déclarer que sa production est réelle.
+        dataOrigin: this.deps.simulated ? 'simulated' : 'live',
       });
 
       // Un provider qui ne se prononce pas laisse tous les rôles demandés

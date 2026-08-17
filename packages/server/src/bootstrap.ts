@@ -175,7 +175,13 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // analyse. L'ancienne recherche par LLM reste disponible, mais seulement si
   // le déploiement la demande explicitement : un repli silencieux vers elle
   // coûterait cent fois le prix d'une requête moteur.
-  const discoveryProviders: DiscoveryProvider[] = [new RegistryDiscoveryProvider(repos)];
+  // Le registre reçoit le mode : en réel, il n'a le droit de rendre que des
+  // fiches de lignée établie. Sans cela, une entreprise fabriquée pendant une
+  // démonstration ressort comme candidat d'une mission réelle — c'est ce qui
+  // s'est produit avec quatre d'entre elles lors de VAL-003.
+  const discoveryProviders: DiscoveryProvider[] = [
+    new RegistryDiscoveryProvider(repos, config.llm.mode),
+  ];
 
   // Le moteur est un parc, derrière le contrat d'un moteur unique. Business
   // Expansion ne sait pas que la bascule existe : il reçoit un `SearchProvider`

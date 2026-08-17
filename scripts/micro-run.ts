@@ -36,7 +36,7 @@ const GO = process.argv.includes('--go');
 const outDir = process.argv.find((a) => a.startsWith('--out='))?.slice(6) ?? 'out';
 
 /** Le plafond. Dur, et vérifié à trois endroits : registre, boucle, rapport. */
-const MAX_COST_USD = 0.08;
+const MAX_COST_USD = Number(process.argv.find((a) => a.startsWith('--budget='))?.slice(9) ?? 0.08);
 /** Deux candidats : assez pour éprouver une boucle, assez peu pour ne rien gaspiller. */
 const MAX_CANDIDATES = 2;
 const MODEL = 'claude-haiku-4-5-20251001';
@@ -190,14 +190,40 @@ async function main(): Promise<void> {
   let exportedFiles: string[] = [];
 
   try {
-    const qualification = await pipeline.qualify({
+    // ── La qualification, seulement si elle manque ────────────────────────
+    //
+    // Son artefact est déjà en base ou il ne l'est pas, et le contrat sait le
+    // dire. Rejouer une étape dont la postcondition est déjà vraie coûterait
+    // sans rien produire — et c'est précisément ce que le contrat permet
+    // désormais de constater avant de dépenser.
+    const existing = validateStagePostcondition('qualification', {
+      repos,
       missionId,
       opportunityIds,
-      agentKey: 'ambassador',
-      objective,
-      requiredFields: ['existence'],
     });
-    if (!record('qualification', qualification)) halted = 'qualification';
+    if (existing.passed) {
+      stages.push({
+        name: 'qualification',
+        completed: opportunityIds.length,
+        failed: 0,
+        repaired: 0,
+        passed: true,
+        diagnostic: `${existing.check.actual} — réutilisés, aucun appel.`,
+      });
+      console.log(
+        `  ${c.dim}${at()}${c.reset} │ ${c.green}↺${c.reset} qualification ` +
+          `réutilisée : ${existing.check.actual}, 0 appel`,
+      );
+    } else {
+      const qualification = await pipeline.qualify({
+        missionId,
+        opportunityIds,
+        agentKey: 'ambassador',
+        objective,
+        requiredFields: ['existence'],
+      });
+      if (!record('qualification', qualification)) halted = 'qualification';
+    }
 
     if (!halted) {
       const scoring = await pipeline.score({

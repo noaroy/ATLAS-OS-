@@ -319,13 +319,16 @@ export class DeterministicPipeline {
 
   #outcome(
     stage: string,
-    input: { missionId: string; opportunityIds: string[] },
+    input: { missionId: string; opportunityIds: string[]; model?: ScoringModel },
     counts: { completed: number; failed: number; repaired: number },
   ): StageOutcome {
     const postcondition = validateStagePostcondition(stage, {
       repos: this.deps.repos,
       missionId: input.missionId,
       opportunityIds: input.opportunityIds,
+      // Le seuil voyage avec le contrôle : sans lui, le classement ne peut pas
+      // distinguer une sélection vide d'une étape en panne.
+      ...(input.model ? { shortlistThreshold: input.model.shortlistThreshold } : {}),
     });
     if (!postcondition.passed) this.#log.error(postcondition.diagnostic);
     return { stage, ...counts, postcondition, succeeded: postcondition.passed };

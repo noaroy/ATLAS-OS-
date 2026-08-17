@@ -27,6 +27,14 @@ export interface StageCheckContext {
   opportunityIds: string[];
   /** Ce que l'étape a écrit sur disque, quand elle produit des fichiers. */
   artifacts?: string[];
+  /**
+   * Le score en deçà duquel un candidat n'entre pas dans la sélection.
+   *
+   * Nécessaire au classement pour distinguer deux situations que le compte de
+   * classés confond : une étape qui a dysfonctionné, et un marché qui n'a rien
+   * offert. La seconde est une réponse, pas une panne.
+   */
+  shortlistThreshold?: number;
 }
 
 export interface StageCheck {
@@ -183,12 +191,39 @@ const RANKING: StageContract = {
   completionCondition: (ctx) => {
     const scored = ctx.opportunityIds.filter((id) => ctx.repos.opportunities.get(id)?.score !== null);
     const ranked = scored.filter((id) => ctx.repos.opportunities.get(id)?.rank !== null);
-    const missing = scored
+
+    // Seuls les candidats au-dessus du seuil ont vocation à être classés.
+    //
+    // Sans cette distinction, une sélection légitimement vide — le marché n'a
+    // rien offert d'assez bon — est rapportée comme une panne du classement.
+    // La confusion pousse à la seule correction qui rétablirait le vert :
+    // baisser le seuil, c'est-à-dire vendre ce qu'on venait de juger
+    // insuffisant.
+    const threshold = ctx.shortlistThreshold;
+    const eligible =
+      threshold === undefined
+        ? scored
+        : scored.filter((id) => (ctx.repos.opportunities.get(id)?.score ?? 0) >= threshold);
+
+    const missing = eligible
       .filter((id) => ctx.repos.opportunities.get(id)?.rank === null)
-      .map((id) => `${nameOf(ctx, id)} : noté mais non classé`);
+      .map((id) => `${nameOf(ctx, id)} : au-dessus du seuil mais non classé`);
+
+    if (eligible.length === 0 && scored.length > 0) {
+      const best = Math.max(...scored.map((id) => ctx.repos.opportunities.get(id)?.score ?? 0));
+      return {
+        ok: true,
+        expected: `les candidats au-dessus de ${threshold} classés`,
+        actual:
+          `aucun candidat n'atteint ${threshold} — meilleur score ${best}. ` +
+          `Sélection vide, et c'est le résultat, pas une panne.`,
+        missing: [],
+      };
+    }
+
     return {
       ok: missing.length === 0 && ranked.length > 0,
-      expected: `${scored.length} candidat(s) noté(s) classé(s)`,
+      expected: `${eligible.length} candidat(s) éligible(s) classé(s)`,
       actual: `${ranked.length} classé(s)`,
       missing,
     };

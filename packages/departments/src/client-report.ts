@@ -1,5 +1,6 @@
 import type { Company, Contact, Evidence, Opportunity, ScoringModel } from '@atlas/contracts';
 import type { ReportProvenance, ReportEconomics } from './delivery.ts';
+import { normaliseCriterion } from './translations.ts';
 
 /**
  * Le rapport remis au client, en français, lisible sans connaître ATLAS.
@@ -20,6 +21,28 @@ import type { ReportProvenance, ReportEconomics } from './delivery.ts';
  *      d'une entreprise, et c'est une entreprise réelle.
  */
 
+/**
+ * Un contrôle de qualification, tel qu'il est rendu au client.
+ *
+ * Le rapport ne publie plus la prose libre du modèle. La revue du premier
+ * rapport a montré pourquoi : la synthèse de Burghardt affirmait « une capacité
+ * démontrée à servir des clients industriels français » alors qu'aucune preuve
+ * n'établit la moindre présence française — et que la notation géographique du
+ * même rapport disait exactement le contraire.
+ *
+ * Les contrôles, eux, sont structurés et citent leurs preuves. Publier ceux-ci
+ * plutôt que le résumé supprime la place où l'éditorialisation se glissait.
+ */
+export interface ReportCheck {
+  criterion: string;
+  detail: string;
+  /** Le libellé d'origine, quand il a fallu le traduire. */
+  originalCriterion: string | null;
+  originalDetail: string | null;
+  passed: boolean;
+  evidenceIds: string[];
+}
+
 export interface ReportProspect {
   rank: number;
   company: string;
@@ -28,8 +51,15 @@ export interface ReportProspect {
   sectors: string[];
   score: number;
   confidence: number;
-  /** Pourquoi cette entreprise est pertinente, en français. */
-  whyRelevant: string;
+  /** Ce que les preuves établissent, contrôle par contrôle. */
+  established: ReportCheck[];
+  /**
+   * Ce que la mission demandait et qu'aucune preuve n'établit.
+   *
+   * Écrit plutôt que tu. Une absence de preuve tue se lit comme une capacité
+   * acquise, et c'est exactement la confusion qui a fallu corriger.
+   */
+  notEstablished: string[];
   /** Ce qui reste incertain — écrit, jamais tu. */
   risks: string[];
   /** Ce que nous recommandons d'en faire. */
@@ -139,6 +169,30 @@ const NATURE_LABELS: Readonly<Record<ReportClaim['nature'], string>> = {
   inferred: 'Déduit par ATLAS',
 };
 
+/**
+ * Les secteurs, en français.
+ *
+ * Les étiquettes viennent de la découverte et sont écrites en anglais. Deux
+ * mots sur une puce, mais ce sont les premiers mots que le client lit sous le
+ * nom de l'entreprise — et de l'anglais à cet endroit dit qu'on n'a pas relu.
+ *
+ * Ce qui n'est pas dans la table est rendu tel quel : inventer une traduction
+ * pour un secteur inconnu serait pire qu'afficher l'original.
+ */
+const SECTOR_LABELS: Readonly<Record<string, string>> = {
+  'packaging machinery': 'Machines d’emballage',
+  'industrial equipment': 'Équipements industriels',
+  'systems integration': 'Intégration de systèmes',
+  'industrial automation': 'Automatismes industriels',
+  'packaging machinery distribution': 'Distribution de machines d’emballage',
+  'end-of-line packaging systems': 'Systèmes d’emballage de fin de ligne',
+  'industrial software': 'Logiciel industriel',
+  'embedded systems': 'Systèmes embarqués',
+};
+
+export const sectorLabel = (sector: string): string =>
+  SECTOR_LABELS[sector.trim().toLowerCase()] ?? sector;
+
 const DIMENSION_LABELS: Readonly<Record<string, string>> = {
   'sector-fit': 'Adéquation sectorielle',
   'geographic-fit': 'Couverture géographique',
@@ -171,6 +225,10 @@ export interface ReportEntry {
   contacts: readonly Contact[];
   /** Traductions françaises fournies par l'appelant, par identifiant de preuve. */
   translations?: Record<string, string>;
+  /** Traductions des contrôles, par libellé d'origine normalisé. */
+  checkTranslations?: Record<string, { criterion: string; detail: string }>;
+  /** Traductions des justifications de notation, par « entreprise|dimension ». */
+  rationaleTranslations?: Record<string, string>;
 }
 
 /**
@@ -191,6 +249,14 @@ export function buildClientReport(input: {
   scoringModel: ScoringModel;
   provenance: ReportProvenance;
   economics?: ReportEconomics | null;
+  /**
+   * Ce que la mission demandait et qu'aucune preuve n'établit.
+   *
+   * Déclaré par l'appelant, jamais déduit : une absence de preuve se constate
+   * en confrontant ce qu'on cherchait à ce qu'on a trouvé, et c'est un travail
+   * de relecture, pas un calcul.
+   */
+  unverifiedPoints?: readonly string[];
 }): ClientReport {
   const prospects: ReportProspect[] = [];
   const limitations: string[] = [];
@@ -212,7 +278,8 @@ export function buildClientReport(input: {
       value: comp.value,
       weight: comp.weight,
       contribution: comp.contribution,
-      rationale: comp.rationale,
+      // La justification traduite quand elle a été relue, l'originale sinon.
+      rationale: entry.rationaleTranslations?.[`${company.name}|${comp.dimension}`] ?? comp.rationale,
       computed: comp.computed,
       evidenceIds: comp.evidenceIds ?? [],
     }));
@@ -248,10 +315,21 @@ export function buildClientReport(input: {
       company: company.name,
       location: [company.city, company.region, company.country].filter(Boolean).join(', ') || 'non établie',
       website: company.website ?? (company.domain ? `https://${company.domain}` : null),
-      sectors: company.industries,
+      sectors: company.industries.map(sectorLabel),
       score: opportunity.score ?? 0,
       confidence: detail?.confidence ?? 0,
-      whyRelevant: opportunity.qualification?.rationale ?? 'La qualification n’a pas été rendue.',
+      established: (opportunity.qualification?.checks ?? []).map((check) => {
+        const translated = entry.checkTranslations?.[normaliseCriterion(check.criterion)];
+        return {
+          criterion: translated?.criterion ?? check.criterion,
+          detail: translated?.detail ?? check.detail,
+          originalCriterion: translated ? check.criterion : null,
+          originalDetail: translated ? check.detail : null,
+          passed: check.passed,
+          evidenceIds: check.evidenceIds ?? [],
+        };
+      }),
+      notEstablished: [...(input.unverifiedPoints ?? [])],
       risks,
       recommendation:
         opportunity.justification ??
@@ -306,8 +384,13 @@ function buildFindings(prospects: ReportProspect[], best: ReportProspect | undef
     ];
   }
 
+  // Le résumé s'appuie sur ce qui est établi, pas sur une phrase de synthèse.
+  // C'est dans cette phrase que l'affirmation française non fondée entrait
+  // jusque dans le résumé exécutif, en allemand de surcroît.
+  const strongest = best.established.filter((k) => k.passed).length;
   const findings = [
-    `${best.company} arrive en tête avec ${best.score}/100. ${firstSentence(best.whyRelevant)}`,
+    `${best.company} arrive en tête avec ${best.score}/100, ` +
+      `sur ${strongest} critère(s) vérifié(s) et rattaché(s) à des sources consultables.`,
   ];
 
   // L'axe le plus faible de l'ensemble : c'est là que le marché résiste, et

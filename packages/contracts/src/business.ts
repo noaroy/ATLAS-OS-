@@ -294,8 +294,15 @@ export interface RoleFit {
   /** A target type key declared by the department. */
   role: string;
   label: string;
-  /** 0..100 for this role specifically. */
-  value: number;
+  /**
+   * 0..100 pour ce rôle, ou `null` quand il n'a pas été évalué séparément.
+   *
+   * `null` et non `0` : un rôle affiché « 0/100 » se lit comme une mesure
+   * défavorable, alors qu'aucune mesure n'a eu lieu. La revue du premier
+   * rapport client l'a relevé — « Distributeur 0/100 » suivi de « À approcher
+   * d'abord comme Distributeur » conseillait sur une note inexistante.
+   */
+  value: number | null;
   rationale: string;
   confidence: number;
   evidenceIds: EvidenceId[];

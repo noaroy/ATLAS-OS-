@@ -183,10 +183,12 @@ export function toPrintableHtml(input: ExportInput): ExportedFile {
 function roleFitSummary(opportunity: OpportunityDetail['opportunity']): string {
   const fits = opportunity.scoreDetail?.roleFits ?? [];
   if (fits.length === 0) return '';
+  // « NON ÉVALUÉ » et non « 0/100 » : l'absence de mesure n'est pas une
+  // mauvaise note, et l'afficher comme telle induit le lecteur en erreur.
   return fits
     .slice()
-    .sort((a, b) => b.value - a.value)
-    .map((f) => `${f.label} ${f.value}/100`)
+    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1))
+    .map((f) => `${f.label} ${f.value === null ? 'NON ÉVALUÉ' : `${f.value}/100`}`)
     .join(' | ');
 }
 
@@ -197,7 +199,9 @@ function roleFitSummary(opportunity: OpportunityDetail['opportunity']): string {
  * « quelle note ? » mais « quelle relation proposer ? ».
  */
 function roleFitBlock(opportunity: OpportunityDetail['opportunity']): string {
-  const fits = [...(opportunity.scoreDetail?.roleFits ?? [])].sort((a, b) => b.value - a.value);
+  const fits = [...(opportunity.scoreDetail?.roleFits ?? [])].sort(
+    (a, b) => (b.value ?? -1) - (a.value ?? -1),
+  );
   if (fits.length === 0) {
     return opportunity.targetTypes.length
       ? `<h3>Rôles</h3><p class="desc">${escapeHtml(opportunity.targetTypes.join(', '))} — compatibilité non évaluée séparément.</p>`

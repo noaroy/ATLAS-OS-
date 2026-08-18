@@ -490,3 +490,130 @@ describe('les formats de sortie', () => {
     assert.match(html, /live/);
   });
 });
+
+/**
+ * Les corrections issues de la revue humaine du premier rapport.
+ *
+ * Trois défauts, tous du même genre : le document affirmait plus que ses
+ * preuves. La synthèse de Burghardt déclarait « une capacité démontrée à servir
+ * des clients industriels français » alors qu'aucune présence française n'est
+ * attestée — et que la notation géographique du même rapport disait le
+ * contraire. Le résumé exécutif reprenait cette phrase, en allemand. Et le bloc
+ * des rôles affichait « Distributeur 0/100 » puis conseillait d'approcher
+ * l'entreprise comme distributeur.
+ */
+describe('le rapport n’affirme rien au-delà de ses preuves', () => {
+  const withChecks = (checks: Array<{ criterion: string; passed: boolean; detail: string; evidenceIds: string[] }>) =>
+    buildClientReport({
+      clientName: 'C',
+      missionTitle: 'M',
+      market: 'Allemagne',
+      objective: 'O',
+      generatedAt: '2026-08-17T12:00:00.000Z',
+      analysedCount: 4,
+      scoringModel: SCORING_MODEL,
+      provenance: provenance(),
+      unverifiedPoints: [
+        'Présence commerciale en France : aucun bureau ni agent français n’est attesté.',
+      ],
+      entries: [
+        {
+          opportunity: opportunity({
+            qualification: {
+              verdict: 'qualified',
+              checks,
+              rationale:
+                'Hat demonstrierte Fähigkeit zur Bedienung von französischen Industriekunden.',
+              confidence: 0.8,
+              decidedBy: 'analyst',
+              decidedAt: '2026-08-17T00:00:00.000Z',
+            },
+          }),
+          company: company(),
+          evidence: [evidence()],
+          contacts: [],
+          checkTranslations: {
+            'sitz in deutschland': {
+              criterion: 'Siège en Allemagne',
+              detail: 'L’entreprise a son siège à Stuttgart, en Allemagne.',
+            },
+          },
+        },
+      ],
+    });
+
+  const germanCheck = [
+    {
+      criterion: 'Sitz in Deutschland',
+      passed: true,
+      detail: 'Unternehmen hat seinen Sitz in Stuttgart, Deutschland.',
+      evidenceIds: ['ev_1'],
+    },
+  ];
+
+  test('la prose libre du modèle ne figure plus dans le rapport', () => {
+    // C'est là que l'affirmation française non fondée se trouvait. Publier les
+    // contrôles structurés plutôt que le résumé supprime la place où
+    // l'éditorialisation se glissait.
+    const html = reportToHtml(withChecks(germanCheck));
+    assert.ok(
+      !html.includes('demonstrierte Fähigkeit'),
+      'la synthèse libre ne doit pas être publiée',
+    );
+    assert.ok(!html.includes('französischen Industriekunden'));
+  });
+
+  test('ce qui n’est pas établi est écrit, pas tu', () => {
+    const report = withChecks(germanCheck);
+    assert.deepEqual(report.prospects[0]!.notEstablished, [
+      'Présence commerciale en France : aucun bureau ni agent français n’est attesté.',
+    ]);
+    assert.match(reportToHtml(report), /Ce qui n’est pas établi/);
+    assert.match(reportToHtml(report), /aucun bureau ni agent français/);
+  });
+
+  test('chaque point établi cite les preuves qui le portent', () => {
+    const report = withChecks(germanCheck);
+    const [check] = report.prospects[0]!.established;
+    assert.equal(check!.passed, true);
+    assert.deepEqual(check!.evidenceIds, ['ev_1']);
+    assert.match(reportToHtml(report), /Établi par 1 preuve/);
+  });
+
+  test('un contrôle traduit conserve son libellé d’origine', () => {
+    const report = withChecks(germanCheck);
+    const [check] = report.prospects[0]!.established;
+    assert.equal(check!.criterion, 'Siège en Allemagne');
+    assert.equal(check!.originalCriterion, 'Sitz in Deutschland');
+
+    // Le libellé d'origine reste dans le modèle, mais pas dans le document
+    // client : un contrôle est la note de l'analyste, il n'a pas de référent
+    // externe à confronter — contrairement à une preuve.
+    const html = reportToHtml(report);
+    assert.match(html, /Siège en Allemagne/, 'la traduction doit être lisible');
+    assert.ok(!html.includes('Sitz in Deutschland'), 'aucune note d’analyste en allemand');
+  });
+
+  test('le résumé exécutif ne reprend aucune phrase du modèle', () => {
+    // La phrase allemande entrait jusque dans le résumé, via `firstSentence`.
+    const report = withChecks(germanCheck);
+    const summary = report.summary.findings.join(' ');
+    assert.ok(!summary.includes('demonstrierte'));
+    assert.ok(!summary.includes('Fähigkeit'));
+    assert.match(summary, /critère\(s\) vérifié\(s\)/);
+  });
+
+  test('un contrôle non vérifié est affiché comme tel', () => {
+    const report = withChecks([
+      { criterion: 'Présence française', passed: false, detail: 'Non constatée.', evidenceIds: [] },
+    ]);
+    assert.match(reportToHtml(report), /NON VÉRIFIÉ/);
+    assert.match(reportToHtml(report), /aucune preuve citée/);
+  });
+
+  test('le CSV sépare l’établi du non établi', () => {
+    const csv = reportToCsv(withChecks(germanCheck));
+    assert.match(csv, /"ce_qui_est_etabli"/);
+    assert.match(csv, /"ce_qui_n_est_pas_etabli"/);
+  });
+});

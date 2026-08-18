@@ -72,6 +72,7 @@ export {
 export {
   buildClientReport,
   fieldLabel,
+  sectorLabel,
   looksFrench,
   isNamed,
   type ClientReport,
@@ -81,6 +82,7 @@ export {
   type ReportContact,
   type ReportSummary,
   type ReportEntry,
+  type ReportCheck,
 } from './client-report.ts';
 
 export {
@@ -92,8 +94,13 @@ export {
 
 export {
   EVIDENCE_TRANSLATIONS,
+  CHECK_TRANSLATIONS,
+  UNVERIFIED_POINTS,
   translationMap,
+  checkTranslationMap,
+  normaliseCriterion,
   type EvidenceTranslation,
+  type CheckTranslation,
 } from './translations.ts';
 
 export {
@@ -135,3 +142,9 @@ export function routeObjective(
   }
   return best?.key ?? null;
 }
+
+export {
+  RATIONALE_TRANSLATIONS,
+  rationaleTranslationMap,
+  type RationaleTranslation,
+} from './rationale-translations.ts';

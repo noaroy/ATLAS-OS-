@@ -1,4 +1,4 @@
-import type { ClientReport, ReportClaim, ReportProspect } from './client-report.ts';
+import type { ClientReport, ReportCheck, ReportClaim, ReportProspect } from './client-report.ts';
 
 /**
  * Le rapport client et son extrait gratuit, rendus depuis le même modèle.
@@ -48,6 +48,38 @@ const claimHtml = (claim: ReportClaim): string => `
       claim.sourceRef
         ? `Source : ${sourceLink(claim.sourceRef)}`
         : `Déduit de : ${esc(claim.basis ?? 'base non précisée')}`
+    }</div>
+  </li>`;
+
+
+/**
+ * Un contrôle de qualification, avec son libellé d'origine quand il a fallu
+ * le traduire.
+ *
+ * Les deux sont affichés, comme pour les preuves : la traduction pour lire, le
+ * texte source pour vérifier ce qu'on lit.
+ */
+const checkHtml = (k: ReportCheck): string => `
+  <li class="claim ${k.passed ? 'observed' : 'inferred'}">
+    <div class="claim-head">
+      <span class="field">${esc(k.criterion)}</span>
+      <span class="nature ${k.passed ? 'observed' : 'inferred'}">${k.passed ? 'VÉRIFIÉ' : 'NON VÉRIFIÉ'}</span>
+    </div>
+    <div class="text">${esc(k.detail)}</div>
+    ${
+      // Le libellé d'origine n'est PAS affiché ici, contrairement aux preuves.
+      //
+      // Une preuve citée dans sa langue reste vérifiable : le client la
+      // retrouve mot pour mot sur le site. Un contrôle, lui, est la note de
+      // l'analyste — il n'a pas de référent externe. L'afficher en allemand
+      // ajouterait de la langue étrangère sans rien rendre vérifiable. Il reste
+      // dans le modèle et en base, pour la traçabilité.
+      ''
+    }
+    <div class="src">${
+      k.evidenceIds.length > 0
+        ? `Établi par ${k.evidenceIds.length} preuve(s) : ${k.evidenceIds.map((i) => esc(i)).join(', ')}`
+        : '<span class="absent">aucune preuve citée</span>'
     }</div>
   </li>`;
 
@@ -213,8 +245,22 @@ const prospectHtml = (p: ReportProspect): string => `
       </div>
     </header>
 
-    <h4>Pourquoi cette entreprise</h4>
-    <p>${esc(p.whyRelevant)}</p>
+    <h4>Ce qui est établi</h4>
+    ${
+      p.established.length
+        ? `<ul class="claims">${p.established.map(checkHtml).join('')}</ul>`
+        : '<p class="absent">Aucun contrôle de qualification n’a été rendu.</p>'
+    }
+
+    <h4>Ce qui n’est pas établi</h4>
+    ${
+      p.notEstablished.length
+        ? `<ul class="risks">${p.notEstablished.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+           <p class="absent">Ces points ne sont pas des défauts de l’entreprise : ce sont les
+           questions qu’un premier échange tranchera. Les écrire évite de croire qu’elles sont
+           déjà réglées.</p>`
+        : '<p class="absent">Rien de ce que la mission demandait ne reste sans réponse.</p>'
+    }
 
     <h4>Risques et incertitudes</h4>
     ${
@@ -349,8 +395,12 @@ export function teaserToHtml(report: ClientReport, offer: { priceEur: number; de
       </div>
     </header>
 
-    <h4>Pourquoi cette entreprise</h4>
-    <p>${esc(p.whyRelevant)}</p>
+    <h4>Ce qui est établi</h4>
+    ${
+      p.established.length
+        ? `<ul class="claims">${p.established.slice(0, 2).map(checkHtml).join('')}</ul>`
+        : '<p class="absent">Aucun contrôle rendu.</p>'
+    }
 
     <h4>Extrait des preuves</h4>
     <ul class="claims">${shown.map(claimHtml).join('')}</ul>
@@ -388,7 +438,7 @@ export function reportToCsv(report: ClientReport): string {
 
   const header = [
     'rang', 'entreprise', 'site', 'localisation', 'secteurs', 'score_sur_100', 'confiance',
-    'pourquoi_pertinente', 'risques', 'recommandation',
+    'ce_qui_est_etabli', 'ce_qui_n_est_pas_etabli', 'risques', 'recommandation',
     'nb_faits_sources', 'nb_deductions', 'sources',
     'contact_nom', 'contact_role', 'contact_email', 'contact_telephone', 'contact_nominatif',
   ];
@@ -397,7 +447,9 @@ export function reportToCsv(report: ClientReport): string {
     const contact = p.contacts.find((c) => c.named) ?? p.contacts[0] ?? null;
     return [
       p.rank, p.company, p.website, p.location, p.sectors.join(' | '), p.score, p.confidence,
-      p.whyRelevant, p.risks.join(' || '), p.recommendation,
+      p.established.filter((k) => k.passed).map((k) => `${k.criterion}: ${k.detail}`).join(' || '),
+      p.notEstablished.join(' || '),
+      p.risks.join(' || '), p.recommendation,
       p.facts.length, p.inferences.length,
       [...new Set(p.facts.map((f) => f.sourceRef).filter(Boolean))].join(' | '),
       contact?.name ?? null, contact?.role ?? null, contact?.email ?? null, contact?.phone ?? null,

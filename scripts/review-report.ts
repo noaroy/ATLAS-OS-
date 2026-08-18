@@ -22,6 +22,9 @@ import {
   reportToCsv,
   teaserToHtml,
   translationMap,
+  checkTranslationMap,
+  rationaleTranslationMap,
+  UNVERIFIED_POINTS,
   reportEconomics,
   orderEconomics,
   canDeliver,
@@ -61,12 +64,16 @@ async function main(): Promise<void> {
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
 
   const translations = translationMap();
+  const checkTranslations = checkTranslationMap();
+  const rationaleTranslations = rationaleTranslationMap();
   const entries: ReportEntry[] = ranked.map((o) => ({
     opportunity: o,
     company: repos.companies.require(o.companyId),
     evidence: repos.companies.evidenceForOpportunity(o.id),
     contacts: repos.companies.contactsFor(o.companyId),
     translations,
+    checkTranslations,
+    rationaleTranslations,
   }));
 
   const economics = reportEconomics(
@@ -90,6 +97,7 @@ async function main(): Promise<void> {
     analysedCount: row.candidates,
     entries,
     scoringModel: department.scoringModel,
+    unverifiedPoints: UNVERIFIED_POINTS,
     provenance: {
       missionId: mission.code,
       generatedAt: row.generatedAt,

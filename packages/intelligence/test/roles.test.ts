@@ -159,7 +159,7 @@ describe('la compatibilité par rôle', () => {
     assert.equal(withRoles.total, withoutRoles.total);
   });
 
-  test('un rôle retenu mais jamais évalué apparaît à zéro plutôt que d’être tu', () => {
+  test('un rôle retenu mais jamais évalué est montré NON ÉVALUÉ, pas à zéro', () => {
     const score = scoreOpportunity({
       model: MODEL,
       assessments: [{ dimension: 'sector-fit', value: 70, rationale: 'a' }],
@@ -172,10 +172,23 @@ describe('la compatibilité par rôle', () => {
       roleFits: [{ role: 'distributor', value: 80, rationale: 'Évalué.' }],
     });
 
+    // Ce test exigeait `0`. La revue humaine du premier rapport client a montré
+    // pourquoi c'était faux : « Distributeur 0/100, Intégrateur 0/100 » se lit
+    // comme deux mesures défavorables, et le classement en tirait un conseil —
+    // « À approcher d'abord comme Distributeur » — fondé sur l'ordre du tableau
+    // plutôt que sur une évaluation.
+    //
+    // L'intention d'origine tient : le rôle reste montré, il n'est pas tu. Seule
+    // la valeur change, de `0` à `null`, parce qu'une absence de mesure n'est
+    // pas une mauvaise note.
     const integrator = score.roleFits.find((f) => f.role === 'integrator')!;
-    assert.equal(integrator.value, 0);
+    assert.equal(integrator.value, null);
     assert.equal(integrator.confidence, 0);
     assert.match(integrator.rationale, /pas été évalué/);
+
+    // Et il figure bien dans la liste : ne pas l'évaluer ne le fait pas
+    // disparaître du dossier.
+    assert.ok(score.roleFits.some((f) => f.role === 'integrator'));
   });
 
   test('la justification nomme le rôle à privilégier', () => {

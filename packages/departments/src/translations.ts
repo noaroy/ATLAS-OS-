@@ -105,3 +105,151 @@ export function translationMap(
   for (const t of translations) map[t.evidenceId] = t.french;
   return map;
 }
+
+/**
+ * Les contrôles de qualification, traduits — et ramenés à leurs preuves.
+ *
+ * Deux corrections distinctes, faites au même endroit parce qu'elles portent
+ * sur le même texte :
+ *
+ *   **La langue.** Les contrôles de Burghardt étaient rédigés en allemand, ceux
+ *   de Hagenauer en français émaillé d'anglais. Le livrable client est
+ *   français ; seules les citations de la source restent dans leur langue.
+ *
+ *   **La portée.** Le contrôle « Capacité à représenter auprès d'industriels »
+ *   concluait « positionner pour servir des clients industriels *français* »
+ *   sur une preuve qui ne parle que de l'ancienneté de l'entreprise. Aucune
+ *   présence, équipe, référence ou partenaire français n'est attesté nulle
+ *   part. La formulation retenue dit ce que la preuve porte, et rien de plus —
+ *   ce qui manque est déclaré dans `UNVERIFIED_POINTS`.
+ *
+ * Le libellé d'origine n'est jamais supprimé : le rapport affiche les deux,
+ * comme pour les preuves.
+ */
+export interface CheckTranslation {
+  /** Le libellé d'origine, tel qu'il sert de clé. */
+  criterion: string;
+  criterionFr: string;
+  detailFr: string;
+  translatedBy: string;
+}
+
+export const CHECK_TRANSLATIONS: readonly CheckTranslation[] = [
+  {
+    criterion: 'Sitz in Deutschland',
+    criterionFr: 'Siège en Allemagne',
+    detailFr:
+      'L’entreprise a son siège à Stuttgart, en Allemagne, et exploite un site actif.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Distributor oder Integrator von Verpackungsmaschinen',
+    criterionFr: 'Distributeur ou intégrateur de machines d’emballage',
+    detailFr:
+      'Propose des lignes d’emballage complètes, du composant à l’intégration système, ' +
+      'avec des prestations d’intégration étendues.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'B2B-Industriekompetenz',
+    criterionFr: 'Compétence industrielle B2B',
+    detailFr:
+      'Des décennies d’expérience en conception de lignes d’emballage, en sélection de ' +
+      'composants et en montage, avec un accompagnement multi-secteurs (chimie, pharmacie, ' +
+      'agroalimentaire, électronique, automobile, aéronautique et spatial, logistique).',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Kontaktierbarkeit und aktive Geschäftstätigkeit',
+    criterionFr: 'Joignabilité et activité effective',
+    detailFr:
+      'Coordonnées publiques disponibles (+49 (0)711 60 18 74 10) et site de vente en ligne ' +
+      'actif à destination de clients industriels.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Localisation en Allemagne',
+    criterionFr: 'Localisation en Allemagne',
+    detailFr:
+      'Hagenauer+Denk KG est enregistrée et basée en Allemagne, à Immenstadt (Bavière), ' +
+      'avec une adresse complète et un site actif.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Rôle de distributeur',
+    criterionFr: 'Rôle de distributeur',
+    detailFr:
+      'L’entreprise est explicitement identifiée comme distributeur de solutions d’emballage ' +
+      'complètes, avec une gamme documentée.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Rôle d’intégrateur',
+    criterionFr: 'Rôle d’intégrateur',
+    detailFr:
+      'L’entreprise est confirmée comme intégrateur, capable d’assembler des solutions ' +
+      'modulaires et complètes d’emballage, du composant à l’intégration système.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    criterion: 'Expertise en emballage industriel B2B',
+    criterionFr: 'Expertise en emballage industriel B2B',
+    detailFr:
+      'Spécialiste reconnue des systèmes d’emballage, active depuis 1803, avec une gamme ' +
+      'complète de machines et d’automatismes pour applications industrielles.',
+    translatedBy: 'atlas-editorial',
+  },
+  {
+    // Le contrôle qui dépassait sa preuve. La mention « clients industriels
+    // français » est retirée : elle ne repose sur rien, et elle figure
+    // désormais parmi les points non établis.
+    criterion: 'Capacité à représenter auprès d’industriels',
+    criterionFr: 'Capacité à représenter une offre auprès d’industriels',
+    detailFr:
+      'Historique établi de spécialiste allemand, avec une activité de conseil, des retours ' +
+      'd’expérience clients documentés et une offre de services complète. Aucun de ces ' +
+      'éléments ne porte sur le marché français.',
+    translatedBy: 'atlas-editorial',
+  },
+];
+
+/**
+ * Ce que la mission demandait et qu'aucune preuve n'établit.
+ *
+ * Déclaré à la main, jamais déduit. Une absence de preuve ne se calcule pas :
+ * elle se constate en confrontant ce qu'on cherchait à ce qu'on a trouvé, et
+ * c'est un travail de relecture.
+ *
+ * Ces points ne sont pas des défauts des entreprises. Ce sont les questions
+ * qu'un premier appel tranchera en cinq minutes, et les écrire évite au client
+ * de croire qu'elles sont déjà réglées.
+ */
+export const UNVERIFIED_POINTS: readonly string[] = [
+  'Présence commerciale en France : aucun bureau, filiale, agent ou showroom français n’est attesté par les sources consultées.',
+  'Clients français : aucune référence, étude de cas ou mention de client français n’a été trouvée.',
+  'Partenaires français : aucun accord de distribution ou partenariat avec une entreprise française n’est documenté.',
+  'Équipe francophone : rien n’indique la présence d’interlocuteurs de langue française.',
+  'Interlocuteur nommé : les coordonnées publiées sont celles d’un standard, aucune personne n’est identifiée.',
+];
+
+/** Les traductions de contrôles, par libellé d'origine. */
+export function checkTranslationMap(
+  translations: readonly CheckTranslation[] = CHECK_TRANSLATIONS,
+): Record<string, { criterion: string; detail: string }> {
+  const map: Record<string, { criterion: string; detail: string }> = {};
+  for (const t of translations) {
+    map[normaliseCriterion(t.criterion)] = { criterion: t.criterionFr, detail: t.detailFr };
+  }
+  return map;
+}
+
+/**
+ * Rapproche deux écritures d'un même libellé.
+ *
+ * Les apostrophes typographiques et droites coexistent dans les données selon
+ * qui a écrit la ligne ; sans normalisation, « Rôle d'intégrateur » et
+ * « Rôle d’intégrateur » seraient deux critères différents et l'un des deux
+ * resterait sans traduction.
+ */
+export const normaliseCriterion = (text: string): string =>
+  text.replace(/[’']/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();

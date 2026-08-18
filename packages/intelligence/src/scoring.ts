@@ -194,7 +194,14 @@ function buildRoleFits(input: ScoreInput): RoleFit[] {
     return {
       role,
       label: labels.get(role) ?? role,
-      value: fit ? clamp(fit.value, 0, 100) : 0,
+      // `null` et non `0` quand le rôle n'a pas été évalué.
+      //
+      // Un rôle affiché « 0/100 » se lit comme une mesure défavorable, alors
+      // qu'aucune mesure n'a eu lieu. La revue humaine du premier rapport l'a
+      // relevé : « Distributeur 0/100, Intégrateur 0/100 » suivi de « À
+      // approcher d'abord comme Distributeur » — un conseil fondé sur une note
+      // qui n'existait pas.
+      value: fit ? clamp(fit.value, 0, 100) : null,
       rationale: fit ? fit.rationale : "Ce rôle n'a pas été évalué séparément.",
       confidence: fit ? clamp(fit.confidence ?? 0.6, 0, 1) : 0,
       evidenceIds: fit?.evidenceIds ?? [],
@@ -249,13 +256,28 @@ export function explainScore(
 
   // Quel rôle proposer est une décision commerciale distincte du classement :
   // la justification doit donc la porter explicitement.
-  const fits = [...score.roleFits].sort((a, b) => b.value - a.value);
-  if (fits.length === 1) {
-    lines.push(`Rôle pertinent : ${fits[0]!.label} — ${fits[0]!.value}/100. ${fits[0]!.rationale}`);
-  } else if (fits.length > 1) {
+  // Un rôle non évalué ne se recommande pas.
+  //
+  // L'ancienne version listait « Distributeur 0/100, Intégrateur 0/100 » puis
+  // concluait « À approcher d'abord comme Distributeur ». Le conseil reposait
+  // sur un classement de valeurs nulles — c'est-à-dire sur l'ordre du tableau,
+  // pas sur une évaluation. Sans mesure, on dit qu'il n'y en a pas.
+  const evaluated = score.roleFits.filter((f) => f.value !== null).sort((a, b) => b.value! - a.value!);
+  const unevaluated = score.roleFits.filter((f) => f.value === null);
+
+  if (evaluated.length === 1) {
+    lines.push(`Rôle pertinent : ${evaluated[0]!.label} — ${evaluated[0]!.value}/100. ${evaluated[0]!.rationale}`);
+  } else if (evaluated.length > 1) {
     lines.push(
-      `Rôles pertinents : ${fits.map((f) => `${f.label} ${f.value}/100`).join(', ')}. ` +
-        `À approcher d'abord comme ${fits[0]!.label} : ${fits[0]!.rationale}`,
+      `Rôles pertinents : ${evaluated.map((f) => `${f.label} ${f.value}/100`).join(', ')}. ` +
+        `À approcher d'abord comme ${evaluated[0]!.label} : ${evaluated[0]!.rationale}`,
+    );
+  }
+  if (unevaluated.length > 0) {
+    lines.push(
+      `Rôle${unevaluated.length > 1 ? 's' : ''} NON ÉVALUÉ${unevaluated.length > 1 ? 'S' : ''} : ` +
+        `${unevaluated.map((f) => f.label).join(', ')}. ` +
+        `Ces rôles n'ont pas fait l'objet d'une notation séparée ; aucune recommandation ne s'appuie dessus.`,
     );
   }
 

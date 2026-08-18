@@ -1184,4 +1184,40 @@ ALTER TABLE sales_prospects ADD COLUMN identity_sources TEXT;
 ALTER TABLE sales_prospects ADD COLUMN search_title TEXT;
 `,
   },
+  {
+    version: 19,
+    name: 'sales-invalidations',
+    sql: `
+-- ─── Ce qu'un re-audit condamne, sans rien reecrire ───────────────────────
+--
+-- Le lot 002 doit rester ce qu'il a ete : deux prospects y sont PRIORITY, et
+-- le rester. Corriger la ligne effacerait la preuve du defaut en meme temps
+-- que le defaut.
+--
+-- Cette table porte donc le jugement a cote de la ligne, jamais dessus. Elle
+-- est consultee par \`effectiveOutreachEligibility\`, qui decide ce qu'on peut
+-- faire aujourd'hui d'un prospect ecrit hier. Une invalidation prime sur tout
+-- le reste : c'est un jugement porte, pas une absence de preuve.
+CREATE TABLE sales_invalidations (
+  prospect_id   TEXT PRIMARY KEY REFERENCES sales_prospects(id) ON DELETE CASCADE,
+  reason        TEXT NOT NULL,
+  -- La version de gardes qui a prononce l'invalidation.
+  guard_version TEXT NOT NULL,
+  recorded_at   TEXT NOT NULL
+);
+
+-- Sous quelles gardes chaque ligne a ete resolue. NULL = anterieur a toute
+-- resolution d'identite, donc non verifie — ce qui n'est pas « faux », mais
+-- suffit a interdire un message.
+ALTER TABLE sales_prospects ADD COLUMN guard_version TEXT;
+
+-- Rattrapage precis : \`identity_confidence\` n'existe que depuis la resolution
+-- d'identite, et n'est renseignee que par elle. Une ligne qui en porte une a
+-- donc traverse ces gardes, meme si la colonne qui les nomme est arrivee
+-- apres. Les lignes du lot 002 n'en ont pas : elles restent non verifiees.
+UPDATE sales_prospects
+   SET guard_version = 'v2-entity-resolution'
+ WHERE identity_confidence IS NOT NULL;
+`,
+  },
 ];

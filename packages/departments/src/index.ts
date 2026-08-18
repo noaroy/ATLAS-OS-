@@ -225,3 +225,15 @@ export {
   type IcpDecision,
   type PriorityCheck,
 } from './company-resolver.ts';
+
+export {
+  runSalesPipeline,
+  funnelBalances,
+  type PipelineCandidate,
+  type PipelineSurvivor,
+  type PipelineRejection,
+  type PipelineOutcome,
+  type PipelineOptions,
+  type RejectionStage,
+  type FunnelCounts,
+} from './sales-pipeline.ts';

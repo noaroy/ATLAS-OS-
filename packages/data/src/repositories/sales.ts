@@ -1,4 +1,12 @@
-import { id, nowIso, invalidState } from '@atlas/core';
+import {
+  id,
+  nowIso,
+  invalidState,
+  effectiveOutreachEligibility,
+  isOutreachState,
+  GUARD_VERSION,
+  type EligibilityVerdict,
+} from '@atlas/core';
 import type { Db } from '../database.ts';
 import { fromJson, toJson } from '../database.ts';
 
@@ -66,6 +74,8 @@ export interface SalesProspect {
   pageType: string | null;
   identityConfidence: number | null;
   identitySources: string[] | null;
+  /** Sous quelles gardes cette ligne a ete resolue. NULL = non verifiee. */
+  guardVersion: string | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -119,6 +129,7 @@ interface Row {
   identity_confidence: number | null;
   identity_sources: string | null;
   search_title: string | null;
+  guard_version: string | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -159,6 +170,7 @@ const toProspect = (row: Row): SalesProspect => ({
   identityConfidence: row.identity_confidence,
   identitySources: row.identity_sources ? (JSON.parse(row.identity_sources) as string[]) : null,
   searchTitle: row.search_title,
+  guardVersion: row.guard_version,
   state: row.state,
   tier: row.tier,
   score: row.score,
@@ -208,6 +220,7 @@ export class SalesRepository {
     pageType?: string | null;
     identityConfidence?: number | null;
     identitySources?: string[] | null;
+    guardVersion?: string | null;
   }): { prospect: SalesProspect; created: boolean } {
     const existing = this.db
       .prepare('SELECT * FROM sales_prospects WHERE batch_id = ? AND domain = ?')
@@ -231,6 +244,7 @@ export class SalesRepository {
       page_type: input.pageType ?? null,
       identity_confidence: input.identityConfidence ?? null,
       identity_sources: input.identitySources ? JSON.stringify(input.identitySources) : null,
+      guard_version: input.guardVersion ?? null,
       state: 'DISCOVERED',
       tier: null,
       score: null,
@@ -258,14 +272,16 @@ export class SalesRepository {
       .prepare(
         `INSERT INTO sales_prospects (id, batch_id, company_name, domain, website, country,
            industry, source_url, search_provider, query, discovered_at,
-           search_title, page_type, identity_confidence, identity_sources, state, tier, score,
+           search_title, page_type, identity_confidence, identity_sources, guard_version,
+           state, tier, score,
            score_detail, why_fit, reject_reason, contact_name, contact_role, contact_email,
            contact_phone, contact_page, contact_source_url, contact_confidence,
            personalization_fact_id, message_short, message_email, outreach_source_url,
            reviewer, approved_at, contacted_at, created_at, updated_at)
          VALUES (@id, @batch_id, @company_name, @domain, @website, @country,
            @industry, @source_url, @search_provider, @query, @discovered_at,
-           @search_title, @page_type, @identity_confidence, @identity_sources, @state, @tier, @score,
+           @search_title, @page_type, @identity_confidence, @identity_sources, @guard_version,
+           @state, @tier, @score,
            @score_detail, @why_fit, @reject_reason, @contact_name, @contact_role, @contact_email,
            @contact_phone, @contact_page, @contact_source_url, @contact_confidence,
            @personalization_fact_id, @message_short, @message_email, @outreach_source_url,
@@ -406,6 +422,35 @@ export class SalesRepository {
       );
     }
 
+    // Le tier historique n'autorise rien. Le lot 002 a écrit deux PRIORITY qui
+    // n'auraient pas dû l'être ; ses lignes existent toujours, et c'est ici
+    // qu'elles cessent de pouvoir nuire. La question posée n'est pas « qu'a
+    // décidé le lot ? » mais « les gardes d'aujourd'hui le confirment-elles ? ».
+    // La revue fondateur est l'antichambre de l'envoi : ce qui n'y entre pas ne
+    // sera jamais approuvé. Poser la garde ici plutôt qu'au seul moment de
+    // l'approbation évite de présenter à la relecture des prospects que rien
+    // n'aurait pu valider.
+    if (state === 'READY_FOR_REVIEW') {
+      const verdict = this.outreachEligibility(prospectId);
+      if (verdict.eligibility !== 'ELIGIBLE') {
+        throw invalidState(
+          `Revue refusée pour « ${current.companyName} » : ${verdict.reason}`,
+        );
+      }
+    }
+
+    if (isOutreachState(state)) {
+      const verdict = this.outreachEligibility(prospectId);
+      if (verdict.eligibility !== 'ELIGIBLE') {
+        throw invalidState(
+          `Contact refusé (${verdict.eligibility}) pour « ${current.companyName} ». ` +
+            `${verdict.reason} — l'état historique était ${verdict.historicalState}` +
+            `${verdict.historicalTier ? ` / ${verdict.historicalTier}` : ''}, ` +
+            `mais l'historique n'autorise pas un envoi.`,
+        );
+      }
+    }
+
     const now = nowIso();
     this.db
       .prepare(
@@ -460,6 +505,70 @@ export class SalesRepository {
         collected_at: evidence.collectedAt,
       });
     return evidence;
+  }
+
+  /**
+   * Ce qu'on peut faire aujourd'hui de ce prospect, gardes actuelles à l'appui.
+   *
+   * Recalculé à chaque lecture plutôt que stocké : une garde corrigée doit
+   * neutraliser d'un coup tout ce qu'elle aurait dû arrêter, sans migration et
+   * sans qu'aucune ligne historique bouge.
+   */
+  outreachEligibility(prospectId: string): EligibilityVerdict {
+    const p = this.require(prospectId);
+    const invalidation = this.db
+      .prepare('SELECT reason FROM sales_invalidations WHERE prospect_id = ?')
+      .get(prospectId) as { reason: string } | undefined;
+
+    const sourced = this.evidenceFor(prospectId).filter(
+      (e) => e.nature === 'observed' && Boolean(e.sourceUrl),
+    );
+
+    return effectiveOutreachEligibility({
+      historicalState: p.state,
+      historicalTier: p.tier,
+      guardVersion: p.guardVersion,
+      pageType: p.pageType,
+      identityConfidence: p.identityConfidence,
+      domain: p.domain,
+      // Le profil n'est pas restocké : une ligne qui a traversé la résolution
+      // sous les gardes actuelles y est passée par un ICP MATCH, seule issue
+      // qui mène à l'écriture. Une ligne antérieure est arrêtée avant, sur sa
+      // version de gardes.
+      icp: p.guardVersion === GUARD_VERSION ? 'MATCH' : null,
+      observedSourcedFacts: sourced.length,
+      score: p.score,
+      scoreThreshold: 70,
+      hasSourcedPersonalization: Boolean(p.personalizationFactId),
+      invalidation: invalidation ?? null,
+    });
+  }
+
+  /**
+   * Consigne qu'un ré-audit a condamné cette ligne.
+   *
+   * Écrit à côté, jamais dessus : `sales_prospects` garde ce que le lot avait
+   * décidé, `sales_invalidations` porte ce qu'on en sait depuis.
+   */
+  invalidate(prospectId: string, reason: string): void {
+    this.require(prospectId);
+    this.db
+      .prepare(
+        `INSERT INTO sales_invalidations (prospect_id, reason, guard_version, recorded_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(prospect_id) DO UPDATE SET
+           reason = excluded.reason,
+           guard_version = excluded.guard_version,
+           recorded_at = excluded.recorded_at`,
+      )
+      .run(prospectId, reason, GUARD_VERSION, nowIso());
+  }
+
+  invalidationFor(prospectId: string): { reason: string; guardVersion: string } | null {
+    const row = this.db
+      .prepare('SELECT reason, guard_version FROM sales_invalidations WHERE prospect_id = ?')
+      .get(prospectId) as { reason: string; guard_version: string } | undefined;
+    return row ? { reason: row.reason, guardVersion: row.guard_version } : null;
   }
 
   evidenceFor(prospectId: string): SalesEvidence[] {

@@ -19,25 +19,19 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSystem } from '../packages/server/src/bootstrap.ts';
-import { loadConfig, formatDuration } from '../packages/core/src/index.ts';
+import { loadConfig, formatDuration, GUARD_VERSION } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
 import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import {
-  ATLAS_SALES_ICP,
-  filterCandidate,
-  dedupeCandidates,
-  classifyPageType,
-  resolveCompanyIdentity,
-  icpStatus,
   checkPriorityEligibility,
   SALES_TIER_THRESHOLDS,
-  type CompanyIdentity,
+  runSalesPipeline,
+  funnelBalances,
   domainOf,
   scoreSalesProspect,
   buildOutreachDraft,
   SALES_SCORING_MODEL,
   planQueries,
-  looksLikeCompanySite,
   whyNotACompanyName,
   type RawCandidate,
   type SalesAssessment,
@@ -243,112 +237,71 @@ async function main(): Promise<void> {
 
   // ── Résolution d'identité, avant toute dépense ───────────────────────────
   //
-  // L'ordre compte, et il est celui-ci : type de page, puis identité, puis
-  // domaine officiel, puis profil, puis dédoublonnage. Le lot 002 a inversé
-  // le premier et le deuxième — il a nommé une entreprise à partir d'un titre
-  // sans avoir établi que la page lui appartenait — et a payé pour qualifier
-  // l'éditeur d'une étude de marché.
-  type Resolved = { candidate: RawCandidate; identity: CompanyIdentity };
-  const resolved: Resolved[] = [];
-  const rejected: Array<{ name: string; reason: string }> = [];
+  // L'ordre vit dans `runSalesPipeline`, pas ici : un ordre écrit dans un
+  // script ne peut être qu'affirmé, alors qu'un module se teste. Le test passe
+  // une qualification qui compte ses appels et vérifie qu'elle reste à zéro
+  // sur un candidat refusé — ce que le lot 002 aurait rendu impossible.
+  const outcome = await runSalesPipeline({
+    candidates: raw.map((r) => ({
+      searchTitle: r.companyName,
+      url: r.sourceUrl,
+      domain: r.domain,
+      country: r.country,
+      industry: r.industry,
+      snippet: r.snippet,
+    })),
+    maxRetained: MAX_DISCOVERED,
+    // La qualification payante ne se fait pas ici : elle a besoin du prospect
+    // persisté, de son identifiant et de son budget. Le pipeline sert d'abord
+    // à établir qui survit.
+    qualify: async () => null,
+    maxQualifications: 0,
+  });
 
-  for (const candidate of raw) {
-    const label = candidate.companyName || candidate.domain || candidate.sourceUrl;
-
-    // 1. À qui appartient cette page ?
-    const page = classifyPageType({
-      url: candidate.sourceUrl,
-      domain: candidate.domain,
-      title: candidate.companyName,
-      snippet: candidate.snippet,
-    });
-
-    // 2. Le chemin, ensuite : un article coûterait le même prix qu'une usine.
-    if (page.ownerIsCandidate) {
-      const shape = looksLikeCompanySite(candidate.sourceUrl);
-      if (!shape.ok) {
-        rejected.push({ name: label, reason: shape.reason });
-        continue;
-      }
-    }
-
-    // 3. Quelle entreprise cette page désigne-t-elle ?
-    const outcome = resolveCompanyIdentity({
-      searchTitle: candidate.companyName,
-      url: candidate.sourceUrl,
-      domain: candidate.domain,
-      country: candidate.country,
-      page,
-    });
-    if (!outcome.identity) {
-      rejected.push({ name: label, reason: outcome.reason });
-      continue;
-    }
-
-    // 4. Entre-t-elle dans le profil de ce lot ?
-    // Le titre brut part avec le résumé, pas seulement le nom retenu : ramener
-    // « X : agence marketing » à « X » ne doit jamais faire disparaître le mot
-    // qui disqualifie.
-    const icp = icpStatus({
-      companyName: outcome.identity.companyName,
-      snippet: [candidate.companyName, candidate.snippet].filter(Boolean).join(' — '),
-      industry: candidate.industry,
-      country: outcome.identity.country,
-    });
-    if (icp.status !== 'MATCH') {
-      rejected.push({ name: outcome.identity.companyName, reason: icp.reason });
-      continue;
-    }
-
-    // 5. Le filtre historique reste : il attrape ce que la résolution laisse.
-    const decision = filterCandidate(
-      { ...candidate, companyName: outcome.identity.companyName },
-      ATLAS_SALES_ICP,
-    );
-    if (decision.outcome === 'rejected') {
-      rejected.push({ name: outcome.identity.companyName, reason: decision.reason });
-      continue;
-    }
-
-    resolved.push({ candidate, identity: outcome.identity });
-  }
-
-  // 6. Dédoublonnage sur le domaine officiel, pas sur celui du résultat : deux
-  //    pages d'un même site ne sont qu'une entreprise.
-  const seen = new Set<string>();
-  const kept: Resolved[] = [];
-  for (const entry of resolved) {
-    if (seen.has(entry.identity.canonicalDomain)) continue;
-    seen.add(entry.identity.canonicalDomain);
-    if (kept.length < MAX_DISCOVERED) kept.push(entry);
-  }
-  void dedupeCandidates;
+  const funnel = outcome.funnel;
+  const balance = funnelBalances(funnel);
+  const kept = outcome.survivors;
 
   console.log(
     `
-  ${raw.length} résultat(s) · ${resolved.length} identité(s) résolue(s) · ` +
-      `${c.green}${kept.length} retenue(s)${c.reset} · ${c.dim}${rejected.length} écartée(s) sans dépense${c.reset}
+  ${funnel.searchResults} résultat(s) · ${c.green}${funnel.retained} retenue(s)${c.reset} · ` +
+      `${c.dim}${outcome.rejections.length} écartée(s) sans dépense${c.reset}
 `,
   );
-  for (const r of rejected.slice(0, 12)) {
-    console.log(`    ${c.dim}écarté${c.reset} ${r.name.slice(0, 40).padEnd(42)} ${c.dim}${r.reason.slice(0, 70)}${c.reset}`);
+  console.log(
+    `    ${c.dim}type de page ${funnel.pageTypeRejected} · forme d'URL ${funnel.urlShapeRejected} · ` +
+      `identité ${funnel.identityUnresolved} · profil ${funnel.outOfIcp} · ` +
+      `doublons ${funnel.deduplicated} · retenus ${funnel.retained}${c.reset}`,
+  );
+  if (!balance.balanced) {
+    console.log(
+      `    ${c.red}entonnoir déséquilibré : ${balance.missing} résultat(s) sans case${c.reset}`,
+    );
+  }
+  for (const r of outcome.rejections.slice(0, 14)) {
+    console.log(
+      `    ${c.dim}${r.stage.padEnd(20)}${c.reset} ${r.candidate.searchTitle.slice(0, 34).padEnd(36)}` +
+        `${c.dim}${r.reason.slice(0, 60)}${c.reset}`,
+    );
   }
 
   for (const { candidate, identity } of kept) {
+    const source = raw.find((r) => r.sourceUrl === candidate.url);
     repos.sales.discover({
       batchId,
       companyName: identity.companyName,
       domain: identity.canonicalDomain,
       website: identity.officialWebsite,
       country: identity.country,
-      sourceUrl: candidate.sourceUrl,
-      searchProvider: candidate.searchProvider,
-      query: candidate.query,
-      discoveredAt: candidate.discoveredAt,
-      searchTitle: candidate.companyName,
+      sourceUrl: candidate.url,
+      searchProvider: source?.searchProvider ?? null,
+      query: source?.query ?? null,
+      discoveredAt: source?.discoveredAt ?? new Date().toISOString(),
+      searchTitle: candidate.searchTitle,
       pageType: 'OFFICIAL_COMPANY_SITE',
       identityConfidence: identity.identityConfidence,
       identitySources: identity.identitySources,
+      guardVersion: GUARD_VERSION,
     });
   }
 

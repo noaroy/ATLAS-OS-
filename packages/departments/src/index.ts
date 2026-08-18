@@ -160,3 +160,44 @@ export {
   type RefusalCode,
   type HumanCheckKey,
 } from './review-approval.ts';
+
+export {
+  ATLAS_SALES_ICP,
+  filterCandidate,
+  dedupeCandidates,
+  domainOf,
+  whyNotACompanyName,
+  type SalesIcp,
+  type RawCandidate,
+  type FilterDecision,
+} from './sales-icp.ts';
+
+export {
+  SALES_SCORING_MODEL,
+  SALES_TIER_THRESHOLDS,
+  scoreSalesProspect,
+  evidenceQuality,
+  tierFor,
+  type SalesDimension,
+  type SalesDimensionKey,
+  type SalesAssessment,
+  type SalesScore,
+  type SalesScoreComponent,
+  type SalesTier,
+  type EvidenceSummary,
+} from './sales-score.ts';
+
+export {
+  buildOutreachDraft,
+  pickPersonalizationFact,
+  personalizationIsGrounded,
+  canTransitionProspect,
+  requiresHumanApproval,
+  trimSentence,
+  type OutreachDraft,
+  type OutreachFact,
+  type OutreachContact,
+  type OutreachOutcome,
+  type OutreachRefusal,
+  type ProspectState as OutreachProspectState,
+} from './outreach.ts';

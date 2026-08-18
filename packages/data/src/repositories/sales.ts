@@ -1,0 +1,469 @@
+import { id, nowIso, invalidState } from '@atlas/core';
+import type { Db } from '../database.ts';
+import { fromJson, toJson } from '../database.ts';
+
+/**
+ * Nos propres prospects, et les preuves recueillies sur eux.
+ *
+ * Séparés des opportunités clientes, et volontairement. Une opportunité sert
+ * une mission facturée ; un prospect sert notre acquisition, et sa sortie n'est
+ * pas un rapport mais un message qui partira sous notre nom. Mêler les deux
+ * ferait apparaître nos propres prospects dans un livrable client — au mieux
+ * embarrassant.
+ */
+
+export type ProspectState =
+  | 'DISCOVERED'
+  | 'QUALIFIED'
+  | 'READY_FOR_REVIEW'
+  | 'APPROVED_TO_CONTACT'
+  | 'REJECTED'
+  | 'CONTACTED'
+  | 'REPLIED'
+  | 'INTERESTED'
+  | 'ORDERED'
+  | 'PAID'
+  | 'LOST';
+
+export type ProspectTier = 'PRIORITY' | 'GOOD_FIT' | 'WATCH' | 'REJECTED';
+export type SalesEvidenceNature = 'observed' | 'reported' | 'inferred';
+
+/**
+ * Les transitions permises.
+ *
+ * `READY_FOR_REVIEW → APPROVED_TO_CONTACT` est la seule qu'aucun automatisme
+ * ne franchit. Le dépôt refuse plutôt qu'il ne journalise : un rapport mal relu
+ * se corrige, un message envoyé ne se reprend pas.
+ */
+const TRANSITIONS: Readonly<Record<ProspectState, readonly ProspectState[]>> = {
+  DISCOVERED: ['QUALIFIED', 'REJECTED'],
+  QUALIFIED: ['READY_FOR_REVIEW', 'REJECTED'],
+  READY_FOR_REVIEW: ['APPROVED_TO_CONTACT', 'REJECTED'],
+  APPROVED_TO_CONTACT: ['CONTACTED', 'REJECTED'],
+  CONTACTED: ['REPLIED', 'LOST'],
+  REPLIED: ['INTERESTED', 'LOST'],
+  INTERESTED: ['ORDERED', 'LOST'],
+  ORDERED: ['PAID', 'LOST'],
+  PAID: [],
+  REJECTED: ['DISCOVERED'],
+  LOST: [],
+};
+
+export interface SalesProspect {
+  id: string;
+  batchId: string;
+  companyName: string;
+  domain: string | null;
+  website: string | null;
+  country: string | null;
+  industry: string | null;
+  sourceUrl: string | null;
+  searchProvider: string | null;
+  query: string | null;
+  discoveredAt: string;
+  state: ProspectState;
+  tier: ProspectTier | null;
+  score: number | null;
+  scoreDetail: Record<string, unknown> | null;
+  whyFit: string | null;
+  rejectReason: string | null;
+  contactName: string | null;
+  contactRole: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  contactPage: string | null;
+  contactSourceUrl: string | null;
+  contactConfidence: number | null;
+  /** La preuve sur laquelle repose le « j'ai vu que… » du message. */
+  personalizationFactId: string | null;
+  messageShort: string | null;
+  messageEmail: string | null;
+  outreachSourceUrl: string | null;
+  reviewer: string | null;
+  approvedAt: string | null;
+  contactedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SalesEvidence {
+  id: string;
+  prospectId: string;
+  field: string;
+  claim: string;
+  nature: SalesEvidenceNature;
+  sourceUrl: string | null;
+  basis: string | null;
+  confidence: number;
+  collectedAt: string;
+}
+
+interface Row {
+  id: string;
+  batch_id: string;
+  company_name: string;
+  domain: string | null;
+  website: string | null;
+  country: string | null;
+  industry: string | null;
+  source_url: string | null;
+  search_provider: string | null;
+  query: string | null;
+  discovered_at: string;
+  state: ProspectState;
+  tier: ProspectTier | null;
+  score: number | null;
+  score_detail: string | null;
+  why_fit: string | null;
+  reject_reason: string | null;
+  contact_name: string | null;
+  contact_role: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  contact_page: string | null;
+  contact_source_url: string | null;
+  contact_confidence: number | null;
+  personalization_fact_id: string | null;
+  message_short: string | null;
+  message_email: string | null;
+  outreach_source_url: string | null;
+  reviewer: string | null;
+  approved_at: string | null;
+  contacted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const toProspect = (row: Row): SalesProspect => ({
+  id: row.id,
+  batchId: row.batch_id,
+  companyName: row.company_name,
+  domain: row.domain,
+  website: row.website,
+  country: row.country,
+  industry: row.industry,
+  sourceUrl: row.source_url,
+  searchProvider: row.search_provider,
+  query: row.query,
+  discoveredAt: row.discovered_at,
+  state: row.state,
+  tier: row.tier,
+  score: row.score,
+  scoreDetail: row.score_detail ? fromJson<Record<string, unknown>>(row.score_detail, {}) : null,
+  whyFit: row.why_fit,
+  rejectReason: row.reject_reason,
+  contactName: row.contact_name,
+  contactRole: row.contact_role,
+  contactEmail: row.contact_email,
+  contactPhone: row.contact_phone,
+  contactPage: row.contact_page,
+  contactSourceUrl: row.contact_source_url,
+  contactConfidence: row.contact_confidence,
+  personalizationFactId: row.personalization_fact_id,
+  messageShort: row.message_short,
+  messageEmail: row.message_email,
+  outreachSourceUrl: row.outreach_source_url,
+  reviewer: row.reviewer,
+  approvedAt: row.approved_at,
+  contactedAt: row.contacted_at,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+export class SalesRepository {
+  constructor(private readonly db: Db) {}
+
+  /**
+   * Enregistre un candidat découvert, ou rend celui qui existe déjà.
+   *
+   * L'unicité porte sur `(batch, domaine)` : deux pages d'un même site sont un
+   * seul prospect. L'oublier gonflerait le compte de découverte sans rien
+   * ajouter, et le premier chiffre qu'on regarde deviendrait le moins fiable.
+   */
+  discover(input: {
+    batchId: string;
+    companyName: string;
+    domain: string;
+    website?: string | null;
+    country?: string | null;
+    industry?: string | null;
+    sourceUrl?: string | null;
+    searchProvider?: string | null;
+    query?: string | null;
+    discoveredAt?: string;
+  }): { prospect: SalesProspect; created: boolean } {
+    const existing = this.db
+      .prepare('SELECT * FROM sales_prospects WHERE batch_id = ? AND domain = ?')
+      .get(input.batchId, input.domain) as Row | undefined;
+    if (existing) return { prospect: toProspect(existing), created: false };
+
+    const now = nowIso();
+    const row: Row = {
+      id: id('prs'),
+      batch_id: input.batchId,
+      company_name: input.companyName,
+      domain: input.domain,
+      website: input.website ?? `https://${input.domain}`,
+      country: input.country ?? null,
+      industry: input.industry ?? null,
+      source_url: input.sourceUrl ?? null,
+      search_provider: input.searchProvider ?? null,
+      query: input.query ?? null,
+      discovered_at: input.discoveredAt ?? now,
+      state: 'DISCOVERED',
+      tier: null,
+      score: null,
+      score_detail: null,
+      why_fit: null,
+      reject_reason: null,
+      contact_name: null,
+      contact_role: null,
+      contact_email: null,
+      contact_phone: null,
+      contact_page: null,
+      contact_source_url: null,
+      contact_confidence: null,
+      personalization_fact_id: null,
+      message_short: null,
+      message_email: null,
+      outreach_source_url: null,
+      reviewer: null,
+      approved_at: null,
+      contacted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO sales_prospects (id, batch_id, company_name, domain, website, country,
+           industry, source_url, search_provider, query, discovered_at, state, tier, score,
+           score_detail, why_fit, reject_reason, contact_name, contact_role, contact_email,
+           contact_phone, contact_page, contact_source_url, contact_confidence,
+           personalization_fact_id, message_short, message_email, outreach_source_url,
+           reviewer, approved_at, contacted_at, created_at, updated_at)
+         VALUES (@id, @batch_id, @company_name, @domain, @website, @country,
+           @industry, @source_url, @search_provider, @query, @discovered_at, @state, @tier, @score,
+           @score_detail, @why_fit, @reject_reason, @contact_name, @contact_role, @contact_email,
+           @contact_phone, @contact_page, @contact_source_url, @contact_confidence,
+           @personalization_fact_id, @message_short, @message_email, @outreach_source_url,
+           @reviewer, @approved_at, @contacted_at, @created_at, @updated_at)`,
+      )
+      .run(row);
+    return { prospect: toProspect(row), created: true };
+  }
+
+  get(prospectId: string): SalesProspect | null {
+    const row = this.db.prepare('SELECT * FROM sales_prospects WHERE id = ?').get(prospectId) as
+      | Row
+      | undefined;
+    return row ? toProspect(row) : null;
+  }
+
+  forBatch(batchId: string): SalesProspect[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM sales_prospects WHERE batch_id = ? ORDER BY score DESC, company_name')
+        .all(batchId) as Row[]
+    ).map(toProspect);
+  }
+
+  latestBatchId(): string | null {
+    const row = this.db
+      .prepare('SELECT batch_id FROM sales_prospects ORDER BY created_at DESC LIMIT 1')
+      .get() as { batch_id: string } | undefined;
+    return row?.batch_id ?? null;
+  }
+
+  /** Pose le score et le rang. Le rang découle du score, il n'est jamais choisi. */
+  setScore(
+    prospectId: string,
+    patch: { score: number; tier: ProspectTier; detail: unknown; whyFit: string },
+  ): SalesProspect {
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET score = ?, tier = ?, score_detail = ?, why_fit = ?,
+                                    updated_at = ? WHERE id = ?`,
+      )
+      .run(patch.score, patch.tier, toJson(patch.detail), patch.whyFit, nowIso(), prospectId);
+    return this.require(prospectId);
+  }
+
+  setContact(
+    prospectId: string,
+    contact: {
+      name?: string | null;
+      role?: string | null;
+      email?: string | null;
+      phone?: string | null;
+      contactPage?: string | null;
+      sourceUrl?: string | null;
+      confidence?: number | null;
+    },
+  ): SalesProspect {
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET contact_name = ?, contact_role = ?, contact_email = ?,
+           contact_phone = ?, contact_page = ?, contact_source_url = ?, contact_confidence = ?,
+           updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        contact.name ?? null,
+        contact.role ?? null,
+        contact.email ?? null,
+        contact.phone ?? null,
+        contact.contactPage ?? null,
+        contact.sourceUrl ?? null,
+        contact.confidence ?? null,
+        nowIso(),
+        prospectId,
+      );
+    return this.require(prospectId);
+  }
+
+  /**
+   * Enregistre les brouillons d'approche.
+   *
+   * `personalizationFactId` est obligatoire : un message sans le fait qui le
+   * fonde ne peut pas être relu, et une personnalisation qu'on ne peut pas
+   * relire est une personnalisation qu'on ne peut pas défendre.
+   */
+  setOutreach(
+    prospectId: string,
+    draft: {
+      personalizationFactId: string;
+      messageShort: string;
+      messageEmail: string;
+      sourceUrl: string;
+    },
+  ): SalesProspect {
+    if (!draft.personalizationFactId) {
+      throw invalidState(
+        'Un brouillon d’approche exige la preuve sur laquelle il repose. ' +
+          'Sans elle, la personnalisation ne peut être ni relue ni défendue.',
+      );
+    }
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET personalization_fact_id = ?, message_short = ?,
+           message_email = ?, outreach_source_url = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        draft.personalizationFactId,
+        draft.messageShort,
+        draft.messageEmail,
+        draft.sourceUrl,
+        nowIso(),
+        prospectId,
+      );
+    return this.require(prospectId);
+  }
+
+  /**
+   * Change l'état, si la transition est permise.
+   *
+   * `APPROVED_TO_CONTACT` exige un relecteur nommé. Une approbation anonyme
+   * n'engage personne, et c'est précisément ce que cette étape doit faire.
+   */
+  setState(
+    prospectId: string,
+    state: ProspectState,
+    patch: { reviewer?: string | null; rejectReason?: string | null } = {},
+  ): SalesProspect {
+    const current = this.require(prospectId);
+    if (!TRANSITIONS[current.state].includes(state)) {
+      throw invalidState(
+        `Transition refusée : ${current.state} → ${state}. ` +
+          `Depuis ${current.state}, seuls ${TRANSITIONS[current.state].join(', ') || '(aucun état)'} ` +
+          `sont atteignables.`,
+      );
+    }
+    if (state === 'APPROVED_TO_CONTACT' && !patch.reviewer?.trim()) {
+      throw invalidState(
+        'Approuver un contact exige un relecteur nommé : un message partira sous notre nom.',
+      );
+    }
+
+    const now = nowIso();
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET state = @state,
+           reviewer = COALESCE(@reviewer, reviewer),
+           reject_reason = COALESCE(@reject, reject_reason),
+           approved_at = CASE WHEN @state = 'APPROVED_TO_CONTACT' THEN @now ELSE approved_at END,
+           contacted_at = CASE WHEN @state = 'CONTACTED' THEN @now ELSE contacted_at END,
+           updated_at = @now
+         WHERE id = @id`,
+      )
+      .run({
+        id: prospectId,
+        state,
+        reviewer: patch.reviewer ?? null,
+        reject: patch.rejectReason ?? null,
+        now,
+      });
+    return this.require(prospectId);
+  }
+
+  require(prospectId: string): SalesProspect {
+    const prospect = this.get(prospectId);
+    if (!prospect) throw invalidState(`Prospect « ${prospectId} » introuvable`);
+    return prospect;
+  }
+
+  // ─── Preuves ─────────────────────────────────────────────────────────────
+
+  addEvidence(input: Omit<SalesEvidence, 'id' | 'collectedAt'> & { collectedAt?: string }): SalesEvidence {
+    const evidence: SalesEvidence = {
+      ...input,
+      id: id('sev'),
+      collectedAt: input.collectedAt ?? nowIso(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO sales_evidence (id, prospect_id, field, claim, nature, source_url, basis,
+                                     confidence, collected_at)
+         VALUES (@id, @prospect_id, @field, @claim, @nature, @source_url, @basis,
+                 @confidence, @collected_at)`,
+      )
+      .run({
+        id: evidence.id,
+        prospect_id: evidence.prospectId,
+        field: evidence.field,
+        claim: evidence.claim,
+        nature: evidence.nature,
+        source_url: evidence.sourceUrl,
+        basis: evidence.basis,
+        confidence: evidence.confidence,
+        collected_at: evidence.collectedAt,
+      });
+    return evidence;
+  }
+
+  evidenceFor(prospectId: string): SalesEvidence[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM sales_evidence WHERE prospect_id = ? ORDER BY collected_at')
+        .all(prospectId) as Array<{
+        id: string;
+        prospect_id: string;
+        field: string;
+        claim: string;
+        nature: SalesEvidenceNature;
+        source_url: string | null;
+        basis: string | null;
+        confidence: number;
+        collected_at: string;
+      }>
+    ).map((row) => ({
+      id: row.id,
+      prospectId: row.prospect_id,
+      field: row.field,
+      claim: row.claim,
+      nature: row.nature,
+      sourceUrl: row.source_url,
+      basis: row.basis,
+      confidence: row.confidence,
+      collectedAt: row.collected_at,
+    }));
+  }
+}

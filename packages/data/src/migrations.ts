@@ -1075,4 +1075,91 @@ ALTER TABLE client_orders ADD COLUMN delivery_status   TEXT NOT NULL DEFAULT 'NO
 CREATE INDEX idx_orders_payment ON client_orders(payment_status);
 `,
   },
+  {
+    version: 17,
+    name: 'sales-prospects',
+    sql: `
+-- ─── Nos propres prospects ────────────────────────────────────────────────
+--
+-- ATLAS a jusqu'ici cherche des entreprises pour des clients. Cette table
+-- porte celles qu'il cherche pour nous — et la distinction compte, parce que
+-- la sortie n'est pas un rapport mais un message qui partira sous notre nom.
+--
+-- D'ou \`state\`, et surtout la transition qu'il interdit : rien ne fait passer
+-- un prospect de READY_FOR_REVIEW a APPROVED_TO_CONTACT sans qu'un humain
+-- l'ait decide. Un rapport mal relu se corrige ; un message envoye ne se
+-- reprend pas.
+--
+-- \`personalization_fact_id\` est la preuve sur laquelle repose le « j'ai vu
+-- que… » du message. Sans elle, pas de brouillon : une personnalisation
+-- inventee se repere en dix secondes et disqualifie tout le reste.
+CREATE TABLE sales_prospects (
+  id                  TEXT PRIMARY KEY,
+  batch_id            TEXT NOT NULL,
+  company_name        TEXT NOT NULL,
+  domain              TEXT,
+  website             TEXT,
+  country             TEXT,
+  industry            TEXT,
+
+  -- La tracabilite de la decouverte : de quel moteur, de quelle requete, et
+  -- de quelle page ce candidat est sorti.
+  source_url          TEXT,
+  search_provider     TEXT,
+  query               TEXT,
+  discovered_at       TEXT NOT NULL,
+
+  -- DISCOVERED · QUALIFIED · READY_FOR_REVIEW · APPROVED_TO_CONTACT
+  -- REJECTED · CONTACTED · REPLIED · INTERESTED · ORDERED · PAID · LOST
+  state               TEXT NOT NULL DEFAULT 'DISCOVERED',
+  -- PRIORITY · GOOD_FIT · WATCH · REJECTED — deduit du score, jamais pose.
+  tier                TEXT,
+  score               REAL,
+  score_detail        TEXT,
+  why_fit             TEXT,
+  reject_reason       TEXT,
+
+  contact_name        TEXT,
+  contact_role        TEXT,
+  contact_email       TEXT,
+  contact_phone       TEXT,
+  contact_page        TEXT,
+  contact_source_url  TEXT,
+  contact_confidence  REAL,
+
+  personalization_fact_id TEXT,
+  message_short       TEXT,
+  message_email       TEXT,
+  outreach_source_url TEXT,
+
+  reviewer            TEXT,
+  approved_at         TEXT,
+  contacted_at        TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE (batch_id, domain)
+);
+CREATE INDEX idx_prospects_batch ON sales_prospects(batch_id, state);
+CREATE INDEX idx_prospects_tier ON sales_prospects(tier, score DESC);
+
+-- Les preuves recueillies sur nos prospects.
+--
+-- Table distincte de \`evidence\` : celle-la sert les missions clientes et est
+-- rattachee a une opportunite. Melanger les deux ferait apparaitre nos propres
+-- prospects dans un livrable client, ce qui serait au mieux embarrassant.
+CREATE TABLE sales_evidence (
+  id           TEXT PRIMARY KEY,
+  prospect_id  TEXT NOT NULL REFERENCES sales_prospects(id) ON DELETE CASCADE,
+  field        TEXT NOT NULL,
+  claim        TEXT NOT NULL,
+  -- observed · reported · inferred
+  nature       TEXT NOT NULL,
+  source_url   TEXT,
+  basis        TEXT,
+  confidence   REAL NOT NULL DEFAULT 0.6,
+  collected_at TEXT NOT NULL
+);
+CREATE INDEX idx_sales_evidence_prospect ON sales_evidence(prospect_id);
+`,
+  },
 ];

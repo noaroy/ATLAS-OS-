@@ -16,6 +16,7 @@ import { CompanyRepository } from './repositories/companies.ts';
 import { OpportunityRepository } from './repositories/opportunities.ts';
 import { LlmCallRepository } from './repositories/llm-calls.ts';
 import { OrderRepository } from './repositories/orders.ts';
+import { SalesRepository } from './repositories/sales.ts';
 import { ToolCallRepository } from './repositories/tool-calls.ts';
 import { DecisionRepository } from './repositories/decisions.ts';
 
@@ -61,6 +62,7 @@ export interface Repositories {
   opportunities: OpportunityRepository;
   llmCalls: LlmCallRepository;
   orders: OrderRepository;
+  sales: SalesRepository;
   toolCalls: ToolCallRepository;
   decisions: DecisionRepository;
   close(): void;
@@ -101,6 +103,7 @@ export function createRepositories(databaseFile: string, logger: Logger): Reposi
     opportunities: new OpportunityRepository(db),
     llmCalls: new LlmCallRepository(db),
     orders: new OrderRepository(db),
+    sales: new SalesRepository(db),
     toolCalls: new ToolCallRepository(db),
     decisions: new DecisionRepository(db),
     close() {
@@ -122,3 +125,11 @@ export type {
   ClientReportRow,
   OrderStatus,
 } from './repositories/orders.ts';
+
+export { SalesRepository } from './repositories/sales.ts';
+export type {
+  SalesProspect,
+  SalesEvidence,
+  ProspectState,
+  ProspectTier,
+} from './repositories/sales.ts';

@@ -30,6 +30,9 @@ import {
   canDeliver,
   REVIEW_CHECKLIST,
   PIPELINE_VERSION,
+  evaluateApproval,
+  parseDeclaredChecks,
+  HUMAN_CHECKS,
   type ReportEntry,
 } from '../packages/departments/src/index.ts';
 
@@ -39,6 +42,8 @@ const c = {
 };
 
 const SUBMIT = process.argv.includes('--submit');
+const APPROVE = process.argv.includes('--approve');
+const REVIEWER = process.argv.find((a) => a.startsWith('--reviewer='))?.slice(11);
 const PRICE_EUR = Number(process.argv.find((a) => a.startsWith('--price='))?.slice(8) ?? 49);
 
 type Judgement = 'PASS' | 'FAIL' | 'NEEDS REVIEW';
@@ -240,6 +245,82 @@ async function main(): Promise<void> {
   console.log(`    coût de production ${money.productionCostUsd.toFixed(4)} $ (${money.productionCostEur.toFixed(4)} €)`);
   console.log(`    marge brute        ${money.grossMarginEur.toFixed(4)} €`);
   console.log(`    marge              ${money.grossMarginPercent} %\n`);
+
+  // ── Approbation humaine ─────────────────────────────────────────────────
+  //
+  // Réclamée point par point sur la ligne de commande. Le système ne coche
+  // jamais un point humain : il n'existe aucun chemin, ici, qui transforme un
+  // « NEEDS REVIEW » en « PASS » sans que quelqu'un l'ait tapé.
+  if (APPROVE) {
+    const decision = evaluateApproval({
+      reportState: row.state,
+      declaredChecks: parseDeclaredChecks(process.argv),
+      automaticVerdicts: Object.fromEntries(
+        Object.entries(findings)
+          .filter(([, f]) => f.judgement !== 'NEEDS REVIEW')
+          .map(([key, f]) => [key, f.judgement as 'PASS' | 'FAIL']),
+      ),
+      simulatedEvidence: simulated,
+      unsupportedClaims: unsupported + inferredWithoutBasis,
+    });
+
+    if (!decision.approved) {
+      console.log(`  ${c.bold}${c.red}APPROBATION REFUSÉE${c.reset}
+`);
+      for (const refusal of decision.refusals) {
+        console.log(`    ${c.red}${refusal.code}${c.reset}`);
+        console.log(`      ${refusal.message}`);
+      }
+      console.log(
+        `
+  ${c.dim}Syntaxe attendue :
+` +
+          `    npm run review -- --approve ${HUMAN_CHECKS.map((k) => `--check=${k}`).join(' ')}${c.reset}
+`,
+      );
+      await system.shutdown('approbation refusée');
+      process.exitCode = 1;
+      return;
+    }
+
+    // Le relecteur : l'identité locale quand elle existe, sinon ce qui a été
+    // déclaré. Jamais « atlas » — une approbation engage quelqu'un.
+    const founder = repos.users.list().find((u) => u.role === 'founder');
+    const reviewer = REVIEWER ?? founder?.email ?? founder?.name ?? 'relecteur-local';
+
+    const approved = repos.orders.setReportState(row.id, 'APPROVED_FOR_DELIVERY', {
+      reviewer,
+      passed: decision.passedKeys,
+      notes: `Approbation manuelle · ${decision.humanChecks.length} point(s) humain(s) déclaré(s).`,
+    });
+
+    const guard = canDeliver({
+      paymentStatus: 'NONE',
+      reviewStatus: approved.state,
+      simulatedEvidence: simulated,
+      unsupportedClaims: unsupported,
+    });
+
+    console.log(`  ${c.bold}${c.green}HUMAN REVIEW APPROVED${c.reset}
+`);
+    console.log(`    report:            ${approved.id}`);
+    console.log(`    mission:           ${mission.code}`);
+    console.log(`    reviewer:          ${approved.reviewer}`);
+    console.log(`    approvedAt:        ${approved.approvedAt}`);
+    console.log(`    human checks:      ${decision.humanChecks.join(', ')}`);
+    console.log(
+      `    automatic checks:  ${decision.automaticChecks.map((k) => `${k.key}=${k.verdict}`).join(', ')}`,
+    );
+    console.log();
+    console.log(
+      `    delivery guard:    ${guard.allowed ? `${c.green}OPEN${c.reset}` : `${c.red}CLOSED${c.reset}`}`,
+    );
+    for (const b of guard.blockers) console.log(`      ${c.dim}· ${b}${c.reset}`);
+    console.log();
+
+    await system.shutdown('rapport approuvé');
+    return;
+  }
 
   if (SUBMIT && row.state === 'GENERATED') {
     const submitted = repos.orders.setReportState(row.id, 'PENDING_REVIEW');

@@ -148,3 +148,15 @@ export {
   rationaleTranslationMap,
   type RationaleTranslation,
 } from './rationale-translations.ts';
+
+export {
+  evaluateApproval,
+  parseDeclaredChecks,
+  HUMAN_CHECKS,
+  AUTOMATIC_CHECKS,
+  type ApprovalInput,
+  type ApprovalDecision,
+  type ApprovalRefusal,
+  type RefusalCode,
+  type HumanCheckKey,
+} from './review-approval.ts';

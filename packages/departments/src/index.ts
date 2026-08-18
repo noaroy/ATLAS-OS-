@@ -209,3 +209,19 @@ export {
   type QueryVocabulary,
   type QueryPlan,
 } from './sales-queries.ts';
+
+export {
+  classifyPageType,
+  resolveCompanyIdentity,
+  icpStatus,
+  isGenericDescriptor,
+  nameMatchesDomain,
+  checkPriorityEligibility,
+  type PageType,
+  type PageClassification,
+  type CompanyIdentity,
+  type IdentityOutcome,
+  type IcpStatus,
+  type IcpDecision,
+  type PriorityCheck,
+} from './company-resolver.ts';

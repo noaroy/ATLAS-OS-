@@ -61,6 +61,11 @@ export interface SalesProspect {
   searchProvider: string | null;
   query: string | null;
   discoveredAt: string;
+  /** Ce que la page annoncait, garde a cote de ce qu'on a etabli. */
+  searchTitle: string | null;
+  pageType: string | null;
+  identityConfidence: number | null;
+  identitySources: string[] | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -110,6 +115,10 @@ interface Row {
   search_provider: string | null;
   query: string | null;
   discovered_at: string;
+  page_type: string | null;
+  identity_confidence: number | null;
+  identity_sources: string | null;
+  search_title: string | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -146,6 +155,10 @@ const toProspect = (row: Row): SalesProspect => ({
   searchProvider: row.search_provider,
   query: row.query,
   discoveredAt: row.discovered_at,
+  pageType: row.page_type,
+  identityConfidence: row.identity_confidence,
+  identitySources: row.identity_sources ? (JSON.parse(row.identity_sources) as string[]) : null,
+  searchTitle: row.search_title,
   state: row.state,
   tier: row.tier,
   score: row.score,
@@ -191,6 +204,10 @@ export class SalesRepository {
     searchProvider?: string | null;
     query?: string | null;
     discoveredAt?: string;
+    searchTitle?: string | null;
+    pageType?: string | null;
+    identityConfidence?: number | null;
+    identitySources?: string[] | null;
   }): { prospect: SalesProspect; created: boolean } {
     const existing = this.db
       .prepare('SELECT * FROM sales_prospects WHERE batch_id = ? AND domain = ?')
@@ -210,6 +227,10 @@ export class SalesRepository {
       search_provider: input.searchProvider ?? null,
       query: input.query ?? null,
       discovered_at: input.discoveredAt ?? now,
+      search_title: input.searchTitle ?? null,
+      page_type: input.pageType ?? null,
+      identity_confidence: input.identityConfidence ?? null,
+      identity_sources: input.identitySources ? JSON.stringify(input.identitySources) : null,
       state: 'DISCOVERED',
       tier: null,
       score: null,
@@ -236,13 +257,15 @@ export class SalesRepository {
     this.db
       .prepare(
         `INSERT INTO sales_prospects (id, batch_id, company_name, domain, website, country,
-           industry, source_url, search_provider, query, discovered_at, state, tier, score,
+           industry, source_url, search_provider, query, discovered_at,
+           search_title, page_type, identity_confidence, identity_sources, state, tier, score,
            score_detail, why_fit, reject_reason, contact_name, contact_role, contact_email,
            contact_phone, contact_page, contact_source_url, contact_confidence,
            personalization_fact_id, message_short, message_email, outreach_source_url,
            reviewer, approved_at, contacted_at, created_at, updated_at)
          VALUES (@id, @batch_id, @company_name, @domain, @website, @country,
-           @industry, @source_url, @search_provider, @query, @discovered_at, @state, @tier, @score,
+           @industry, @source_url, @search_provider, @query, @discovered_at,
+           @search_title, @page_type, @identity_confidence, @identity_sources, @state, @tier, @score,
            @score_detail, @why_fit, @reject_reason, @contact_name, @contact_role, @contact_email,
            @contact_phone, @contact_page, @contact_source_url, @contact_confidence,
            @personalization_fact_id, @message_short, @message_email, @outreach_source_url,

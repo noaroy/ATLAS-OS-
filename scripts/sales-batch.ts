@@ -26,6 +26,12 @@ import {
   ATLAS_SALES_ICP,
   filterCandidate,
   dedupeCandidates,
+  classifyPageType,
+  resolveCompanyIdentity,
+  icpStatus,
+  checkPriorityEligibility,
+  SALES_TIER_THRESHOLDS,
+  type CompanyIdentity,
   domainOf,
   scoreSalesProspect,
   buildOutreachDraft,
@@ -230,40 +236,119 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Tri gratuit ──────────────────────────────────────────────────────────
-  const unique = dedupeCandidates(raw);
-  const kept: RawCandidate[] = [];
+  // Le plafond de résultats est dur : la boucle ci-dessus le contrôle avant
+  // chaque requête, donc la dernière peut le dépasser. On tranche ici.
+  const MAX_RESULTS = MAX_DISCOVERED * 2;
+  if (raw.length > MAX_RESULTS) raw.length = MAX_RESULTS;
+
+  // ── Résolution d'identité, avant toute dépense ───────────────────────────
+  //
+  // L'ordre compte, et il est celui-ci : type de page, puis identité, puis
+  // domaine officiel, puis profil, puis dédoublonnage. Le lot 002 a inversé
+  // le premier et le deuxième — il a nommé une entreprise à partir d'un titre
+  // sans avoir établi que la page lui appartenait — et a payé pour qualifier
+  // l'éditeur d'une étude de marché.
+  type Resolved = { candidate: RawCandidate; identity: CompanyIdentity };
+  const resolved: Resolved[] = [];
   const rejected: Array<{ name: string; reason: string }> = [];
 
-  for (const candidate of unique) {
-    // Le chemin de l'URL d'abord : un article ou une offre d'emploi coûterait
-    // le même prix à analyser qu'une entreprise, pour un résultat connu.
-    const shape = looksLikeCompanySite(candidate.sourceUrl);
-    if (!shape.ok) {
-      rejected.push({ name: candidate.companyName || candidate.domain!, reason: shape.reason });
+  for (const candidate of raw) {
+    const label = candidate.companyName || candidate.domain || candidate.sourceUrl;
+
+    // 1. À qui appartient cette page ?
+    const page = classifyPageType({
+      url: candidate.sourceUrl,
+      domain: candidate.domain,
+      title: candidate.companyName,
+      snippet: candidate.snippet,
+    });
+
+    // 2. Le chemin, ensuite : un article coûterait le même prix qu'une usine.
+    if (page.ownerIsCandidate) {
+      const shape = looksLikeCompanySite(candidate.sourceUrl);
+      if (!shape.ok) {
+        rejected.push({ name: label, reason: shape.reason });
+        continue;
+      }
+    }
+
+    // 3. Quelle entreprise cette page désigne-t-elle ?
+    const outcome = resolveCompanyIdentity({
+      searchTitle: candidate.companyName,
+      url: candidate.sourceUrl,
+      domain: candidate.domain,
+      country: candidate.country,
+      page,
+    });
+    if (!outcome.identity) {
+      rejected.push({ name: label, reason: outcome.reason });
       continue;
     }
-    const decision = filterCandidate(candidate, ATLAS_SALES_ICP);
-    if (decision.outcome === 'kept' && kept.length < MAX_DISCOVERED) kept.push(candidate);
-    else if (decision.outcome === 'rejected') rejected.push({ name: candidate.companyName || candidate.domain!, reason: decision.reason });
+
+    // 4. Entre-t-elle dans le profil de ce lot ?
+    // Le titre brut part avec le résumé, pas seulement le nom retenu : ramener
+    // « X : agence marketing » à « X » ne doit jamais faire disparaître le mot
+    // qui disqualifie.
+    const icp = icpStatus({
+      companyName: outcome.identity.companyName,
+      snippet: [candidate.companyName, candidate.snippet].filter(Boolean).join(' — '),
+      industry: candidate.industry,
+      country: outcome.identity.country,
+    });
+    if (icp.status !== 'MATCH') {
+      rejected.push({ name: outcome.identity.companyName, reason: icp.reason });
+      continue;
+    }
+
+    // 5. Le filtre historique reste : il attrape ce que la résolution laisse.
+    const decision = filterCandidate(
+      { ...candidate, companyName: outcome.identity.companyName },
+      ATLAS_SALES_ICP,
+    );
+    if (decision.outcome === 'rejected') {
+      rejected.push({ name: outcome.identity.companyName, reason: decision.reason });
+      continue;
+    }
+
+    resolved.push({ candidate, identity: outcome.identity });
   }
 
-  console.log(
-    `\n  ${raw.length} résultat(s) · ${unique.length} entreprise(s) distincte(s) · ` +
-      `${c.green}${kept.length} retenue(s)${c.reset} · ${c.dim}${rejected.length} écartée(s) sans dépense${c.reset}\n`,
-  );
+  // 6. Dédoublonnage sur le domaine officiel, pas sur celui du résultat : deux
+  //    pages d'un même site ne sont qu'une entreprise.
+  const seen = new Set<string>();
+  const kept: Resolved[] = [];
+  for (const entry of resolved) {
+    if (seen.has(entry.identity.canonicalDomain)) continue;
+    seen.add(entry.identity.canonicalDomain);
+    if (kept.length < MAX_DISCOVERED) kept.push(entry);
+  }
+  void dedupeCandidates;
 
-  for (const candidate of kept) {
+  console.log(
+    `
+  ${raw.length} résultat(s) · ${resolved.length} identité(s) résolue(s) · ` +
+      `${c.green}${kept.length} retenue(s)${c.reset} · ${c.dim}${rejected.length} écartée(s) sans dépense${c.reset}
+`,
+  );
+  for (const r of rejected.slice(0, 12)) {
+    console.log(`    ${c.dim}écarté${c.reset} ${r.name.slice(0, 40).padEnd(42)} ${c.dim}${r.reason.slice(0, 70)}${c.reset}`);
+  }
+
+  for (const { candidate, identity } of kept) {
     repos.sales.discover({
       batchId,
-      companyName: candidate.companyName || candidate.domain!,
-      domain: candidate.domain!,
-      website: `https://${candidate.domain}`,
-      country: candidate.country,
+      companyName: identity.companyName,
+      domain: identity.canonicalDomain,
+      website: identity.officialWebsite,
+      country: identity.country,
       sourceUrl: candidate.sourceUrl,
       searchProvider: candidate.searchProvider,
       query: candidate.query,
       discoveredAt: candidate.discoveredAt,
+      searchTitle: candidate.companyName,
+      pageType: 'OFFICIAL_COMPANY_SITE',
+      identityConfidence: identity.identityConfidence,
+      identitySources: identity.identitySources,
     });
   }
 
@@ -279,7 +364,7 @@ async function main(): Promise<void> {
       break;
     }
 
-    const source = kept.find((k) => k.domain === prospect.domain);
+    const source = kept.find((k) => k.identity.canonicalDomain === prospect.domain);
     const request: LlmRequest = {
       model: MODEL,
       system:
@@ -297,7 +382,7 @@ async function main(): Promise<void> {
               text:
                 `# Entreprise\n${prospect.companyName}\nSite : ${prospect.website}\n` +
                 `Pays : ${prospect.country ?? 'inconnu'}\n\n` +
-                `# Ce que la recherche a rapporté\n${source?.snippet ?? '(aucun résumé)'}\n` +
+                `# Ce que la recherche a rapporté\n${source?.candidate.snippet ?? '(aucun résumé)'}\n` +
                 `Source : ${prospect.sourceUrl}\n\n` +
                 `# Profil recherché\nPME B2B, 3 à 250 salariés, vendant à des entreprises, ` +
                 `susceptible de chercher clients, distributeurs ou partenaires.`,
@@ -375,7 +460,41 @@ async function main(): Promise<void> {
 
   // ── Approche : un brouillon par PRIORITY, sur un fait sourcé ─────────────
   const qualified = repos.sales.forBatch(batchId).filter((p) => p.state === 'QUALIFIED');
-  const priority = qualified.filter((p) => p.tier === 'PRIORITY').slice(0, MAX_PRIORITY);
+
+  // Le score ne suffit pas à faire un PRIORITY. Le lot 002 en a produit deux à
+  // 73 et 71 : l'un était l'éditeur d'une étude de marché, l'autre une agence
+  // de communication. Un score élevé sur un objet mal identifié reste un score
+  // élevé — c'est l'identification qui doit précéder, et cette garde le vérifie
+  // une dernière fois avant qu'un brouillon existe.
+  const priority: typeof qualified = [];
+  for (const p of qualified) {
+    if (p.tier !== 'PRIORITY') continue;
+    const observed = repos.sales.evidenceFor(p.id).filter((e) => e.nature === 'observed' && e.sourceUrl);
+    const check = checkPriorityEligibility({
+      identity: p.identityConfidence != null && p.domain
+        ? {
+            companyName: p.companyName,
+            canonicalDomain: p.domain,
+            officialWebsite: p.website ?? `https://${p.domain}`,
+            country: p.country,
+            identityConfidence: p.identityConfidence,
+            identitySources: p.identitySources ?? [],
+          }
+        : null,
+      pageType: (p.pageType as 'OFFICIAL_COMPANY_SITE') ?? 'UNKNOWN',
+      icp: 'MATCH',
+      observedFacts: observed.length,
+      score: p.score ?? 0,
+      scoreThreshold: SALES_TIER_THRESHOLDS.priority,
+      hasSourcedPersonalization: observed.length > 0,
+    });
+    if (!check.eligible) {
+      console.log(`    ${c.amber}rétrogradé${c.reset} ${p.companyName.slice(0, 32).padEnd(34)} ${c.dim}${check.blockers.join(' · ').slice(0, 60)}${c.reset}`);
+      repos.sales.setScore(p.id, { score: p.score ?? 0, tier: 'GOOD_FIT', detail: p.scoreDetail ?? {}, whyFit: p.whyFit ?? '' });
+      continue;
+    }
+    if (priority.length < MAX_PRIORITY) priority.push(p);
+  }
 
   console.log(`\n  ${c.bold}Brouillons d'approche${c.reset}`);
   let drafts = 0;

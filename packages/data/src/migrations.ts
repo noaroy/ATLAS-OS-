@@ -1162,4 +1162,26 @@ CREATE TABLE sales_evidence (
 CREATE INDEX idx_sales_evidence_prospect ON sales_evidence(prospect_id);
 `,
   },
+  {
+    version: 18,
+    name: 'sales-identity',
+    sql: `
+-- ─── L'identite resolue, distincte du titre de recherche ──────────────────
+--
+-- Le lot 002 a stocke le titre du resultat de recherche dans
+-- \`company_name\` et l'a traite comme une raison sociale. Deux prospects
+-- PRIORITY en sont sortis : l'editeur d'une etude de marche, et une agence
+-- de communication. Le score etait juste ; ce qu'il notait ne l'etait pas.
+--
+-- Ces colonnes separent ce qu'une page annonce de ce qu'on a pu etablir.
+-- \`page_type\` dit a qui la page appartient, \`identity_confidence\` ce que
+-- vaut le nom retenu, \`identity_sources\` sur quoi il repose. Un prospect
+-- sans ces trois valeurs n'a pas traverse la resolution, et ne peut donc
+-- pas etre PRIORITY.
+ALTER TABLE sales_prospects ADD COLUMN page_type TEXT;
+ALTER TABLE sales_prospects ADD COLUMN identity_confidence REAL;
+ALTER TABLE sales_prospects ADD COLUMN identity_sources TEXT;
+ALTER TABLE sales_prospects ADD COLUMN search_title TEXT;
+`,
+  },
 ];

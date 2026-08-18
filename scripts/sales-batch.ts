@@ -30,6 +30,9 @@ import {
   scoreSalesProspect,
   buildOutreachDraft,
   SALES_SCORING_MODEL,
+  planQueries,
+  looksLikeCompanySite,
+  whyNotACompanyName,
   type RawCandidate,
   type SalesAssessment,
   type OutreachFact,
@@ -50,21 +53,6 @@ const MAX_QUALIFIED = Number(arg('qualified') ?? 10);
 const MAX_PRIORITY = Number(arg('priority') ?? 5);
 const MODEL = 'claude-haiku-4-5-20251001';
 const outDir = arg('out') ?? 'out';
-
-/**
- * Les requêtes du premier lot.
- *
- * Écrites à la main et versionnées : ce sont elles qui déterminent qui l'on
- * trouve, et les confier à un modèle reviendrait à s'en remettre à son idée du
- * marché plutôt qu'à la nôtre. Elles visent des pages où une entreprise dit
- * elle-même chercher des partenaires — le signal le plus proche du besoin.
- */
-const QUERIES: readonly string[] = [
-  'PME française industrielle "nous recherchons des distributeurs"',
-  '"devenir revendeur" fabricant français B2B site officiel',
-  'PME France "réseau de distribution" recherche partenaires export',
-  'fabricant français "développement export" distributeurs recherchés',
-];
 
 interface Qualification {
   b2b: boolean;
@@ -207,7 +195,8 @@ async function main(): Promise<void> {
   const raw: RawCandidate[] = [];
   let searchCalls = 0;
 
-  for (const query of QUERIES) {
+  for (const plan of planQueries()) {
+    const query = plan.query;
     if (raw.length >= MAX_DISCOVERED * 2) break;
     try {
       const results = await fabric.search(
@@ -232,7 +221,10 @@ async function main(): Promise<void> {
           snippet: result.snippet ?? null,
         });
       }
-      console.log(`    ${c.dim}${query.slice(0, 62)}${c.reset} → ${results.results?.length ?? 0}`);
+      console.log(
+        `    ${c.dim}[${plan.family}]${c.reset} ${query.slice(0, 54).padEnd(56)}` +
+          `→ ${results.results?.length ?? 0}`,
+      );
     } catch (err) {
       console.log(`    ${c.amber}échec${c.reset} ${query.slice(0, 50)} — ${(err as Error).message.slice(0, 50)}`);
     }
@@ -244,6 +236,13 @@ async function main(): Promise<void> {
   const rejected: Array<{ name: string; reason: string }> = [];
 
   for (const candidate of unique) {
+    // Le chemin de l'URL d'abord : un article ou une offre d'emploi coûterait
+    // le même prix à analyser qu'une entreprise, pour un résultat connu.
+    const shape = looksLikeCompanySite(candidate.sourceUrl);
+    if (!shape.ok) {
+      rejected.push({ name: candidate.companyName || candidate.domain!, reason: shape.reason });
+      continue;
+    }
     const decision = filterCandidate(candidate, ATLAS_SALES_ICP);
     if (decision.outcome === 'kept' && kept.length < MAX_DISCOVERED) kept.push(candidate);
     else if (decision.outcome === 'rejected') rejected.push({ name: candidate.companyName || candidate.domain!, reason: decision.reason });

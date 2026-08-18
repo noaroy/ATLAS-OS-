@@ -201,3 +201,11 @@ export {
   type OutreachRefusal,
   type ProspectState as OutreachProspectState,
 } from './outreach.ts';
+
+export {
+  SALES_QUERY_VOCABULARY,
+  planQueries,
+  looksLikeCompanySite,
+  type QueryVocabulary,
+  type QueryPlan,
+} from './sales-queries.ts';

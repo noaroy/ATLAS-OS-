@@ -25,6 +25,7 @@ import {
   trimSentence,
   type OutreachFact,
 } from '../src/outreach.ts';
+import { planQueries, looksLikeCompanySite, SALES_QUERY_VOCABULARY } from '../src/sales-queries.ts';
 
 /**
  * ATLAS travaille pour ATLAS, et les mêmes règles s'appliquent.
@@ -380,5 +381,80 @@ describe('un titre de page n’est pas une entreprise', () => {
     // écarté plus loin pour quelques millièmes de dollar.
     assert.equal(whyNotACompanyName('Groupe Bernard'), null);
     assert.equal(whyNotACompanyName('SAS Martin & Fils'), null);
+  });
+});
+
+/**
+ * Chercher des entreprises, pas des intentions.
+ *
+ * Le premier lot cherchait « nous recherchons des distributeurs » — la
+ * formulation la plus proche du besoin, et c'est pour cela qu'elle a échoué :
+ * elle ramène des pages « devenir revendeur », dont le titre n'est jamais une
+ * raison sociale. Un moteur sait trouver des fabricants ; il ne sait pas
+ * trouver des intentions.
+ */
+describe('les requêtes sont engendrées par règles', () => {
+  test('elles couvrent les trois familles', () => {
+    const families = new Set(planQueries().map((p) => p.family));
+    for (const expected of ['metier', 'site']) {
+      assert.ok(families.has(expected), `famille « ${expected} » absente`);
+    }
+  });
+
+  test('la famille « site » vise des pages qui n’existent que sur un site officiel', () => {
+    // « nos produits » ou « notre entreprise » ne se trouvent pas sur un
+    // annuaire. C'est le filtre anti-annuaire le moins cher : il est dans la
+    // requête.
+    const site = planQueries().filter((p) => p.family === 'site');
+    assert.ok(site.length > 0);
+    for (const plan of site) assert.match(plan.query, /"/, 'une expression exacte est attendue');
+  });
+
+  test('aucune requête ne cherche une intention en premier', () => {
+    // Les familles qui ramènent des entreprises passent avant celle qui
+    // ramène des intentions : le budget de qualification leur revient.
+    const first = planQueries()[0]!;
+    assert.notEqual(first.family, 'expansion');
+  });
+
+  test('le plan est déterministe : deux appels donnent le même lot', () => {
+    assert.deepEqual(planQueries(), planQueries());
+  });
+
+  test('la limite est respectée', () => {
+    assert.equal(planQueries(SALES_QUERY_VOCABULARY, 3).length, 3);
+  });
+});
+
+describe('un article n’est pas un site d’entreprise', () => {
+  test('les chemins de contenu sont écartés gratuitement', () => {
+    for (const url of [
+      'https://exemple.fr/actualites/2026/nouveau-fabricant',
+      'https://exemple.fr/blog/comment-choisir',
+      'https://exemple.fr/emploi/technicien',
+      'https://exemple.fr/annuaire/fabricants',
+      'https://exemple.fr/recherche?q=machines',
+    ]) {
+      assert.equal(looksLikeCompanySite(url).ok, false, `« ${url} » doit être écarté`);
+    }
+  });
+
+  test('une page trop profonde est presque toujours un article', () => {
+    assert.equal(looksLikeCompanySite('https://x.fr/a/b/c/d/e/f').ok, false);
+  });
+
+  test('les pages d’entreprise passent', () => {
+    for (const url of [
+      'https://atelier-durand.fr/',
+      'https://atelier-durand.fr/nos-produits',
+      'https://atelier-durand.fr/entreprise/export',
+      'https://atelier-durand.fr/distributeurs',
+    ]) {
+      assert.equal(looksLikeCompanySite(url).ok, true, `« ${url} » doit passer`);
+    }
+  });
+
+  test('une adresse illisible est écartée', () => {
+    assert.equal(looksLikeCompanySite('pas une url').ok, false);
   });
 });

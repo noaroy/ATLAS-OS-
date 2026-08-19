@@ -5,7 +5,9 @@ import {
   effectiveOutreachEligibility,
   isOutreachState,
   GUARD_VERSION,
+  canonicalDomainOf,
   type EligibilityVerdict,
+  type LedgerVerdict,
 } from '@atlas/core';
 import type { Db } from '../database.ts';
 import { fromJson, toJson } from '../database.ts';
@@ -575,7 +577,123 @@ export class SalesRepository {
       hasObservedContact:
         p.contactObserved && Boolean(p.contactEmail || p.contactPage || p.contactPhone),
       invalidation: invalidation ?? null,
+      ledger: p.domain ? this.ledgerFor(p.domain) : null,
     });
+  }
+
+  /**
+   * Ce que le registre dit d'un domaine, l'entrée la plus forte d'abord.
+   *
+   * `DO_NOT_CONTACT` prime sur `CONTACTED` : une entreprise à qui on a écrit
+   * puis qu'on a décidé d'écarter reste écartée, et l'ordre chronologique ne
+   * doit pas pouvoir inverser cela par accident.
+   */
+  ledgerFor(domain: string): LedgerVerdict | null {
+    const row = this.db
+      .prepare(
+        `SELECT kind, note, recorded_by, recorded_at
+           FROM outreach_ledger WHERE canonical_domain = ?
+          ORDER BY CASE kind WHEN 'DO_NOT_CONTACT' THEN 0 ELSE 1 END, recorded_at DESC
+          LIMIT 1`,
+      )
+      .get(canonicalDomainOf(domain)) as
+      | { kind: string; note: string | null; recorded_by: string; recorded_at: string }
+      | undefined;
+    if (!row) return null;
+    return {
+      kind: row.kind as LedgerVerdict['kind'],
+      note: row.note,
+      recordedBy: row.recorded_by,
+      recordedAt: row.recorded_at,
+    };
+  }
+
+  /** Les identifiants de lots, du plus récent au plus ancien. */
+  batchIds(): string[] {
+    return (
+      this.db
+        .prepare('SELECT DISTINCT batch_id FROM sales_prospects ORDER BY batch_id DESC')
+        .all() as Array<{ batch_id: string }>
+    ).map((row) => row.batch_id);
+  }
+
+  /** Tout ce qui a été écrit sur ce domaine, dans l'ordre. */
+  ledgerHistory(domain: string): Array<LedgerVerdict & { channel: string | null }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT kind, channel, note, recorded_by, recorded_at
+             FROM outreach_ledger WHERE canonical_domain = ? ORDER BY recorded_at ASC`,
+        )
+        .all(canonicalDomainOf(domain)) as Array<{
+        kind: string; channel: string | null; note: string | null;
+        recorded_by: string; recorded_at: string;
+      }>
+    ).map((row) => ({
+      kind: row.kind as LedgerVerdict['kind'],
+      channel: row.channel,
+      note: row.note,
+      recordedBy: row.recorded_by,
+      recordedAt: row.recorded_at,
+    }));
+  }
+
+  /**
+   * Consigne un envoi ou une mise à l'écart. Jamais une correction.
+   *
+   * La table refuse les mises à jour et les suppressions : une décision
+   * révisée s'écrit en ajoutant une ligne. L'historique reste donc lisible
+   * dans l'ordre où il a été décidé, ce qu'une correction sur place détruirait.
+   */
+  recordOutreach(input: {
+    domain: string;
+    kind: LedgerVerdict['kind'];
+    recordedBy: string;
+    channel?: string | null;
+    note?: string | null;
+    recordedAt?: string;
+  }): void {
+    const domain = canonicalDomainOf(input.domain);
+    if (!domain) throw invalidState('Un registre sans domaine ne dédoublonne rien.');
+    if (!input.recordedBy.trim()) {
+      throw invalidState('Le registre exige de savoir qui a décidé : une décision anonyme ne se conteste pas.');
+    }
+    this.db
+      .prepare(
+        `INSERT INTO outreach_ledger (id, canonical_domain, kind, channel, note, recorded_by, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id('olg'),
+        domain,
+        input.kind,
+        input.channel ?? null,
+        input.note ?? null,
+        input.recordedBy.trim(),
+        input.recordedAt ?? nowIso(),
+      );
+  }
+
+  /**
+   * Tous les domaines qu'ATLAS a déjà vus — prospects de tous les lots, plus
+   * le registre.
+   *
+   * Sert à écarter un candidat avant la moindre dépense : repayer pour
+   * qualifier une entreprise déjà en base est une dépense sans objet.
+   */
+  knownDomains(): Set<string> {
+    const domains = new Set<string>();
+    for (const row of this.db
+      .prepare('SELECT DISTINCT domain FROM sales_prospects WHERE domain IS NOT NULL')
+      .all() as Array<{ domain: string }>) {
+      domains.add(canonicalDomainOf(row.domain));
+    }
+    for (const row of this.db
+      .prepare('SELECT DISTINCT canonical_domain FROM outreach_ledger')
+      .all() as Array<{ canonical_domain: string }>) {
+      domains.add(row.canonical_domain);
+    }
+    return domains;
   }
 
   /**

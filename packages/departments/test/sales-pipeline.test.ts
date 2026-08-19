@@ -133,3 +133,48 @@ test('l’entonnoir ferme : chaque résultat finit dans exactement une case', as
   assert.equal(outcome.funnel.searchResults, 6);
   assert.equal(outcome.funnel.deduplicated, 1, 'deux pages d’un même site font une entreprise');
 });
+
+test('une entreprise déjà connue n’est jamais requalifiée', async () => {
+  // Le lot 004 a repayé pour CIRMECA et SERAAP, déjà présents au lot 003 :
+  // l'exclusion doit tomber après la résolution — c'est elle qui établit le
+  // domaine officiel — mais avant la qualification, qui est ce qui coûte.
+  const spy = spyProvider();
+  const outcome = await runSalesPipeline({
+    candidates: [REAL, { ...REAL, url: 'https://cirmeca.com/nos-machines', searchTitle: 'Cirmeca machines' }],
+    maxRetained: 10,
+    excludeDomains: new Set(['cirmeca.com']),
+    qualify: spy.qualify,
+  });
+
+  assert.equal(spy.calls.length, 0, 'aucun appel payant sur une entreprise déjà connue');
+  assert.equal(outcome.survivors.length, 0);
+  assert.equal(outcome.funnel.alreadyKnown, 2);
+  assert.equal(funnelBalances(outcome.funnel).balanced, true);
+  assert.match(outcome.rejections[0]!.reason, /déjà connue/);
+});
+
+test('l’exclusion porte sur le domaine officiel, pas sur celui du résultat', async () => {
+  // Trouvée par une autre page, la même entreprise doit tomber : l'identité
+  // résolue ramène au même domaine canonique.
+  const spy = spyProvider();
+  const outcome = await runSalesPipeline({
+    candidates: [{ ...REAL, url: 'https://cirmeca.com/contact', searchTitle: 'CIRMECA' }],
+    maxRetained: 10,
+    excludeDomains: new Set(['cirmeca.com']),
+    qualify: spy.qualify,
+  });
+  assert.equal(outcome.funnel.alreadyKnown, 1);
+  assert.equal(spy.calls.length, 0);
+});
+
+test('une entreprise inconnue traverse l’exclusion', async () => {
+  const spy = spyProvider();
+  const outcome = await runSalesPipeline({
+    candidates: [REAL],
+    maxRetained: 10,
+    excludeDomains: new Set(['autre-entreprise.fr']),
+    qualify: spy.qualify,
+  });
+  assert.equal(outcome.survivors.length, 1);
+  assert.equal(spy.calls.length, 1);
+});

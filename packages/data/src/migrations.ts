@@ -1245,4 +1245,53 @@ ALTER TABLE sales_prospects ADD COLUMN contact_confidence_label TEXT;
 ALTER TABLE sales_prospects ADD COLUMN contact_observed INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 21,
+    name: 'outreach-ledger',
+    sql: `
+-- ─── Ce qu'on a deja fait d'une entreprise, quel que soit le lot ──────────
+--
+-- Les lots sont des passes de prospection ; une entreprise, elle, n'existe
+-- qu'une fois. CIRMECA et SERAAP sont ressortis en 003 puis en 004, et rien
+-- ne reliait les deux lignes : approuver les deux aurait envoye deux messages
+-- a la meme maison.
+--
+-- Ce registre est donc tenu par domaine canonique, pas par prospect, et vit
+-- au-dessus des lots. Il repond a une seule question : a-t-on deja ecrit a
+-- cette entreprise, ou a-t-on decide de ne pas le faire ?
+--
+-- Append-only, deliberement. Un envoi ne se reprend pas ; effacer la ligne
+-- qui l'atteste ne le reprendrait pas davantage, cela ferait seulement
+-- oublier qu'il a eu lieu. Une decision revisee s'ecrit en ajoutant, jamais
+-- en corrigeant — et l'ordre des ecritures reste lisible.
+CREATE TABLE outreach_ledger (
+  id               TEXT PRIMARY KEY,
+  -- Sans www., en minuscules. La cle est l'entreprise, pas l'URL.
+  canonical_domain TEXT NOT NULL,
+  -- CONTACTED · DO_NOT_CONTACT
+  kind             TEXT NOT NULL,
+  -- email · telephone · formulaire · salon · introduction — libre.
+  channel          TEXT,
+  note             TEXT,
+  -- Qui l'a decide. Un registre anonyme ne se conteste pas.
+  recorded_by      TEXT NOT NULL,
+  recorded_at      TEXT NOT NULL
+);
+CREATE INDEX idx_outreach_ledger_domain ON outreach_ledger(canonical_domain);
+
+-- Aucune ligne ne se modifie ni ne se supprime : la garantie est portee par
+-- la base elle-meme, pas par la discipline des appelants.
+CREATE TRIGGER outreach_ledger_no_update
+BEFORE UPDATE ON outreach_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'outreach_ledger est append-only : ajoutez une ligne, ne corrigez pas celle-ci.');
+END;
+
+CREATE TRIGGER outreach_ledger_no_delete
+BEFORE DELETE ON outreach_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'outreach_ledger est append-only : une trace d''envoi ne s''efface pas.');
+END;
+`,
+  },
 ];

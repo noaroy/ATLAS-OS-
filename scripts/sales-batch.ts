@@ -256,6 +256,9 @@ async function main(): Promise<void> {
       snippet: r.snippet,
     })),
     maxRetained: MAX_DISCOVERED,
+    // Ce qu'ATLAS a déjà vu ne se repaie pas : lots précédents, entreprises
+    // déjà contactées, entreprises écartées à la main.
+    excludeDomains: repos.sales.knownDomains(),
     // La qualification payante ne se fait pas ici : elle a besoin du prospect
     // persisté, de son identifiant et de son budget. Le pipeline sert d'abord
     // à établir qui survit.
@@ -276,7 +279,8 @@ async function main(): Promise<void> {
   console.log(
     `    ${c.dim}type de page ${funnel.pageTypeRejected} · forme d'URL ${funnel.urlShapeRejected} · ` +
       `identité ${funnel.identityUnresolved} · profil ${funnel.outOfIcp} · ` +
-      `doublons ${funnel.deduplicated} · retenus ${funnel.retained}${c.reset}`,
+      `doublons ${funnel.deduplicated} · déjà connues ${funnel.alreadyKnown} · ` +
+      `retenus ${funnel.retained}${c.reset}`,
   );
   if (!balance.balanced) {
     console.log(

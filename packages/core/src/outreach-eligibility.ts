@@ -29,10 +29,36 @@ export const GUARD_VERSION = 'v2-entity-resolution';
 export type OutreachEligibility =
   /** Les gardes actuelles le confirment : un humain peut décider. */
   | 'ELIGIBLE'
+  /**
+   * On a déjà écrit à cette entreprise, dans un autre lot ou à la main. Ce
+   * n'est pas un défaut du prospect : c'est que la question ne se pose plus.
+   */
+  | 'ALREADY_CONTACTED'
+  /** Écartée volontairement. Aucune découverte ultérieure ne la rouvre. */
+  | 'DO_NOT_CONTACT'
   /** Une garde actuelle le refuse. Aucun message, quel que soit l'historique. */
   | 'BLOCKED'
   /** Antérieur aux gardes actuelles, jamais revérifié : on ne sait pas. */
   | 'PENDING_RESOLUTION';
+
+/**
+ * Ce que le registre d'entreprise dit du domaine.
+ *
+ * Tenu par domaine canonique et non par prospect : les lots sont des passes
+ * de prospection, l'entreprise n'existe qu'une fois. Deux lignes dans deux
+ * lots ne font pas deux destinataires.
+ */
+export interface LedgerVerdict {
+  kind: 'CONTACTED' | 'DO_NOT_CONTACT';
+  recordedAt: string;
+  recordedBy: string;
+  note: string | null;
+}
+
+/** Un domaine comparable : minuscules, sans `www.`, sans espace. */
+export function canonicalDomainOf(value: string): string {
+  return value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] ?? '';
+}
 
 export interface EligibilityVerdict {
   eligibility: OutreachEligibility;
@@ -70,6 +96,12 @@ export interface EligibilityInput {
    * reste : c'est un jugement porté, pas une absence de preuve.
    */
   invalidation: { reason: string } | null;
+  /**
+   * L'entrée la plus forte du registre pour ce domaine, s'il y en a une.
+   * Consultée avant tout le reste : la question « peut-on écrire ? » se
+   * tranche au niveau de l'entreprise, pas à celui d'une ligne de lot.
+   */
+  ledger?: LedgerVerdict | null;
 }
 
 /** Les seuils de confiance d'identité en deçà desquels rien ne part. */
@@ -81,6 +113,30 @@ export function effectiveOutreachEligibility(input: EligibilityInput): Eligibili
     historicalState: input.historicalState,
     historicalTier: input.historicalTier,
   };
+
+  // Le registre d'abord. Un refus volontaire ne se rediscute pas parce qu'une
+  // nouvelle passe a retrouvé l'entreprise, et un envoi déjà parti ne se
+  // reprend pas parce que le score a monté.
+  if (input.ledger?.kind === 'DO_NOT_CONTACT') {
+    return {
+      ...historical,
+      eligibility: 'DO_NOT_CONTACT',
+      blockers: ['écartée volontairement du démarchage'],
+      reason:
+        `Écartée volontairement le ${input.ledger.recordedAt.slice(0, 10)} par ${input.ledger.recordedBy}` +
+        `${input.ledger.note ? ` : ${input.ledger.note}` : '.'}`,
+    };
+  }
+  if (input.ledger?.kind === 'CONTACTED') {
+    return {
+      ...historical,
+      eligibility: 'ALREADY_CONTACTED',
+      blockers: ['entreprise déjà contactée'],
+      reason:
+        `Déjà contactée le ${input.ledger.recordedAt.slice(0, 10)} par ${input.ledger.recordedBy}` +
+        `${input.ledger.note ? ` : ${input.ledger.note}` : '.'} Un second message n'est pas une relance décidée.`,
+    };
+  }
 
   if (input.invalidation) {
     return {

@@ -32,7 +32,9 @@ export type RejectionStage =
   | 'URL_SHAPE_REJECTED'
   | 'IDENTITY_UNRESOLVED'
   | 'OUT_OF_ICP'
-  | 'DEDUPLICATED';
+  | 'DEDUPLICATED'
+  /** Déjà connue d'ATLAS : autre lot, déjà contactée, ou écartée à la main. */
+  | 'ALREADY_KNOWN';
 
 export interface PipelineRejection {
   candidate: PipelineCandidate;
@@ -52,6 +54,7 @@ export interface FunnelCounts {
   identityUnresolved: number;
   outOfIcp: number;
   deduplicated: number;
+  alreadyKnown: number;
   retained: number;
 }
 
@@ -74,6 +77,17 @@ export interface PipelineOptions<Q> {
   maxQualifications?: number;
   /** Le profil recherché. Celui d'ATLAS par défaut. */
   icp?: SalesIcp;
+  /**
+   * Domaines canoniques à écarter — déjà vus dans un lot précédent, déjà
+   * contactés, ou volontairement mis de côté.
+   *
+   * L'exclusion se fait après la résolution d'identité, parce que c'est elle
+   * qui établit le domaine officiel : écarter sur le domaine du résultat de
+   * recherche laisserait passer la même entreprise trouvée par une autre page.
+   * Elle se fait avant la qualification, parce que repayer pour une entreprise
+   * déjà en base est une dépense sans objet.
+   */
+  excludeDomains?: ReadonlySet<string>;
 }
 
 export async function runSalesPipeline<Q>(options: PipelineOptions<Q>): Promise<PipelineOutcome<Q>> {
@@ -150,6 +164,18 @@ export async function runSalesPipeline<Q>(options: PipelineOptions<Q>): Promise<
       continue;
     }
 
+    const excluded = options.excludeDomains?.has(
+      outcome.identity.canonicalDomain.toLowerCase().replace(/^www\./, ''),
+    );
+    if (excluded) {
+      rejections.push({
+        candidate,
+        stage: 'ALREADY_KNOWN',
+        reason: `« ${outcome.identity.canonicalDomain} » est déjà connue d'ATLAS : rien à requalifier.`,
+      });
+      continue;
+    }
+
     resolved.push({ candidate, identity: outcome.identity });
   }
 
@@ -189,6 +215,7 @@ export async function runSalesPipeline<Q>(options: PipelineOptions<Q>): Promise<
       identityUnresolved: count('IDENTITY_UNRESOLVED'),
       outOfIcp: count('OUT_OF_ICP'),
       deduplicated: count('DEDUPLICATED'),
+      alreadyKnown: count('ALREADY_KNOWN'),
       retained: survivors.length,
     },
   };
@@ -203,6 +230,6 @@ export async function runSalesPipeline<Q>(options: PipelineOptions<Q>): Promise<
 export function funnelBalances(f: FunnelCounts): { balanced: boolean; sum: number; missing: number } {
   const sum =
     f.pageTypeRejected + f.urlShapeRejected + f.identityUnresolved +
-    f.outOfIcp + f.deduplicated + f.retained;
+    f.outOfIcp + f.deduplicated + f.alreadyKnown + f.retained;
   return { balanced: sum === f.searchResults, sum, missing: f.searchResults - sum };
 }

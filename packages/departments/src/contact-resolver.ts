@@ -19,6 +19,15 @@
  * découvre après l'envoi.
  */
 
+import {
+  classifyContactIntent,
+  outreachSuitability,
+  selectOutreachContact,
+  type ContactIntent,
+  type OutreachSuitability,
+  type SelectionOutcome,
+} from './contact-intent.ts';
+
 export type ContactKind = 'EMAIL' | 'PHONE' | 'FORM';
 
 /**
@@ -46,6 +55,18 @@ export interface ResolvedContact {
   observed: true;
   confidence: ContactConfidence;
   label: string | null;
+  /** L'adresse porte-t-elle la marque de l'entreprise ? */
+  sameBrand?: boolean;
+  /** À quoi la boîte est destinée. Indépendant du fait qu'elle existe. */
+  intent: ContactIntent;
+  /**
+   * Peut-on lui écrire pour prospecter ?
+   *
+   * Distinct de `observed` à dessein : le lot 005 a retenu
+   * `support@groupe-reval.com` parce qu'il était publié. Il l'est ; c'est le
+   * service après-vente.
+   */
+  suitability: OutreachSuitability;
 }
 
 /** L'ordre d'usage pour une prise de contact. */
@@ -60,8 +81,14 @@ export interface ContactResolution {
   /** Toutes les pages officielles qui ont fourni quelque chose. */
   contactSources: string[];
   method: ContactMethod;
-  /** Le canal à utiliser, selon la priorité. `null` quand il n'y en a aucun. */
+  /**
+   * Le canal à utiliser, selon la priorité d'intention. `null` quand aucune
+   * coordonnée n'est destinée à un contact commercial — ce qui n'est pas la
+   * même chose que « aucune coordonnée ».
+   */
   primary: ResolvedContact | null;
+  /** Pourquoi ce canal, et ce qui a été écarté. */
+  selection: SelectionOutcome;
   /** Les pages écartées, et pourquoi — un silence ne s'audite pas. */
   skipped: Array<{ url: string; reason: string }>;
 }
@@ -136,6 +163,36 @@ const TEL_RE = /tel:([+0-9().\s-]{7,})/gi;
  */
 const PHONE_TEXT_RE =
   /(?:\+\d{1,3}[\s.-]?(?:\(0\)[\s.-]?)?)?0?\d(?:[\s.-]\d{2}){4}|\+\d{1,3}[\s.-]?\d{6,12}/g;
+
+/**
+ * Deux domaines désignent-ils la même maison ?
+ *
+ * `groupe-reval.com` et `france-reval.com` ne sont pas la même chaîne, et
+ * pourtant `contact@france-reval.com` publié sur `groupe-reval.com` est bien
+ * l'adresse de l'entreprise. Une comparaison stricte l'a fait descendre sous
+ * le numéro de téléphone.
+ *
+ * Les préfixes qui ne distinguent rien — `groupe`, `france`, une forme
+ * juridique — sont donc retirés avant de comparer. Ce qui reste doit se
+ * recouper : `mecapole` et `forgeavia` n'ont rien en commun, et c'est bien le
+ * résultat cherché.
+ */
+const GENERIC_BRAND_TOKENS = [
+  'groupe', 'group', 'france', 'french', 'holding', 'company', 'societe',
+  'sa', 'sas', 'sarl', 'sasu', 'eurl', 'international', 'intl', 'the',
+];
+
+export function brandsRelated(a: string, b: string): boolean {
+  const significant = (host: string): string[] =>
+    brandRoot(host)
+      .split(/[-_]/)
+      .filter((token) => token.length >= 4 && !GENERIC_BRAND_TOKENS.includes(token));
+
+  const left = significant(a);
+  const right = significant(b);
+  if (left.length === 0 || right.length === 0) return brandRoot(a) === brandRoot(b);
+  return left.some((token) => right.includes(token));
+}
 
 /** Le nom de marque d'un domaine : `seraap.com` et `seraap.fr` → `seraap`. */
 export function brandRoot(host: string): string {
@@ -218,7 +275,7 @@ function cleanEmail(raw: string): string | null {
 
 function emailConfidence(email: string, pageUrl: string, officialDomain: string): ContactConfidence {
   const host = email.split('@')[1] ?? '';
-  const sameBrand = brandRoot(host) === brandRoot(officialDomain);
+  const sameBrand = brandsRelated(host, officialDomain);
   const authoritative = AUTHORITATIVE_PATH.test(new URL(pageUrl).pathname) || new URL(pageUrl).pathname === '/';
 
   // La marque qui recoupe le domaine officiel est le signal le plus fort, et
@@ -333,6 +390,14 @@ export function resolveContacts(input: {
 
     let contributed = false;
 
+    // La personne d'abord : une fonction commerciale publiée change la nature
+    // des adresses de la même page. La chercher après les aurait classées sans
+    // l'information qui les rachète.
+    if (!person.name) {
+      const found = findPerson(page.html);
+      if (found.name) person = found;
+    }
+
     // Les `mailto:` d'abord : c'est l'adresse que l'entreprise a elle-même
     // rendue cliquable, et elle survit aux obfuscations d'affichage.
     const raw: string[] = [];
@@ -342,6 +407,9 @@ export function resolveContacts(input: {
     for (const candidate of raw) {
       const email = cleanEmail(candidate);
       if (!email || emails.has(email)) continue;
+      const intent = classifyContactIntent({
+        value: email, kind: 'EMAIL', role: person.role, sourceUrl: page.url,
+      });
       emails.set(email, {
         type: 'EMAIL',
         value: email,
@@ -349,6 +417,9 @@ export function resolveContacts(input: {
         observed: true,
         confidence: emailConfidence(email, page.url, input.officialDomain),
         label: null,
+        intent,
+        suitability: outreachSuitability(intent, Boolean(person.role)),
+        sameBrand: brandsRelated(email.split('@')[1] ?? '', input.officialDomain),
       });
       contributed = true;
       if (emails.size >= 6) break;
@@ -360,6 +431,7 @@ export function resolveContacts(input: {
       phones.set(phone.replace(/\D/g, ''), {
         type: 'PHONE', value: phone, sourceUrl: page.url, observed: true,
         confidence: 'HIGH', label: null,
+        intent: 'GENERAL', suitability: 'MEDIUM',
       });
       contributed = true;
     }
@@ -370,6 +442,7 @@ export function resolveContacts(input: {
         phones.set(phone.replace(/\D/g, ''), {
           type: 'PHONE', value: phone, sourceUrl: page.url, observed: true,
           confidence: 'MEDIUM', label: null,
+          intent: 'GENERAL', suitability: 'MEDIUM',
         });
         contributed = true;
         if (phones.size >= 2) break;
@@ -377,17 +450,15 @@ export function resolveContacts(input: {
     }
 
     if (!form && findForm(page.html)) {
+      const formIntent = classifyContactIntent({ value: page.url, kind: 'FORM', sourceUrl: page.url });
       form = {
         type: 'FORM', value: page.url, sourceUrl: page.url, observed: true,
         confidence: AUTHORITATIVE_PATH.test(page.url) ? 'HIGH' : 'MEDIUM',
         label: 'formulaire publié sur le site officiel',
+        intent: formIntent,
+        suitability: outreachSuitability(formIntent),
       };
       contributed = true;
-    }
-
-    if (!person.name) {
-      const found = findPerson(page.html);
-      if (found.name) person = found;
     }
 
     if (contributed) sources.add(page.url);
@@ -400,10 +471,17 @@ export function resolveContacts(input: {
     (a, b) => rank(b.confidence) - rank(a.confidence),
   );
 
-  // La priorité : l'adresse d'abord, parce qu'elle permet un message écrit et
-  // relisible ; le formulaire ensuite ; le téléphone en dernier, parce qu'un
-  // appel ne laisse pas de trace vérifiable.
-  const primary = publicEmails[0] ?? form ?? publicPhones[0] ?? null;
+  // La priorité ne porte plus sur le type de canal mais sur ce à quoi la boîte
+  // est destinée. Le lot 005 choisissait la première adresse trouvée : pour
+  // France Reval c'était le service après-vente, pour Mecapole les initiales
+  // de la personne chargée des mentions légales. Les deux sont réelles ; ni
+  // l'une ni l'autre n'est un interlocuteur commercial.
+  const selection = selectOutreachContact([...publicEmails, ...(form ? [form] : []), ...publicPhones]);
+  const primary = selection.selected
+    ? ([...publicEmails, ...(form ? [form] : []), ...publicPhones].find(
+        (c) => c.value === selection.selected!.value && c.type === selection.selected!.type,
+      ) ?? null)
+    : null;
   const method: ContactMethod = primary ? primary.type : 'NONE';
 
   return {
@@ -415,6 +493,7 @@ export function resolveContacts(input: {
     contactSources: [...sources],
     method,
     primary,
+    selection,
     skipped,
   };
 }

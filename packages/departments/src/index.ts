@@ -244,6 +244,7 @@ export {
   contactLinksIn,
   isOfficialPage,
   brandRoot,
+  brandsRelated,
   CONTACT_PATHS,
   type ContactKind,
   type ContactConfidence,
@@ -252,3 +253,13 @@ export {
   type ContactResolution,
   type ContactPage,
 } from './contact-resolver.ts';
+
+export {
+  classifyContactIntent,
+  outreachSuitability,
+  selectOutreachContact,
+  type ContactIntent,
+  type OutreachSuitability,
+  type RankableContact,
+  type SelectionOutcome,
+} from './contact-intent.ts';

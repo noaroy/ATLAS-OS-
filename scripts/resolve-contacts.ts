@@ -106,43 +106,76 @@ for (const p of prospects) {
   }
 
   const resolution = resolveContacts({ officialDomain: domain, pages });
-  const email = resolution.publicEmails[0] ?? null;
-  const phone = resolution.publicPhones[0] ?? null;
-  const form = resolution.contactFormUrl;
+  const all = [
+    ...resolution.publicEmails,
+    ...(resolution.contactFormUrl ? [resolution.contactFormUrl] : []),
+    ...resolution.publicPhones,
+  ];
+  const selected = resolution.primary;
 
-  console.log(`  pages lues        ${pages.length} · échecs ${failures.length}`);
-  for (const f of failures.slice(0, 4)) console.log(`    ${f.url} — ${f.error}`);
-  console.log(`  PUBLIC EMAIL      ${email ? `${email.value}  [${email.confidence}]` : 'NONE'}`);
-  console.log(`  EMAIL SOURCE      ${email?.sourceUrl ?? '—'}`);
-  console.log(`  CONTACT FORM      ${form ? 'OUI' : 'NONE'}`);
-  console.log(`  FORM SOURCE       ${form?.sourceUrl ?? '—'}`);
-  console.log(`  PHONE             ${phone ? `${phone.value}  [${phone.confidence}]` : 'NONE'}`);
-  console.log(`  CONTACT METHOD    ${resolution.method}`);
-  if (resolution.publicEmails.length > 1) {
-    console.log(`  autres adresses   ${resolution.publicEmails.slice(1).map((e) => e.value).join(', ')}`);
+  console.log(`  pages lues              ${pages.length} · échecs ${failures.length}`);
+  for (const f of failures.slice(0, 3)) console.log(`    ${f.url} — ${f.error}`);
+
+  console.log('  ALL OBSERVED CONTACTS');
+  if (all.length === 0) console.log('    aucune');
+  for (const contact of all) {
+    const mark = contact === selected ? '→' : ' ';
+    console.log(
+      `   ${mark} ${contact.type.padEnd(6)}${contact.value.slice(0, 38).padEnd(40)}` +
+        `${contact.intent.padEnd(18)}${contact.suitability}`,
+    );
+    console.log(`       ${contact.sourceUrl}`);
+  }
+
+  console.log(`  SELECTED OUTREACH CONTACT  ${selected?.value ?? 'NONE'}`);
+  console.log(`  CONTACT INTENT             ${selected?.intent ?? '—'}`);
+  console.log(`  OUTREACH SUITABILITY       ${selected?.suitability ?? '—'}`);
+  console.log(`  SOURCE URL                 ${selected?.sourceUrl ?? '—'}`);
+  console.log(`  SÉLECTION                  ${resolution.selection.reason}`);
+  for (const aside of resolution.selection.setAside.filter((a) => a.reason.includes('jamais'))) {
+    console.log(`    écarté ${aside.contact.value.slice(0, 34).padEnd(36)}${aside.reason}`);
   }
   if (resolution.contactPersonName) {
-    console.log(`  CONTACT PERSON    ${resolution.contactPersonName} · ${resolution.contactPersonRole ?? '—'}`);
+    console.log(`  CONTACT PERSON             ${resolution.contactPersonName} · ${resolution.contactPersonRole ?? '—'}`);
   }
 
-  if (apply && resolution.primary) {
-    const confidence = resolution.primary.confidence === 'HIGH' ? 0.9
-      : resolution.primary.confidence === 'MEDIUM' ? 0.7 : 0.5;
-    repos.sales.setContact(p.id, {
-      name: resolution.contactPersonName,
-      role: resolution.contactPersonRole,
-      email: email?.value ?? null,
-      phone: phone?.value ?? null,
-      contactPage: form?.value ?? null,
-      sourceUrl: resolution.primary.sourceUrl,
-      confidence,
-      method: resolution.method,
-      confidenceLabel: resolution.primary.confidence,
-      observed: true,
-    });
-    console.log(`  → écrit · éligibilité ${repos.sales.outreachEligibility(p.id).eligibility}`);
-  } else if (apply) {
-    console.log('  → rien à écrire : aucune coordonnée observée.');
+  if (apply) {
+    // Toutes les coordonnées sont conservées, écartées comprises : la revue
+    // humaine doit pouvoir constater qu'aucune adresse commerciale n'existait.
+    repos.sales.setChannels(
+      p.id,
+      all.map((contact) => ({
+        type: contact.type,
+        value: contact.value,
+        intent: contact.intent,
+        suitability: contact.suitability,
+        sourceUrl: contact.sourceUrl,
+        confidence: contact.confidence,
+        selected: contact === selected,
+      })),
+    );
+
+    if (selected) {
+      repos.sales.setContact(p.id, {
+        name: resolution.contactPersonName,
+        role: resolution.contactPersonRole,
+        email: selected.type === 'EMAIL' ? selected.value : null,
+        phone: selected.type === 'PHONE' ? selected.value : null,
+        contactPage: selected.type === 'FORM' ? selected.value : null,
+        sourceUrl: selected.sourceUrl,
+        confidence: selected.confidence === 'HIGH' ? 0.9 : selected.confidence === 'MEDIUM' ? 0.7 : 0.5,
+        method: resolution.method,
+        confidenceLabel: selected.confidence,
+        intent: selected.intent,
+        suitability: selected.suitability,
+        observed: true,
+      });
+    } else {
+      // Aucun canal utilisable : les anciennes valeurs doivent partir, sans
+      // quoi un mauvais choix survivrait à sa propre correction.
+      repos.sales.setContact(p.id, { sourceUrl: null, observed: false });
+    }
+    console.log(`  OUTREACH ELIGIBILITY       ${repos.sales.outreachEligibility(p.id).eligibility}`);
   }
   console.log('');
 }

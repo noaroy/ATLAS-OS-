@@ -1294,4 +1294,51 @@ BEGIN
 END;
 `,
   },
+  {
+    version: 22,
+    name: 'sales-contact-channels',
+    sql: `
+-- ─── Toutes les coordonnees relevees, pas seulement celle retenue ─────────
+--
+-- Le lot 005 ne gardait qu'un contact par prospect, celui choisi. Deux
+-- choix se sont reveles mauvais : \`support@groupe-reval.com\` est le service
+-- apres-vente, \`sg@mecapole.fr\` les initiales de la personne chargee des
+-- mentions legales. Les deux sont reellement publies — c'etait la question
+-- posee, et ce n'etait pas la bonne.
+--
+-- La seconde question est \`intent\` : a quoi la boite est-elle destinee.
+-- \`suitability\` en decoule : peut-on lui ecrire pour prospecter. Une
+-- coordonnee peut rester observee, sourcee et affichee sans jamais etre
+-- selectionnee — BLOCKED ne veut pas dire fausse, il veut dire « pas pour
+-- cet usage ».
+--
+-- Garder toutes les coordonnees plutot que la seule retenue permet a la
+-- revue humaine de voir ce qui a ete ecarte, et pourquoi.
+CREATE TABLE sales_contact_channels (
+  id           TEXT PRIMARY KEY,
+  prospect_id  TEXT NOT NULL REFERENCES sales_prospects(id) ON DELETE CASCADE,
+  -- EMAIL · PHONE · FORM
+  type         TEXT NOT NULL,
+  value        TEXT NOT NULL,
+  -- SALES · EXPORT · GENERAL · TECHNICAL_SUPPORT · LEGAL · PRIVACY
+  -- WEBMASTER · PERSONAL · UNKNOWN
+  intent       TEXT NOT NULL,
+  -- HIGH · MEDIUM · LOW · BLOCKED
+  suitability  TEXT NOT NULL,
+  -- Jamais nulle : une coordonnee sans source est indefendable en revue.
+  source_url   TEXT NOT NULL,
+  confidence   TEXT NOT NULL,
+  observed     INTEGER NOT NULL DEFAULT 1,
+  -- Vrai pour celle qui a ete retenue pour l'outreach. Au plus une par
+  -- prospect ; zero est un resultat normal.
+  selected     INTEGER NOT NULL DEFAULT 0,
+  collected_at TEXT NOT NULL,
+  UNIQUE (prospect_id, type, value)
+);
+CREATE INDEX idx_sales_contact_channels_prospect ON sales_contact_channels(prospect_id);
+
+ALTER TABLE sales_prospects ADD COLUMN contact_intent TEXT;
+ALTER TABLE sales_prospects ADD COLUMN contact_suitability TEXT;
+`,
+  },
 ];

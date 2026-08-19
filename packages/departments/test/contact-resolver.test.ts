@@ -6,6 +6,7 @@ import {
   contactLinksIn,
   isOfficialPage,
   brandRoot,
+  brandsRelated,
 } from '../src/contact-resolver.ts';
 
 /**
@@ -59,9 +60,9 @@ describe('adresse d’un autre domaine que le site', () => {
     // seul lien qui compte est celui de la page.
     const resolution = resolveContacts({
       officialDomain: 'exemple-industrie.com',
-      pages: [{ url: 'https://exemple-industrie.com/contact', html: 'mailto:accueil@groupe-exemple.fr' }],
+      pages: [{ url: 'https://exemple-industrie.com/contact', html: 'mailto:accueil@vulcanor.fr' }],
     });
-    assert.equal(resolution.publicEmails[0]?.value, 'accueil@groupe-exemple.fr');
+    assert.equal(resolution.publicEmails[0]?.value, 'accueil@vulcanor.fr');
     assert.equal(resolution.publicEmails[0]?.confidence, 'MEDIUM', 'marque différente : accepté, moins probant');
   });
 });
@@ -346,4 +347,35 @@ test('une source hors domaine ne peut porter un fait observé', () => {
   assert.equal(isOfficialPage('https://groupe-ravel.com/', 'groupe-reval.com'), false);
   assert.equal(isOfficialPage('https://groupe-reval.com/', 'groupe-reval.com'), true);
   assert.equal(isOfficialPage('https://www.groupe-reval.com/mentions-legales/', 'groupe-reval.com'), true);
+});
+
+describe('deux domaines pour une même maison', () => {
+  test('un préfixe qui ne distingue rien ne sépare pas deux marques', () => {
+    // `contact@france-reval.com` publié sur `groupe-reval.com` : une
+    // comparaison stricte l'a fait descendre sous le numéro de téléphone.
+    assert.equal(brandsRelated('france-reval.com', 'groupe-reval.com'), true);
+    assert.equal(brandsRelated('seraap.fr', 'seraap.com'), true);
+    assert.equal(brandsRelated('www.groupe-jlf.com', 'groupe-jlf.com'), true);
+  });
+
+  test('mais deux vraies marques restent distinctes', () => {
+    assert.equal(brandsRelated('forgeavia.com', 'mecapole.fr'), false);
+    assert.equal(brandsRelated('manquillet-parizel.fr', 'mecapole.fr'), false);
+    assert.equal(brandsRelated('groupeaqmo.fr', 'semso.com'), false);
+  });
+
+  test('l’adresse de la maison reprend sa place devant le téléphone', () => {
+    const resolution = resolveContacts({
+      officialDomain: 'groupe-reval.com',
+      pages: [
+        {
+          url: 'https://groupe-reval.com/',
+          html: `<a href="mailto:contact@france-reval.com">écrire</a>
+                 <a href="tel:0546420416">appeler</a>`,
+        },
+      ],
+    });
+    assert.equal(resolution.method, 'EMAIL');
+    assert.equal(resolution.primary?.value, 'contact@france-reval.com');
+  });
 });

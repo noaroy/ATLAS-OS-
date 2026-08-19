@@ -83,6 +83,9 @@ export interface SalesProspect {
   contactConfidenceLabel: string | null;
   /** Faux tant qu'aucune page officielle n'a livre la coordonnee. */
   contactObserved: boolean;
+  /** À quoi la boîte retenue est destinée, et si on peut lui écrire. */
+  contactIntent: string | null;
+  contactSuitability: string | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -140,6 +143,8 @@ interface Row {
   contact_method: string | null;
   contact_confidence_label: string | null;
   contact_observed: number;
+  contact_intent: string | null;
+  contact_suitability: string | null;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -184,6 +189,8 @@ const toProspect = (row: Row): SalesProspect => ({
   contactMethod: row.contact_method,
   contactConfidenceLabel: row.contact_confidence_label,
   contactObserved: row.contact_observed === 1,
+  contactIntent: row.contact_intent,
+  contactSuitability: row.contact_suitability,
   state: row.state,
   tier: row.tier,
   score: row.score,
@@ -261,6 +268,8 @@ export class SalesRepository {
       contact_method: null,
       contact_confidence_label: null,
       contact_observed: 0,
+      contact_intent: null,
+      contact_suitability: null,
       state: 'DISCOVERED',
       tier: null,
       score: null,
@@ -290,6 +299,7 @@ export class SalesRepository {
            industry, source_url, search_provider, query, discovered_at,
            search_title, page_type, identity_confidence, identity_sources, guard_version,
            contact_method, contact_confidence_label, contact_observed,
+           contact_intent, contact_suitability,
            state, tier, score,
            score_detail, why_fit, reject_reason, contact_name, contact_role, contact_email,
            contact_phone, contact_page, contact_source_url, contact_confidence,
@@ -299,6 +309,7 @@ export class SalesRepository {
            @industry, @source_url, @search_provider, @query, @discovered_at,
            @search_title, @page_type, @identity_confidence, @identity_sources, @guard_version,
            @contact_method, @contact_confidence_label, @contact_observed,
+           @contact_intent, @contact_suitability,
            @state, @tier, @score,
            @score_detail, @why_fit, @reject_reason, @contact_name, @contact_role, @contact_email,
            @contact_phone, @contact_page, @contact_source_url, @contact_confidence,
@@ -357,6 +368,8 @@ export class SalesRepository {
       confidence?: number | null;
       method?: string | null;
       confidenceLabel?: string | null;
+      intent?: string | null;
+      suitability?: string | null;
       /** Vrai seulement si la coordonnée a été lue sur une page officielle. */
       observed?: boolean;
     },
@@ -373,6 +386,7 @@ export class SalesRepository {
         `UPDATE sales_prospects SET contact_name = ?, contact_role = ?, contact_email = ?,
            contact_phone = ?, contact_page = ?, contact_source_url = ?, contact_confidence = ?,
            contact_method = ?, contact_confidence_label = ?, contact_observed = ?,
+           contact_intent = ?, contact_suitability = ?,
            updated_at = ? WHERE id = ?`,
       )
       .run(
@@ -386,6 +400,8 @@ export class SalesRepository {
         contact.method ?? null,
         contact.confidenceLabel ?? null,
         contact.observed ? 1 : 0,
+        contact.intent ?? null,
+        contact.suitability ?? null,
         nowIso(),
         prospectId,
       );
@@ -574,8 +590,12 @@ export class SalesRepository {
       scoreThreshold: 70,
       hasSourcedPersonalization: Boolean(p.personalizationFactId),
       // Observé, pas seulement présent : une coordonnée déduite ne compte pas.
+      // Observé ET utilisable. Le lot 005 a retenu un service après-vente et
+      // une adresse de mentions légales : les deux étaient bien observées.
       hasObservedContact:
-        p.contactObserved && Boolean(p.contactEmail || p.contactPage || p.contactPhone),
+        p.contactObserved &&
+        Boolean(p.contactEmail || p.contactPage || p.contactPhone) &&
+        p.contactSuitability !== 'BLOCKED',
       invalidation: invalidation ?? null,
       ledger: p.domain ? this.ledgerFor(p.domain) : null,
     });
@@ -753,6 +773,87 @@ export class SalesRepository {
         patch.confidence ?? 0.5,
         evidenceId,
       );
+  }
+
+  /**
+   * Enregistre toutes les coordonnées relevées, écartées comprises.
+   *
+   * Ne garder que celle retenue ferait disparaître le raisonnement : la revue
+   * humaine doit pouvoir voir qu'une adresse commerciale n'existait pas, et
+   * que c'est pour cela qu'un formulaire a été choisi.
+   */
+  setChannels(
+    prospectId: string,
+    channels: ReadonlyArray<{
+      type: string;
+      value: string;
+      intent: string;
+      suitability: string;
+      sourceUrl: string;
+      confidence: string;
+      selected?: boolean;
+    }>,
+  ): void {
+    this.require(prospectId);
+    const insert = this.db.prepare(
+      `INSERT INTO sales_contact_channels
+         (id, prospect_id, type, value, intent, suitability, source_url, confidence,
+          observed, selected, collected_at)
+       VALUES (@id, @prospect, @type, @value, @intent, @suitability, @source, @confidence,
+               1, @selected, @now)
+       ON CONFLICT(prospect_id, type, value) DO UPDATE SET
+         intent = excluded.intent, suitability = excluded.suitability,
+         source_url = excluded.source_url, confidence = excluded.confidence,
+         selected = excluded.selected`,
+    );
+    const now = nowIso();
+    for (const channel of channels) {
+      if (!channel.sourceUrl?.trim()) {
+        throw invalidState(
+          `« ${channel.value} » n'a pas de source : une coordonnée indéfendable ne s'enregistre pas.`,
+        );
+      }
+      insert.run({
+        id: id('sch'),
+        prospect: prospectId,
+        type: channel.type,
+        value: channel.value,
+        intent: channel.intent,
+        suitability: channel.suitability,
+        source: channel.sourceUrl,
+        confidence: channel.confidence,
+        selected: channel.selected ? 1 : 0,
+        now,
+      });
+    }
+  }
+
+  channelsFor(prospectId: string): Array<{
+    type: string; value: string; intent: string; suitability: string;
+    sourceUrl: string; confidence: string; selected: boolean;
+  }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT type, value, intent, suitability, source_url, confidence, selected
+             FROM sales_contact_channels WHERE prospect_id = ?
+            ORDER BY selected DESC,
+              CASE suitability WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1
+                               WHEN 'LOW' THEN 2 ELSE 3 END, value`,
+        )
+        .all(prospectId) as Array<{
+        type: string; value: string; intent: string; suitability: string;
+        source_url: string; confidence: string; selected: number;
+      }>
+    ).map((row) => ({
+      type: row.type,
+      value: row.value,
+      intent: row.intent,
+      suitability: row.suitability,
+      sourceUrl: row.source_url,
+      confidence: row.confidence,
+      selected: row.selected === 1,
+    }));
   }
 
   evidenceFor(prospectId: string): SalesEvidence[] {

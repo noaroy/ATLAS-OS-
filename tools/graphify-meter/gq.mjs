@@ -145,13 +145,37 @@ function stats() {
   console.log(`  ligne de base relevée le   ${baseline.recorded_at.slice(0, 10)} ` +
     `(${baseline.corpus_words.toLocaleString('fr-FR')} mots, ${baseline.graph_nodes.toLocaleString('fr-FR')} nœuds)`);
   console.log('');
-  const bases = [...new Set(rows.map((r) => r.baseline_basis ?? 'corpus entier (convention du benchmark)'))];
-  console.log(`  ligne de base              ${bases.join(' + ')}`);
-  if (bases.some((b) => b.startsWith('corpus entier'))) {
+  // Une ligne de base peut changer en cours de route, et l'historique ne se
+  // réécrit pas. Totaliser sans le dire mélangerait deux conventions dans un
+  // seul chiffre ; la ventilation les sépare, et le total reste juste.
+  const byBasis = new Map();
+  for (const row of rows) {
+    const basis = row.baseline_basis ?? 'corpus entier (convention du benchmark)';
+    const bucket = byBasis.get(basis) ?? { n: 0, graphify: 0, baseline: 0, saved: 0 };
+    bucket.n += 1;
+    bucket.graphify += row.estimated_graphify_tokens;
+    bucket.baseline += row.estimated_baseline_tokens;
+    bucket.saved += row.estimated_tokens_saved;
+    byBasis.set(basis, bucket);
+  }
+
+  if (byBasis.size > 1) {
+    console.log('  par ligne de base');
+    for (const [basis, b] of byBasis) {
+      console.log(`    ${basis}`);
+      console.log(
+        `      ${String(b.n).padStart(4)} requête(s) · ${n(b.graphify)} jetons · ` +
+          `${n(b.saved)} économisés · ${(b.baseline / Math.max(1, b.graphify)).toFixed(1)}x`,
+      );
+    }
     console.log('');
-    console.log('  Cette ligne de base suppose le corpus entier chargé à chaque question.');
-    console.log('  C’est un plafond, pas une facture évitée : pour un chiffre défendable,');
-    console.log('  relevez-la sur ce que vous liriez vraiment — gq.mjs init --baseline=N.');
+  } else {
+    console.log(`  ligne de base              ${[...byBasis.keys()][0]}`);
+  }
+
+  if ([...byBasis.keys()].some((b) => b.startsWith('corpus entier'))) {
+    console.log('  Une part de ces lignes suppose le corpus entier chargé à chaque question :');
+    console.log('  c’est un plafond, pas une facture évitée.');
   }
 }
 
@@ -176,6 +200,11 @@ function runQuery(argv) {
     timestamp: new Date().toISOString(),
     command: subcommand,
     query: args.filter((a) => !a.startsWith('--')).join(' '),
+    // Les arguments exacts, pour qu'un appel mal découpé se voie après coup.
+    // Vingt requêtes ont été enregistrées à 5 jetons parce qu'un script shell
+    // avait éclaté la question en mots : le total était faux et rien ne le
+    // disait.
+    args,
     estimated_graphify_tokens: graphifyTokens,
     estimated_baseline_tokens: baseline.baseline_tokens_per_query,
     estimated_tokens_saved: baseline.baseline_tokens_per_query - graphifyTokens,

@@ -43,7 +43,24 @@ export interface ConversationEventRow {
   humanReviewed: boolean;
   declaredStatus: string | null;
   note: string | null;
+  externalMessageId: string | null;
+  externalThreadId: string | null;
   recordedAt: string;
+}
+
+export interface MailImportEntry {
+  provider: string;
+  externalMessageId: string;
+  externalThreadId: string | null;
+  disposition: 'IMPORTED' | 'UNMATCHED' | 'IGNORED';
+  matchMethod: string | null;
+  conversationId: string | null;
+  eventId: string | null;
+  reason: string | null;
+  fromAddress: string | null;
+  subject: string | null;
+  receivedAt: string | null;
+  scannedAt: string;
 }
 
 interface ConversationRow {
@@ -74,6 +91,8 @@ interface EventRow {
   human_reviewed: number;
   declared_status: string | null;
   note: string | null;
+  external_message_id: string | null;
+  external_thread_id: string | null;
   recorded_at: string;
 }
 
@@ -105,6 +124,8 @@ const toEvent = (row: EventRow): ConversationEventRow => ({
   humanReviewed: row.human_reviewed === 1,
   declaredStatus: row.declared_status,
   note: row.note,
+  externalMessageId: row.external_message_id,
+  externalThreadId: row.external_thread_id,
   recordedAt: row.recorded_at,
 });
 
@@ -198,6 +219,8 @@ export class ConversationRepository {
     humanReviewed?: boolean;
     declaredStatus?: string | null;
     note?: string | null;
+    externalMessageId?: string | null;
+    externalThreadId?: string | null;
   }): ConversationEventRow {
     const conversation = this.db
       .prepare('SELECT * FROM sales_conversations WHERE id = ?')
@@ -229,6 +252,8 @@ export class ConversationRepository {
       human_reviewed: input.humanReviewed ? 1 : 0,
       declared_status: input.declaredStatus ?? null,
       note: input.note ?? null,
+      external_message_id: input.externalMessageId ?? null,
+      external_thread_id: input.externalThreadId ?? null,
       recorded_at: now,
     };
     this.db
@@ -236,10 +261,11 @@ export class ConversationRepository {
         `INSERT INTO sales_conversation_events
            (id, conversation_id, kind, occurred_at, source, raw_subject, sender, body_excerpt,
             classification, confidence, signals, return_date, human_reviewed, declared_status,
-            note, recorded_at)
+            note, external_message_id, external_thread_id, recorded_at)
          VALUES (@id, @conversation_id, @kind, @occurred_at, @source, @raw_subject, @sender,
                  @body_excerpt, @classification, @confidence, @signals, @return_date,
-                 @human_reviewed, @declared_status, @note, @recorded_at)`,
+                 @human_reviewed, @declared_status, @note, @external_message_id,
+                 @external_thread_id, @recorded_at)`,
       )
       .run(row);
 
@@ -271,6 +297,89 @@ export class ConversationRepository {
    * conversation la lit à travers son entrée de registre : dupliquer la date
    * créerait deux vérités qui divergeraient dès la première correction.
    */
+  /**
+   * Ce message a-t-il déjà été lu ?
+   *
+   * Consulté avant toute écriture : deux synchronisations voient les mêmes
+   * messages, et sans cette question la seconde ferait répondre chaque
+   * entreprise une fois de plus.
+   */
+  alreadyImported(provider: string, externalMessageId: string): MailImportEntry | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM mail_import_log WHERE provider = ? AND external_message_id = ?`,
+      )
+      .get(provider, externalMessageId) as Record<string, string | null> | undefined;
+    if (!row) return null;
+    return {
+      provider: row.provider!,
+      externalMessageId: row.external_message_id!,
+      externalThreadId: row.external_thread_id ?? null,
+      disposition: row.disposition as MailImportEntry['disposition'],
+      matchMethod: row.match_method ?? null,
+      conversationId: row.conversation_id ?? null,
+      eventId: row.event_id ?? null,
+      reason: row.reason ?? null,
+      fromAddress: row.from_address ?? null,
+      subject: row.subject ?? null,
+      receivedAt: row.received_at ?? null,
+      scannedAt: row.scanned_at!,
+    };
+  }
+
+  /** Consigne qu'un message a été examiné, quelle qu'en soit l'issue. */
+  logImport(entry: Omit<MailImportEntry, 'scannedAt'> & { toAddress?: string | null }): void {
+    this.db
+      .prepare(
+        `INSERT INTO mail_import_log
+           (id, provider, external_message_id, external_thread_id, from_address, to_address,
+            subject, received_at, disposition, match_method, conversation_id, event_id,
+            reason, scanned_at)
+         VALUES (@id, @provider, @external_message_id, @external_thread_id, @from_address,
+                 @to_address, @subject, @received_at, @disposition, @match_method,
+                 @conversation_id, @event_id, @reason, @scanned_at)`,
+      )
+      .run({
+        id: id('mil'),
+        provider: entry.provider,
+        external_message_id: entry.externalMessageId,
+        external_thread_id: entry.externalThreadId ?? null,
+        from_address: entry.fromAddress ?? null,
+        to_address: entry.toAddress ?? null,
+        subject: entry.subject ?? null,
+        received_at: entry.receivedAt ?? null,
+        disposition: entry.disposition,
+        match_method: entry.matchMethod ?? null,
+        conversation_id: entry.conversationId ?? null,
+        event_id: entry.eventId ?? null,
+        reason: entry.reason ?? null,
+        scanned_at: nowIso(),
+      });
+  }
+
+  /** Les fils déjà rattachés à une entreprise — première piste de rapprochement. */
+  knownThreadIds(conversationId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT external_thread_id FROM sales_conversation_events
+            WHERE conversation_id = ? AND external_thread_id IS NOT NULL`,
+        )
+        .all(conversationId) as Array<{ external_thread_id: string }>
+    ).map((row) => row.external_thread_id);
+  }
+
+  knownMessageIds(conversationId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT external_message_id FROM sales_conversation_events
+            WHERE conversation_id = ? AND external_message_id IS NOT NULL`,
+        )
+        .all(conversationId) as Array<{ external_message_id: string }>
+    ).map((row) => row.external_message_id);
+  }
+
   ledgerFollowUpFor(conversationId: string): string | null {
     const row = this.db
       .prepare(

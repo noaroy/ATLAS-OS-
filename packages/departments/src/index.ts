@@ -277,3 +277,14 @@ export {
   type ConversationEvent,
   type DerivedState,
 } from './reply-intake.ts';
+
+export {
+  matchIncoming,
+  emailAddressOf,
+  domainOfAddress,
+  relatedDomains,
+  type MatchMethod,
+  type MatchCandidate,
+  type MatchResult,
+  type IncomingForMatch,
+} from './reply-matching.ts';

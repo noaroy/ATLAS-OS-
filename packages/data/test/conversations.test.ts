@@ -156,9 +156,15 @@ describe('ce module n’envoie rien', () => {
     for (const forbidden of ['send', 'sendEmail', 'reply', 'dispatch', 'notify']) {
       assert.equal(methods.includes(forbidden), false, `« ${forbidden} » ne doit pas exister`);
     }
+    // La liste est exhaustive à dessein : toute méthode ajoutée doit passer
+    // par ici, donc être remarquée. C'est le seul moyen qu'un « juste une
+    // petite réponse automatique » ne s'y glisse pas un jour.
     assert.deepEqual(
       methods.filter((m) => m !== 'constructor').sort(),
-      ['all', 'byDomain', 'eventsFor', 'ledgerFollowUpFor', 'open', 'recordInboundEvent'],
+      [
+        'all', 'alreadyImported', 'byDomain', 'eventsFor', 'knownMessageIds',
+        'knownThreadIds', 'ledgerFollowUpFor', 'logImport', 'open', 'recordInboundEvent',
+      ],
     );
   });
 });

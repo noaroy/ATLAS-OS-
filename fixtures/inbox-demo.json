@@ -1,0 +1,46 @@
+[
+  {
+    "messageId": "demo-bounce-1",
+    "threadId": "demo-t1",
+    "from": "MAILER-DAEMON@googlemail.com",
+    "to": ["commercial@atlas.example"],
+    "subject": "Delivery Status Notification (Failure)",
+    "receivedAt": "2026-08-19T08:00:00.000Z",
+    "bodyText": "550 5.1.1 The email account that you tried to reach does not exist.",
+    "snippet": null,
+    "headers": { "x-failed-recipients": "contact@cirmeca.fr" }
+  },
+  {
+    "messageId": "demo-auto-1",
+    "threadId": "demo-t2",
+    "from": "contact@france-reval.com",
+    "to": ["commercial@atlas.example"],
+    "subject": "Reponse automatique : absence du bureau",
+    "receivedAt": "2026-08-19T09:00:00.000Z",
+    "bodyText": "Bonjour, je suis actuellement absente et de retour le 24 aout. Pendant mon absence, merci de contacter l'accueil.",
+    "snippet": null,
+    "headers": {}
+  },
+  {
+    "messageId": "demo-human-1",
+    "threadId": "demo-t3",
+    "from": "Sophie <direction@mecapole.fr>",
+    "to": ["commercial@atlas.example"],
+    "subject": "Re: prospection B2B",
+    "receivedAt": "2026-08-19T10:00:00.000Z",
+    "bodyText": "Bonjour, merci pour votre message. Pourriez-vous nous preciser le format du livrable et le delai de production ? Cordialement, Sophie.",
+    "snippet": null,
+    "headers": {}
+  },
+  {
+    "messageId": "demo-noise-1",
+    "threadId": "demo-t4",
+    "from": "promo@newsletter-btp.fr",
+    "to": ["commercial@atlas.example"],
+    "subject": "Nos offres du mois",
+    "receivedAt": "2026-08-19T12:00:00.000Z",
+    "bodyText": "Bonjour, decouvrez nos promotions de rentree sur le materiel de chantier.",
+    "snippet": null,
+    "headers": {}
+  }
+]

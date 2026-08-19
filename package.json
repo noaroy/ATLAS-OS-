@@ -38,6 +38,8 @@
     "production": "tsx scripts/production-run.ts",
     "review": "tsx scripts/review-report.ts",
     "sales": "tsx scripts/sales-batch.ts",
+    "sales:inbox": "tsx scripts/sales-inbox.ts",
+    "sales:inbox-sync": "tsx scripts/sales-inbox-sync.ts",
     "searxng:verify": "tsx scripts/searxng-verify.ts",
     "searxng:up": "docker compose -f deployment/searxng-local.yml up -d",
     "searxng:down": "docker compose -f deployment/searxng-local.yml down",

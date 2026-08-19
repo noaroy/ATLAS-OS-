@@ -92,3 +92,19 @@ export { RateLimiter, type LimiterOptions } from './search/fabric/limiter.ts';
 export { planQueries, type PlannedQuery } from './search/planner.ts';
 export { filterResults, fetchTargetsFor, type SearchCandidate, type FilterReport } from './search/filter.ts';
 export { fetchPages, type FetchedPage } from './search/fetcher.ts';
+
+export {
+  type MailMessage,
+  type MailQuery,
+  type MailInboxProvider,
+  type MailProviderStatus,
+  USEFUL_HEADERS,
+} from './mail/types.ts';
+export {
+  GmailInboxProvider,
+  gmailCredentialsFromEnv,
+  extractPlainText,
+  GMAIL_READONLY_SCOPE,
+  type GmailCredentials,
+} from './mail/gmail.ts';
+export { FixtureInboxProvider, mailMessage } from './mail/fixture.ts';

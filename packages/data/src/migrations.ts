@@ -1430,4 +1430,59 @@ BEGIN
 END;
 `,
   },
+  {
+    version: 25,
+    name: 'mail-import-log',
+    sql: `
+-- ─── Ce qui a deja ete lu dans la boite ───────────────────────────────────
+--
+-- Deux synchronisations successives voient les memes messages. Sans registre,
+-- la seconde recreerait chaque evenement : une entreprise aurait repondu deux
+-- fois, et l'historique commercial deviendrait faux au moment precis ou l'on
+-- commence a s'y fier.
+--
+-- L'unicite porte sur l'identifiant du fournisseur, pas sur le contenu : deux
+-- messages peuvent etre identiques — une relance renvoyee a l'identique — et
+-- restent deux evenements.
+--
+-- Les messages non rattaches sont consignes aussi. Ne garder que les reussites
+-- ferait rescanner indefiniment ce qu'on a deja examine, et ferait disparaitre
+-- la file des reponses qu'un humain doit lire.
+CREATE TABLE mail_import_log (
+  id                  TEXT PRIMARY KEY,
+  provider            TEXT NOT NULL,
+  external_message_id TEXT NOT NULL,
+  external_thread_id  TEXT,
+  from_address        TEXT,
+  to_address          TEXT,
+  subject             TEXT,
+  received_at         TEXT,
+  -- IMPORTED · UNMATCHED · IGNORED
+  disposition         TEXT NOT NULL,
+  match_method        TEXT,
+  conversation_id     TEXT REFERENCES sales_conversations(id),
+  event_id            TEXT REFERENCES sales_conversation_events(id),
+  reason              TEXT,
+  scanned_at          TEXT NOT NULL,
+  UNIQUE (provider, external_message_id)
+);
+CREATE INDEX idx_mail_import_log_disposition ON mail_import_log(disposition);
+
+CREATE TRIGGER mail_import_log_no_update
+BEFORE UPDATE ON mail_import_log
+BEGIN
+  SELECT RAISE(ABORT, 'le registre d''import est append-only : un message lu reste lu.');
+END;
+
+CREATE TRIGGER mail_import_log_no_delete
+BEFORE DELETE ON mail_import_log
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un import ferait reimporter le message : suppression interdite.');
+END;
+
+-- De quel message externe un evenement provient, pour remonter la trace.
+ALTER TABLE sales_conversation_events ADD COLUMN external_message_id TEXT;
+ALTER TABLE sales_conversation_events ADD COLUMN external_thread_id TEXT;
+`,
+  },
 ];

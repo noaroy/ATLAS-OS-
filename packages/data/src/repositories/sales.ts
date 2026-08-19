@@ -723,6 +723,38 @@ export class SalesRepository {
     return row ? { reason: row.reason, guardVersion: row.guard_version } : null;
   }
 
+  /**
+   * Reclasse un fait dont la source ne tient pas.
+   *
+   * La revendication n'est pas touchée : c'est ce que le modèle a lu, et
+   * l'effacer effacerait la trace. Seuls changent sa nature, sa source et le
+   * motif — un fait dont on ne peut plus dire qu'il a été constaté sur le site
+   * de l'entreprise redevient rapporté, ce qu'il n'aurait jamais dû cesser
+   * d'être.
+   */
+  reclassifyEvidence(
+    evidenceId: string,
+    patch: {
+      nature: SalesEvidence['nature'];
+      sourceUrl?: string | null;
+      basis?: string | null;
+      confidence?: number;
+    },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE sales_evidence SET nature = ?, source_url = ?, basis = ?, confidence = ?
+         WHERE id = ?`,
+      )
+      .run(
+        patch.nature,
+        patch.sourceUrl ?? null,
+        patch.basis ?? null,
+        patch.confidence ?? 0.5,
+        evidenceId,
+      );
+  }
+
   evidenceFor(prospectId: string): SalesEvidence[] {
     return (
       this.db

@@ -458,3 +458,34 @@ describe('un article n’est pas un site d’entreprise', () => {
     assert.equal(looksLikeCompanySite('pas une url').ok, false);
   });
 });
+
+test('la vague fait tourner le plan sans le rendre imprévisible', () => {
+  // Le lot 005 a rendu 1 seul candidat : les mêmes deux requêtes partaient à
+  // chaque lot, et la déduplication écartait tout. La rotation reste une
+  // règle — à vague égale, le plan est identique.
+  const first = planQueries(undefined, 4, 0);
+  const second = planQueries(undefined, 4, 1);
+  const firstAgain = planQueries(undefined, 4, 0);
+
+  assert.deepEqual(first.map((p) => p.query), firstAgain.map((p) => p.query), 'reproductible');
+  assert.notDeepEqual(first.map((p) => p.query), second.map((p) => p.query), 'un autre terrain');
+  for (const plan of second) assert.ok(plan.query.length > 10);
+});
+
+test('la rotation est bornée : aucune vague ne produit de requête vide', () => {
+  // La période est le ppcm des quatre listes ; l'affirmer rendrait le test
+  // faux au premier mot ajouté au vocabulaire. Ce qui doit tenir, c'est
+  // qu'aucune vague ne sorte du vocabulaire.
+  const vocabulary = SALES_QUERY_VOCABULARY;
+  for (const wave of [0, 1, 7, 59, 60, 199]) {
+    const plans = planQueries(undefined, 8, wave);
+    assert.ok(plans.length > 0, `vague ${wave} sans requête`);
+    for (const plan of plans) {
+      assert.ok(plan.query.trim().length > 10, `vague ${wave} : requête vide`);
+      assert.ok(
+        vocabulary.activities.some((a) => plan.query.includes(a)),
+        `vague ${wave} : « ${plan.query} » sort du vocabulaire`,
+      );
+    }
+  }
+});

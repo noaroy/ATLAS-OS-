@@ -29,6 +29,7 @@ import {
   runSalesPipeline,
   funnelBalances,
   resolveContacts,
+  isOfficialPage,
   contactPagesFor,
   contactLinksIn,
   type ContactPage,
@@ -200,7 +201,13 @@ async function main(): Promise<void> {
   const raw: RawCandidate[] = [];
   let searchCalls = 0;
 
-  for (const plan of planQueries()) {
+  // La vague tourne le vocabulaire d'un lot à l'autre. Sans elle, les mêmes
+  // requêtes ramènent les mêmes entreprises, que la déduplication écarte
+  // toutes : le lot rend zéro sans dire que la cause est la requête.
+  const wave = Number(arg('wave') ?? repos.sales.batchIds().length);
+  console.log(`  ${c.dim}vague ${wave}${c.reset}`);
+
+  for (const plan of planQueries(undefined, 8, wave)) {
     const query = plan.query;
     if (raw.length >= MAX_DISCOVERED * 2) break;
     try {
@@ -379,14 +386,29 @@ async function main(): Promise<void> {
 
     // Les preuves : seules celles qui portent une adresse comptent comme faits.
     for (const signal of parsed.signals ?? []) {
+      // La source rendue par le modèle est vérifiée contre le domaine officiel.
+      // Le lot 005 a attribué « PME française fondée en 1976 » à
+      // `groupe-ravel.com` pour une entreprise dont le domaine est
+      // `groupe-reval.com` : une lettre d'écart, et le fait cesse d'être
+      // vérifiable. Un fait « observé » l'est sur le site de l'entreprise ou
+      // ne l'est pas — hors domaine, il redevient rapporté, et sa source est
+      // remplacée par celle qu'on connaît.
+      const claimed = signal.sourceUrl?.startsWith('http') ? signal.sourceUrl : null;
+      const onOfficialSite = claimed ? isOfficialPage(claimed, prospect.domain!) : false;
+      const nature = signal.nature === 'observed' && !onOfficialSite ? 'reported' : signal.nature;
       repos.sales.addEvidence({
         prospectId: prospect.id,
         field: signal.field,
         claim: signal.claim,
-        nature: signal.nature,
-        sourceUrl: signal.sourceUrl?.startsWith('http') ? signal.sourceUrl : prospect.sourceUrl,
-        basis: signal.nature === 'inferred' ? 'Déduit du texte rapporté par la recherche.' : null,
-        confidence: 0.7,
+        nature,
+        sourceUrl: onOfficialSite ? claimed : prospect.sourceUrl,
+        basis:
+          nature === 'inferred'
+            ? 'Déduit du texte rapporté par la recherche.'
+            : claimed && !onOfficialSite
+              ? `Source annoncée « ${claimed} » hors du domaine officiel : le fait n'est pas constaté sur le site.`
+              : null,
+        confidence: onOfficialSite ? 0.7 : 0.5,
       });
     }
 

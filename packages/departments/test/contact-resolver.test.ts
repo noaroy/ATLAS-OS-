@@ -338,3 +338,12 @@ describe('ce qui ressemble à un numéro sans en être un', () => {
     assert.equal(resolution.publicPhones[0]?.confidence, 'HIGH');
   });
 });
+
+test('une source hors domaine ne peut porter un fait observé', () => {
+  // Relevé au lot 005 : « PME française fondée en 1976 » attribué à
+  // groupe-ravel.com pour une entreprise dont le domaine est
+  // groupe-reval.com. Une lettre d'écart, et le fait cesse d'être vérifiable.
+  assert.equal(isOfficialPage('https://groupe-ravel.com/', 'groupe-reval.com'), false);
+  assert.equal(isOfficialPage('https://groupe-reval.com/', 'groupe-reval.com'), true);
+  assert.equal(isOfficialPage('https://www.groupe-reval.com/mentions-legales/', 'groupe-reval.com'), true);
+});

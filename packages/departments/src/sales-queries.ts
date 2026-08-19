@@ -85,17 +85,29 @@ export interface QueryPlan {
  *
  * Déterministe : mêmes entrées, mêmes requêtes, dans le même ordre. Un lot se
  * rejoue à l'identique, et deux lots se comparent.
+ *
+ * `wave` fait tourner le vocabulaire. Le lot 005 a découvert pourquoi il le
+ * faut : la déduplication inter-lots venait d'être posée, et comme les mêmes
+ * deux requêtes partaient à chaque fois, dix-neuf des vingt résultats étaient
+ * déjà connus. Un plan figé fonctionne une fois, puis épuise son terrain sans
+ * le dire — le lot rend zéro et rien n'indique que la cause est la requête.
+ *
+ * La rotation reste une règle, pas une improvisation : à `wave` égal, le plan
+ * est identique, et deux lots restent comparables.
  */
 export function planQueries(
   vocabulary: QueryVocabulary = SALES_QUERY_VOCABULARY,
   limit = 8,
+  wave = 0,
 ): QueryPlan[] {
   const plans: QueryPlan[] = [];
-  const [activity = 'fabricant', ...otherActivities] = vocabulary.activities;
-  const region = vocabulary.regions[0] ?? 'France';
+  const activities = rotate(vocabulary.activities, wave);
+  const offerings = rotate(vocabulary.offerings, wave);
+  const [activity = 'fabricant', ...otherActivities] = activities;
+  const region = vocabulary.regions[wave % Math.max(1, vocabulary.regions.length)] ?? 'France';
 
   // ── Famille « métier » : qui fabrique quoi, et où ────────────────────────
-  for (const offering of vocabulary.offerings) {
+  for (const offering of offerings) {
     plans.push({
       query: `${activity} ${offering} ${region} PME`,
       family: 'metier',
@@ -108,8 +120,8 @@ export function planQueries(
   // « nos produits » ou « notre entreprise » ne se trouvent que sur le site
   // d'une société. C'est le filtre le plus efficace contre les annuaires, et il
   // ne coûte rien : il est dans la requête.
-  for (const [i, offering] of vocabulary.offerings.entries()) {
-    const hint = vocabulary.siteHints[i % vocabulary.siteHints.length]!;
+  for (const [i, offering] of offerings.entries()) {
+    const hint = vocabulary.siteHints[(i + wave) % vocabulary.siteHints.length]!;
     plans.push({
       query: `${activity} ${offering} ${region} "${hint}"`,
       family: 'site',
@@ -127,6 +139,13 @@ export function planQueries(
   }
 
   return plans.slice(0, limit);
+}
+
+/** Décale une liste sans la modifier. Rotation, pas mélange : reproductible. */
+function rotate<T>(items: readonly T[], by: number): T[] {
+  if (items.length === 0) return [];
+  const shift = ((by % items.length) + items.length) % items.length;
+  return [...items.slice(shift), ...items.slice(0, shift)];
 }
 
 /**

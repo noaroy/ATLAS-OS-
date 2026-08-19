@@ -237,3 +237,18 @@ export {
   type RejectionStage,
   type FunnelCounts,
 } from './sales-pipeline.ts';
+
+export {
+  resolveContacts,
+  contactPagesFor,
+  contactLinksIn,
+  isOfficialPage,
+  brandRoot,
+  CONTACT_PATHS,
+  type ContactKind,
+  type ContactConfidence,
+  type ContactMethod,
+  type ResolvedContact,
+  type ContactResolution,
+  type ContactPage,
+} from './contact-resolver.ts';

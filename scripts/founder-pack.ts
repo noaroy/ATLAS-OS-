@@ -53,17 +53,19 @@ for (const p of prospects) {
   }
 
   // Le canal de contact : ce qui a été trouvé publié, et rien d'autre.
-  const channel = p.contactEmail
-    ? `EMAIL · ${p.contactEmail}`
-    : p.contactPhone
-      ? `PHONE · ${p.contactPhone}`
-      : p.contactPage
-        ? `WEBSITE_FORM · ${p.contactPage}`
-        : 'NONE';
-  line('PUBLIC CONTACT CHANNEL', channel);
-  if (channel === 'NONE') {
-    line('  CONTACT METHOD', 'NONE — aucun canal public relevé. Rien n’a été reconstruit.');
-  }
+  const method = p.contactMethod ?? 'NONE';
+  line('PUBLIC EMAIL', p.contactEmail ?? 'NONE');
+  line('  EMAIL SOURCE', p.contactEmail ? (p.contactSourceUrl ?? '—') : '—');
+  line('CONTACT FORM', p.contactPage ?? 'NONE');
+  line('  FORM SOURCE', p.contactPage ?? '—');
+  line('PHONE', p.contactPhone ?? 'NONE');
+  line(
+    'CONTACT METHOD',
+    method === 'NONE'
+      ? 'NONE — aucun canal public relevé. Rien n’a été reconstruit.'
+      : `${method}${p.contactConfidenceLabel ? ` · confiance ${p.contactConfidenceLabel}` : ''}` +
+        `${p.contactObserved ? ' · observé sur une page officielle' : ''}`,
+  );
   if (p.contactName) line('  NAMED CONTACT', `${p.contactName}${p.contactRole ? ` · ${p.contactRole}` : ''}`);
 
   line('PERSONALIZATION', perso ? perso.claim : '— (aucune personnalisation sourcée)');
@@ -75,7 +77,7 @@ for (const p of prospects) {
   } else {
     console.log(`  ${verdict.reason}`);
   }
-  console.log(`STATE                 ${p.state} · approbation réservée à un humain nommé`);
+  line('STATE', `${p.state} · approbation réservée à un humain nommé`);
   console.log('');
 }
 

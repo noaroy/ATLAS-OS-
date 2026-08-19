@@ -1220,4 +1220,29 @@ UPDATE sales_prospects
  WHERE identity_confidence IS NOT NULL;
 `,
   },
+  {
+    version: 20,
+    name: 'sales-contact-channel',
+    sql: `
+-- ─── Le canal de contact, et ce qu'il vaut ────────────────────────────────
+--
+-- Le lot 003 a conclu « aucun contact publie » pour deux entreprises qui en
+-- publient : la resolution exigeait que l'adresse porte le domaine du site.
+-- \`contact@seraap.fr\` releve sur \`seraap.com\` etait jete comme s'il
+-- s'agissait de l'adresse d'un hebergeur.
+--
+-- \`contact_method\` dit par quel canal joindre l'entreprise — EMAIL, FORM,
+-- PHONE ou NONE — et \`contact_confidence_label\` ce que vaut la trouvaille.
+-- Le libelle est conserve a cote du nombre parce qu'il porte le motif : HIGH
+-- ne veut pas dire 0.9, il veut dire « page de contact officielle, marque
+-- coherente avec le domaine ».
+--
+-- \`contact_observed\` reste a 1 pour tout ce qui est ecrit ici : rien dans le
+-- resolveur ne produit de coordonnee deduite. La colonne existe pour que la
+-- distinction reste lisible si un jour une autre source en produit.
+ALTER TABLE sales_prospects ADD COLUMN contact_method TEXT;
+ALTER TABLE sales_prospects ADD COLUMN contact_confidence_label TEXT;
+ALTER TABLE sales_prospects ADD COLUMN contact_observed INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];

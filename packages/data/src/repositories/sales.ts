@@ -76,6 +76,11 @@ export interface SalesProspect {
   identitySources: string[] | null;
   /** Sous quelles gardes cette ligne a ete resolue. NULL = non verifiee. */
   guardVersion: string | null;
+  /** EMAIL · FORM · PHONE · NONE — le canal retenu, selon la priorite. */
+  contactMethod: string | null;
+  contactConfidenceLabel: string | null;
+  /** Faux tant qu'aucune page officielle n'a livre la coordonnee. */
+  contactObserved: boolean;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -130,6 +135,9 @@ interface Row {
   identity_sources: string | null;
   search_title: string | null;
   guard_version: string | null;
+  contact_method: string | null;
+  contact_confidence_label: string | null;
+  contact_observed: number;
   state: ProspectState;
   tier: ProspectTier | null;
   score: number | null;
@@ -171,6 +179,9 @@ const toProspect = (row: Row): SalesProspect => ({
   identitySources: row.identity_sources ? (JSON.parse(row.identity_sources) as string[]) : null,
   searchTitle: row.search_title,
   guardVersion: row.guard_version,
+  contactMethod: row.contact_method,
+  contactConfidenceLabel: row.contact_confidence_label,
+  contactObserved: row.contact_observed === 1,
   state: row.state,
   tier: row.tier,
   score: row.score,
@@ -245,6 +256,9 @@ export class SalesRepository {
       identity_confidence: input.identityConfidence ?? null,
       identity_sources: input.identitySources ? JSON.stringify(input.identitySources) : null,
       guard_version: input.guardVersion ?? null,
+      contact_method: null,
+      contact_confidence_label: null,
+      contact_observed: 0,
       state: 'DISCOVERED',
       tier: null,
       score: null,
@@ -273,6 +287,7 @@ export class SalesRepository {
         `INSERT INTO sales_prospects (id, batch_id, company_name, domain, website, country,
            industry, source_url, search_provider, query, discovered_at,
            search_title, page_type, identity_confidence, identity_sources, guard_version,
+           contact_method, contact_confidence_label, contact_observed,
            state, tier, score,
            score_detail, why_fit, reject_reason, contact_name, contact_role, contact_email,
            contact_phone, contact_page, contact_source_url, contact_confidence,
@@ -281,6 +296,7 @@ export class SalesRepository {
          VALUES (@id, @batch_id, @company_name, @domain, @website, @country,
            @industry, @source_url, @search_provider, @query, @discovered_at,
            @search_title, @page_type, @identity_confidence, @identity_sources, @guard_version,
+           @contact_method, @contact_confidence_label, @contact_observed,
            @state, @tier, @score,
            @score_detail, @why_fit, @reject_reason, @contact_name, @contact_role, @contact_email,
            @contact_phone, @contact_page, @contact_source_url, @contact_confidence,
@@ -337,12 +353,24 @@ export class SalesRepository {
       contactPage?: string | null;
       sourceUrl?: string | null;
       confidence?: number | null;
+      method?: string | null;
+      confidenceLabel?: string | null;
+      /** Vrai seulement si la coordonnée a été lue sur une page officielle. */
+      observed?: boolean;
     },
   ): SalesProspect {
+    // Une coordonnée sans source ne peut pas être défendue en revue, et une
+    // coordonnée qu'on ne peut pas défendre n'a rien à faire dans un message.
+    if ((contact.email || contact.phone || contact.contactPage) && !contact.sourceUrl?.trim()) {
+      throw invalidState(
+        'Une coordonnée exige la page où elle a été lue. Sans source, elle est indéfendable.',
+      );
+    }
     this.db
       .prepare(
         `UPDATE sales_prospects SET contact_name = ?, contact_role = ?, contact_email = ?,
            contact_phone = ?, contact_page = ?, contact_source_url = ?, contact_confidence = ?,
+           contact_method = ?, contact_confidence_label = ?, contact_observed = ?,
            updated_at = ? WHERE id = ?`,
       )
       .run(
@@ -353,6 +381,9 @@ export class SalesRepository {
         contact.contactPage ?? null,
         contact.sourceUrl ?? null,
         contact.confidence ?? null,
+        contact.method ?? null,
+        contact.confidenceLabel ?? null,
+        contact.observed ? 1 : 0,
         nowIso(),
         prospectId,
       );

@@ -126,6 +126,14 @@ describe('les deux faux positifs du lot 002', () => {
       confidence: 0.9,
     });
     repos.sales.setScore(prospect.id, { score: 71.6, tier: 'PRIORITY', detail: {}, whyFit: 'x' });
+    repos.sales.setContact(prospect.id, {
+      email: 'contact@industri-ailes.fr',
+      sourceUrl: 'https://industri-ailes.fr/contact',
+      method: 'EMAIL',
+      confidenceLabel: 'HIGH',
+      observed: true,
+      confidence: 0.9,
+    });
     repos.sales.setOutreach(prospect.id, {
       personalizationFactId: fact.id,
       messageShort: 'court',
@@ -197,6 +205,22 @@ describe('un prospect résolu sous les gardes actuelles', () => {
       messageShort: 'court',
       messageEmail: 'long',
       sourceUrl: 'https://cirmeca.com/',
+    });
+    // Personnalisation sourcée, mais personne à qui écrire : toujours non.
+    const withoutContact = repos.sales.outreachEligibility(prospect.id);
+    assert.equal(withoutContact.eligibility, 'BLOCKED');
+    assert.ok(
+      withoutContact.blockers.some((b) => b.includes('canal de contact')),
+      'le motif doit nommer le canal manquant',
+    );
+
+    repos.sales.setContact(prospect.id, {
+      email: 'contact@cirmeca.fr',
+      sourceUrl: 'https://cirmeca.com/',
+      method: 'EMAIL',
+      confidenceLabel: 'HIGH',
+      observed: true,
+      confidence: 0.9,
     });
     assert.equal(repos.sales.outreachEligibility(prospect.id).eligibility, 'ELIGIBLE');
   });

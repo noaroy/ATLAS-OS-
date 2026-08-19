@@ -571,6 +571,9 @@ export class SalesRepository {
       score: p.score,
       scoreThreshold: 70,
       hasSourcedPersonalization: Boolean(p.personalizationFactId),
+      // Observé, pas seulement présent : une coordonnée déduite ne compte pas.
+      hasObservedContact:
+        p.contactObserved && Boolean(p.contactEmail || p.contactPage || p.contactPhone),
       invalidation: invalidation ?? null,
     });
   }

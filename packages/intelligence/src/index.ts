@@ -42,6 +42,12 @@ export {
 } from './economics.ts';
 export { instantiatePlaybook, renderTemplate, type InstantiateInput } from './playbook.ts';
 export { extractContacts, contactUrlsFor, CONTACT_PATHS, type ExtractedContact } from './contacts.ts';
+export {
+  fetchRawPages,
+  type RawPage,
+  type RawFetchOutcome,
+  type RawFetchOptions,
+} from './contact-fetch.ts';
 export { toCsv, toPrintableHtml, type ExportInput, type ExportedFile } from './export.ts';
 export * from './discovery/index.ts';
 

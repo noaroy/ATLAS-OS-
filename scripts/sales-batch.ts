@@ -22,11 +22,16 @@ import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, formatDuration, GUARD_VERSION } from '../packages/core/src/index.ts';
 import { preflight, formatPreflight } from '../packages/runtime/src/preflight.ts';
 import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
+import { fetchRawPages } from '../packages/intelligence/src/contact-fetch.ts';
 import {
   checkPriorityEligibility,
   SALES_TIER_THRESHOLDS,
   runSalesPipeline,
   funnelBalances,
+  resolveContacts,
+  contactPagesFor,
+  contactLinksIn,
+  type ContactPage,
   domainOf,
   scoreSalesProspect,
   buildOutreachDraft,
@@ -397,9 +402,10 @@ async function main(): Promise<void> {
     });
 
     // Le contact : uniquement ce qui a été rendu, jamais reconstruit.
-    if (parsed.contact && (parsed.contact.email || parsed.contact.phone || parsed.contact.contactPage)) {
-      repos.sales.setContact(prospect.id, { ...parsed.contact, confidence: 0.6 });
-    }
+    // Ce que le modèle croit savoir d'un contact n'est pas écrit : une adresse
+    // rendue par un modèle est plausible, et une adresse plausible est
+    // indéfendable. La résolution de contacts, plus bas, lit les pages.
+    void parsed.contact;
 
     repos.sales.setState(prospect.id, score.tier === 'REJECTED' ? 'REJECTED' : 'QUALIFIED', {
       rejectReason: score.tier === 'REJECTED' ? `score ${score.total} sous le seuil` : null,
@@ -408,6 +414,64 @@ async function main(): Promise<void> {
     console.log(
       `    ${score.tier === 'REJECTED' ? `${c.dim}·${c.reset}` : `${c.green}✓${c.reset}`} ` +
         `${prospect.companyName.slice(0, 34).padEnd(36)}${String(score.total).padStart(6)} · ${score.tier}`,
+    );
+  }
+
+  // ── Contacts : lus sur le site officiel, jamais devinés ──────────────────
+  //
+  // Le lot 003 a rendu « aucun contact publié » pour deux entreprises qui en
+  // publient : l'extraction exigeait que l'adresse porte le domaine du site.
+  // La règle porte désormais sur la page. Rien ici n'appelle le modèle.
+  console.log(`
+  ${c.bold}Contacts${c.reset}`);
+  for (const prospect of repos.sales.forBatch(batchId).filter((p) => p.state === 'QUALIFIED')) {
+    const domain = prospect.domain!;
+    const queue = contactPagesFor(prospect.website, domain);
+    const seen = new Set<string>();
+    const pages: ContactPage[] = [];
+
+    for (let pass = 0; pass < 2; pass++) {
+      const batch = queue.filter((u) => !seen.has(u));
+      for (const u of batch) seen.add(u);
+      if (batch.length === 0) break;
+      const fetched = await fetchRawPages(batch, {
+        logger: system.logger,
+        timeoutMs: 12_000,
+        maxPages: Math.max(0, 8 - pages.length),
+      });
+      pages.push(...fetched.pages);
+      if (pass === 0) {
+        const home = fetched.pages.find((page) => new URL(page.url).pathname === '/');
+        if (home) {
+          for (const link of contactLinksIn(home.html, home.url, domain)) {
+            if (!seen.has(link)) queue.push(link);
+          }
+        }
+      }
+    }
+
+    const contacts = resolveContacts({ officialDomain: domain, pages });
+    if (contacts.primary) {
+      const email = contacts.publicEmails[0] ?? null;
+      const phone = contacts.publicPhones[0] ?? null;
+      repos.sales.setContact(prospect.id, {
+        name: contacts.contactPersonName,
+        role: contacts.contactPersonRole,
+        email: email?.value ?? null,
+        phone: phone?.value ?? null,
+        contactPage: contacts.contactFormUrl?.value ?? null,
+        sourceUrl: contacts.primary.sourceUrl,
+        confidence: contacts.primary.confidence === 'HIGH' ? 0.9
+          : contacts.primary.confidence === 'MEDIUM' ? 0.7 : 0.5,
+        method: contacts.method,
+        confidenceLabel: contacts.primary.confidence,
+        observed: true,
+      });
+    }
+    console.log(
+      `    ${contacts.primary ? `${c.green}✓${c.reset}` : `${c.dim}·${c.reset}`} ` +
+        `${prospect.companyName.slice(0, 30).padEnd(32)}${contacts.method.padEnd(6)} ` +
+        `${c.dim}${(contacts.primary?.value ?? 'aucun canal public relevé').slice(0, 42)}${c.reset}`,
     );
   }
 
@@ -441,7 +505,9 @@ async function main(): Promise<void> {
       scoreThreshold: SALES_TIER_THRESHOLDS.priority,
       hasSourcedPersonalization: observed.length > 0,
     });
-    if (!check.eligible) {
+    const hasContact = p.contactObserved && Boolean(p.contactEmail || p.contactPage || p.contactPhone);
+    if (!hasContact) check.blockers.push('aucun canal de contact public observé');
+    if (!check.eligible || !hasContact) {
       console.log(`    ${c.amber}rétrogradé${c.reset} ${p.companyName.slice(0, 32).padEnd(34)} ${c.dim}${check.blockers.join(' · ').slice(0, 60)}${c.reset}`);
       repos.sales.setScore(p.id, { score: p.score ?? 0, tier: 'GOOD_FIT', detail: p.scoreDetail ?? {}, whyFit: p.whyFit ?? '' });
       continue;

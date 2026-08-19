@@ -60,6 +60,12 @@ export interface EligibilityInput {
   scoreThreshold: number;
   hasSourcedPersonalization: boolean;
   /**
+   * Un canal public relevé sur une page officielle — adresse, formulaire ou
+   * téléphone. Sans lui, un prospect « prêt » ne l'est pas : il n'y a personne
+   * à qui écrire, et le seul moyen d'en trouver un serait d'en inventer un.
+   */
+  hasObservedContact: boolean;
+  /**
    * Un ré-audit qui a explicitement condamné cette ligne. Prime sur tout le
    * reste : c'est un jugement porté, pas une absence de preuve.
    */
@@ -130,6 +136,7 @@ export function effectiveOutreachEligibility(input: EligibilityInput): Eligibili
     blockers.push(`score ${input.score ?? 0} sous le seuil ${input.scoreThreshold}`);
   }
   if (!input.hasSourcedPersonalization) blockers.push('aucune personnalisation appuyée sur une source');
+  if (!input.hasObservedContact) blockers.push('aucun canal de contact public observé');
 
   if (blockers.length > 0) {
     return {

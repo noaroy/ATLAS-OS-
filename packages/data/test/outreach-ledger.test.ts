@@ -225,3 +225,48 @@ describe('le registre est append-only', () => {
     assert.ok(known.has('nouvelle-usine.fr'));
   });
 });
+
+describe('synchroniser des envois faits à la main', () => {
+  test('réenregistrer la même décision n’ajoute pas de ligne', () => {
+    // Append-only ne veut pas dire « écrire deux fois la même chose ». Une
+    // ligne identique n'apporte rien et rend l'historique moins lisible, ce
+    // que l'append-only cherchait justement à préserver.
+    repos.sales.recordOutreach({
+      domain: 'sync.fr', kind: 'CONTACTED', recordedBy: 'noaroy', note: 'premier envoi',
+    });
+    const again = repos.sales.recordOutreach({
+      domain: 'sync.fr', kind: 'CONTACTED', recordedBy: 'noaroy', note: 'premier envoi',
+    });
+    assert.equal(again.recorded, false);
+    assert.match(again.reason, /déjà exactement cette décision/);
+    assert.equal(repos.sales.ledgerHistory('sync.fr').length, 1);
+  });
+
+  test('mais une information nouvelle s’ajoute', () => {
+    const withFollowUp = repos.sales.recordOutreach({
+      domain: 'sync.fr', kind: 'CONTACTED', recordedBy: 'noaroy',
+      note: 'AUTO_REPLY_RECEIVED', followUpAt: '2026-08-24',
+    });
+    assert.equal(withFollowUp.recorded, true);
+
+    const history = repos.sales.ledgerHistory('sync.fr');
+    assert.equal(history.length, 2, 'la première décision est conservée');
+    assert.equal(history[0]!.note, 'premier envoi');
+    assert.equal(history[1]!.followUpAt, '2026-08-24');
+  });
+
+  test('une relance datée ne change pas le verdict', () => {
+    // L'interlocutrice est en congés : c'est une information sur le calendrier,
+    // pas sur l'entreprise. Elle reste contactée.
+    const verdict = repos.sales.ledgerFor('sync.fr');
+    assert.equal(verdict?.kind, 'CONTACTED');
+  });
+
+  test('le registre se lit d’un coup, une ligne par entreprise', () => {
+    const domains = repos.sales.ledgerDomains();
+    const sync = domains.find((d) => d.domain === 'sync.fr');
+    assert.equal(sync?.entries, 2, 'deux entrées, une seule ligne de registre');
+    assert.equal(sync?.followUpAt, '2026-08-24');
+    assert.ok(domains.every((d) => d.domain === d.domain.toLowerCase()));
+  });
+});

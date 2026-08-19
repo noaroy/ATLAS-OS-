@@ -1341,4 +1341,20 @@ ALTER TABLE sales_prospects ADD COLUMN contact_intent TEXT;
 ALTER TABLE sales_prospects ADD COLUMN contact_suitability TEXT;
 `,
   },
+  {
+    version: 23,
+    name: 'outreach-ledger-followup',
+    sql: `
+-- ─── La suite prevue, a cote de ce qui a eu lieu ──────────────────────────
+--
+-- Groupe JLF a repondu par une absence : l'interlocutrice est en conges
+-- jusqu'au 24 aout. C'est une information sur le calendrier, pas sur
+-- l'entreprise — elle reste contactee, et la relance a une date.
+--
+-- La colonne vit dans le registre plutot que sur le prospect parce que la
+-- relance porte sur l'entreprise, pas sur la ligne d'un lot : trois lots
+-- peuvent la contenir, il n'y a qu'une relance a faire.
+ALTER TABLE outreach_ledger ADD COLUMN follow_up_at TEXT;
+`,
+  },
 ];

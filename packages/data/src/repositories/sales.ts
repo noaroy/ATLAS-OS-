@@ -613,7 +613,8 @@ export class SalesRepository {
       .prepare(
         `SELECT kind, note, recorded_by, recorded_at
            FROM outreach_ledger WHERE canonical_domain = ?
-          ORDER BY CASE kind WHEN 'DO_NOT_CONTACT' THEN 0 ELSE 1 END, recorded_at DESC
+          ORDER BY CASE kind WHEN 'DO_NOT_CONTACT' THEN 0 ELSE 1 END,
+                   recorded_at DESC, rowid DESC
           LIMIT 1`,
       )
       .get(canonicalDomainOf(domain)) as
@@ -638,21 +639,25 @@ export class SalesRepository {
   }
 
   /** Tout ce qui a été écrit sur ce domaine, dans l'ordre. */
-  ledgerHistory(domain: string): Array<LedgerVerdict & { channel: string | null }> {
+  ledgerHistory(
+    domain: string,
+  ): Array<LedgerVerdict & { channel: string | null; followUpAt: string | null }> {
     return (
       this.db
         .prepare(
-          `SELECT kind, channel, note, recorded_by, recorded_at
-             FROM outreach_ledger WHERE canonical_domain = ? ORDER BY recorded_at ASC`,
+          `SELECT kind, channel, note, follow_up_at, recorded_by, recorded_at
+             FROM outreach_ledger WHERE canonical_domain = ?
+            ORDER BY recorded_at ASC, rowid ASC`,
         )
         .all(canonicalDomainOf(domain)) as Array<{
-        kind: string; channel: string | null; note: string | null;
+        kind: string; channel: string | null; note: string | null; follow_up_at: string | null;
         recorded_by: string; recorded_at: string;
       }>
     ).map((row) => ({
       kind: row.kind as LedgerVerdict['kind'],
       channel: row.channel,
       note: row.note,
+      followUpAt: row.follow_up_at,
       recordedBy: row.recorded_by,
       recordedAt: row.recorded_at,
     }));
@@ -671,17 +676,42 @@ export class SalesRepository {
     recordedBy: string;
     channel?: string | null;
     note?: string | null;
+    followUpAt?: string | null;
     recordedAt?: string;
-  }): void {
+  }): { recorded: boolean; reason: string } {
     const domain = canonicalDomainOf(input.domain);
     if (!domain) throw invalidState('Un registre sans domaine ne dédoublonne rien.');
     if (!input.recordedBy.trim()) {
       throw invalidState('Le registre exige de savoir qui a décidé : une décision anonyme ne se conteste pas.');
     }
+    // Append-only ne veut pas dire « écrire deux fois la même chose ».
+    // Réenregistrer un envoi déjà consigné, à l'identique, n'ajoute aucune
+    // information et rend l'historique plus difficile à lire — ce qui est
+    // exactement ce que l'append-only cherchait à préserver.
+    const last = this.db
+      .prepare(
+        `SELECT kind, note, follow_up_at FROM outreach_ledger
+          WHERE canonical_domain = ? ORDER BY recorded_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(domain) as { kind: string; note: string | null; follow_up_at: string | null } | undefined;
+
+    if (
+      last &&
+      last.kind === input.kind &&
+      (last.note ?? null) === (input.note ?? null) &&
+      (last.follow_up_at ?? null) === (input.followUpAt ?? null)
+    ) {
+      return {
+        recorded: false,
+        reason: `« ${domain} » porte déjà exactement cette décision : rien à ajouter.`,
+      };
+    }
+
     this.db
       .prepare(
-        `INSERT INTO outreach_ledger (id, canonical_domain, kind, channel, note, recorded_by, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO outreach_ledger
+           (id, canonical_domain, kind, channel, note, follow_up_at, recorded_by, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id('olg'),
@@ -689,9 +719,53 @@ export class SalesRepository {
         input.kind,
         input.channel ?? null,
         input.note ?? null,
+        input.followUpAt ?? null,
         input.recordedBy.trim(),
         input.recordedAt ?? nowIso(),
       );
+    return { recorded: true, reason: `${domain} → ${input.kind}` };
+  }
+
+  /** Tout le registre, une ligne par domaine, verdict courant en tête. */
+  ledgerDomains(): Array<{
+    domain: string;
+    kind: LedgerVerdict['kind'];
+    note: string | null;
+    followUpAt: string | null;
+    recordedBy: string;
+    recordedAt: string;
+    entries: number;
+  }> {
+    return (
+      this.db
+        .prepare('SELECT DISTINCT canonical_domain FROM outreach_ledger ORDER BY canonical_domain')
+        .all() as Array<{ canonical_domain: string }>
+    ).map((row) => {
+      const current = this.db
+        .prepare(
+          `SELECT kind, note, follow_up_at, recorded_by, recorded_at
+             FROM outreach_ledger WHERE canonical_domain = ?
+            ORDER BY CASE kind WHEN 'DO_NOT_CONTACT' THEN 0 ELSE 1 END,
+                     recorded_at DESC, rowid DESC
+            LIMIT 1`,
+        )
+        .get(row.canonical_domain) as {
+        kind: string; note: string | null; follow_up_at: string | null;
+        recorded_by: string; recorded_at: string;
+      };
+      const { n } = this.db
+        .prepare('SELECT COUNT(*) n FROM outreach_ledger WHERE canonical_domain = ?')
+        .get(row.canonical_domain) as { n: number };
+      return {
+        domain: row.canonical_domain,
+        kind: current.kind as LedgerVerdict['kind'],
+        note: current.note,
+        followUpAt: current.follow_up_at,
+        recordedBy: current.recorded_by,
+        recordedAt: current.recorded_at,
+        entries: n,
+      };
+    });
   }
 
   /**

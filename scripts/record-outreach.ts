@@ -16,15 +16,47 @@ const [action, domain] = process.argv.slice(2);
 const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
-if (!action || !domain) {
-  throw new Error('usage: record-outreach <contacted|skip|show> <domaine> [--by=] [--channel=] [--note=]');
+if (!action || (!domain && action !== 'ledger')) {
+  throw new Error(
+    'usage: record-outreach <contacted|skip|show|ledger> <domaine> ' +
+      '[--by=] [--channel=] [--note=] [--follow-up=AAAA-MM-JJ]',
+  );
 }
 
 const logger = createLogger({ level: 'error', pretty: false });
 const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
-const canonical = canonicalDomainOf(domain);
+const canonical = canonicalDomainOf(domain ?? '');
 
-if (action === 'show') {
+if (action === 'ledger') {
+  // Le registre entier : une ligne par entreprise, et ce qu'ATLAS en fera.
+  const domains = repos.sales.ledgerDomains();
+  console.log(`REGISTRE GLOBAL — ${domains.length} entreprise(s)
+`);
+  console.log(
+    `${'DOMAINE'.padEnd(24)}${'STATUT'.padEnd(17)}${'RELANCE'.padEnd(13)}${'ENTRÉES'.padEnd(9)}NOTE`,
+  );
+  for (const entry of domains) {
+    console.log(
+      `${entry.domain.padEnd(24)}${entry.kind.padEnd(17)}` +
+        `${(entry.followUpAt ?? '—').padEnd(13)}${String(entry.entries).padEnd(9)}${entry.note ?? ''}`,
+    );
+  }
+
+  console.log();
+  console.log('EFFET SUR LES PROSPECTS');
+  const seen = new Set<string>();
+  for (const batchId of repos.sales.batchIds()) {
+    for (const p of repos.sales.forBatch(batchId)) {
+      const key = canonicalDomainOf(p.domain ?? '');
+      if (!key || seen.has(key)) continue;
+      const verdict = repos.sales.outreachEligibility(p.id);
+      if (verdict.eligibility === 'ELIGIBLE' || verdict.eligibility === 'BLOCKED') continue;
+      if (verdict.eligibility === 'PENDING_RESOLUTION') continue;
+      seen.add(key);
+      console.log(`  ${p.companyName.slice(0, 28).padEnd(30)}${key.padEnd(24)}${verdict.eligibility}`);
+    }
+  }
+} else if (action === 'show') {
   const history = repos.sales.ledgerHistory(canonical);
   const verdict = repos.sales.ledgerFor(canonical);
   console.log(`REGISTRE — ${canonical}`);
@@ -33,7 +65,8 @@ if (action === 'show') {
     console.log(
       `  ${entry.recordedAt.slice(0, 19).replace('T', ' ')}  ${entry.kind.padEnd(15)}` +
         `${(entry.channel ?? '—').padEnd(12)}${entry.recordedBy}` +
-        `${entry.note ? `  « ${entry.note} »` : ''}`,
+        `${entry.note ? `  « ${entry.note} »` : ''}` +
+        `${entry.followUpAt ? `  relance ${entry.followUpAt}` : ''}`,
     );
   }
   console.log(`  verdict courant : ${verdict?.kind ?? 'aucun'}`);
@@ -43,14 +76,15 @@ if (action === 'show') {
   const kind = action === 'contacted' ? 'CONTACTED' : action === 'skip' ? 'DO_NOT_CONTACT' : null;
   if (!kind) throw new Error(`action inconnue : « ${action} ». Attendu contacted, skip ou show.`);
 
-  repos.sales.recordOutreach({
+  const outcome = repos.sales.recordOutreach({
     domain: canonical,
     kind,
     recordedBy: by,
     channel: flag('channel'),
     note: flag('note'),
+    followUpAt: flag('follow-up'),
   });
-  console.log(`${canonical} → ${kind}  (par ${by})`);
+  console.log(outcome.recorded ? `${canonical} → ${kind}  (par ${by})` : `${outcome.reason}`);
 
   // L'effet immédiat, sur toutes les lignes de tous les lots.
   for (const batchId of repos.sales.batchIds()) {

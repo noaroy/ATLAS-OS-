@@ -291,9 +291,20 @@ export interface AtlasConfig {
   log: { level: 'debug' | 'info' | 'warn' | 'error'; pretty: boolean };
 }
 
-/** Minimal .env reader — avoids a dependency for a 20-line job. */
+/**
+ * Minimal .env reader — avoids a dependency for a 20-line job.
+ *
+ * `.env.local` is read first and wins over `.env`, following the usual
+ * convention: secrets obtained by a local bootstrap — an OAuth refresh token,
+ * for instance — belong in a file that is never shared, never committed, and
+ * never merged. Keeping them out of `.env` means the shared file can stay
+ * readable without anyone having to remember what must be stripped from it.
+ */
 function loadDotEnv(cwd: string): void {
-  const file = join(cwd, '.env');
+  for (const name of ['.env.local', '.env']) loadEnvFile(join(cwd, name));
+}
+
+function loadEnvFile(file: string): void {
   if (!existsSync(file)) return;
 
   for (const rawLine of readFileSync(file, 'utf8').split(/\r?\n/)) {

@@ -38,6 +38,8 @@
     "production": "tsx scripts/production-run.ts",
     "review": "tsx scripts/review-report.ts",
     "sales": "tsx scripts/sales-batch.ts",
+    "gmail:authorize": "tsx scripts/gmail-authorize.ts",
+    "gmail:check": "tsx scripts/gmail-check.ts",
     "sales:inbox": "tsx scripts/sales-inbox.ts",
     "sales:inbox-sync": "tsx scripts/sales-inbox-sync.ts",
     "searxng:verify": "tsx scripts/searxng-verify.ts",

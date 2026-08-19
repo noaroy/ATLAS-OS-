@@ -33,6 +33,9 @@ describe('une entreprise, une conversation', () => {
     // inter-lots empêche côté prospection.
     const first = repos.conversations.open({
       domain: 'cirmeca.com', companyName: 'CIRMECA', source: 'BATCH-003', channel: 'email',
+      // Date fixée : sans elle, l'ouverture prend l'heure courante et le test
+      // change de résultat selon le moment de la journée.
+      firstContactAt: '2026-08-01T09:00:00Z',
     });
     const second = repos.conversations.open({
       domain: 'www.cirmeca.com', companyName: 'Cirmeca Machines', source: 'BATCH-004',
@@ -90,6 +93,7 @@ describe('les événements sont append-only', () => {
   test('la dernière activité suit les événements', () => {
     const conv = repos.conversations.byDomain('cirmeca.com')!;
     assert.equal(conv.lastActivityAt, '2026-08-19T09:00:00Z');
+    assert.ok(conv.firstContactAt < conv.lastActivityAt, 'le premier contact précède');
   });
 });
 

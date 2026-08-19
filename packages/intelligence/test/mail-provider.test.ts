@@ -132,3 +132,57 @@ describe('lecture du contenu', () => {
     assert.equal((await provider.list({ max: 1 })).length, 1);
   });
 });
+
+describe('le bootstrap d’autorisation', () => {
+  const raw = readFileSync(new URL('../../../scripts/gmail-authorize.ts', import.meta.url), 'utf8');
+  // Les commentaires nomment les portées interdites pour expliquer pourquoi
+  // elles le sont. L'assertion porte sur ce qui s'exécute, pas sur la prose.
+  const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  test('ne demande que la lecture', () => {
+    assert.equal(source.includes('gmail.modify'), false);
+    assert.equal(source.includes('gmail.compose'), false);
+    assert.equal(source.includes('gmail.send'), false);
+    assert.equal(source.includes('mail.google.com'), false);
+    // La portée transmise vient de la constante partagée, jamais d'une chaîne
+    // recopiée ici : deux littéraux finiraient par diverger.
+    assert.ok(source.includes('scope: GMAIL_READONLY_SCOPE'), 'une seule portée demandée');
+    assert.equal(
+      /scope:\s*'/.test(source),
+      false,
+      'aucune portée écrite en dur dans la requête',
+    );
+  });
+
+  test('refuse une portée plus large que celle demandée', () => {
+    // Google reconduit parfois un consentement plus large donné auparavant au
+    // même client. Demander la lecture ne suffit donc pas : il faut vérifier
+    // ce qui est rendu.
+    assert.ok(raw.includes('CONNEXION REFUSÉE'));
+    assert.ok(/extra\.length > 0/.test(source));
+    assert.ok(raw.includes('Rien n’a été écrit'), 'un refus n’écrit rien');
+  });
+
+  test('n’affiche jamais le jeton', () => {
+    // Un secret qui passe dans un terminal finit dans un historique.
+    const printsToken = /console\.(log|error)\([^)]*(refresh_token|access_token)/.test(source);
+    assert.equal(printsToken, false);
+  });
+
+  test('écrit dans un fichier ignoré par Git', () => {
+    assert.ok(raw.includes('.env.local'));
+    const ignored = readFileSync(new URL('../../../.gitignore', import.meta.url), 'utf8');
+    assert.ok(ignored.includes('.env.local'));
+    assert.ok(ignored.includes('client_secret*.json'));
+  });
+
+  test('la vérification lit sans rien modifier', () => {
+    const check = readFileSync(new URL('../../../scripts/gmail-check.ts', import.meta.url), 'utf8');
+    for (const verb of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      const calls = [...check.matchAll(new RegExp(`method:\s*'${verb}'`, 'g'))];
+      // Le seul POST est l'échange de jeton OAuth, qui ne touche pas la boîte.
+      assert.ok(calls.length <= (verb === 'POST' ? 1 : 0), `${verb} de trop dans gmail-check`);
+    }
+    assert.equal(check.includes('/messages/send'), false);
+  });
+});

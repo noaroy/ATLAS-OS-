@@ -9,6 +9,13 @@ dist/
 .env
 .env.*
 !.env.example
+# Secrets obtenus par un bootstrap local : jeton OAuth Gmail, caches de jetons.
+# `.env.*` les couvre déjà ; nommés ici pour que l'intention reste lisible.
+.env.local
+*.token.json
+.gmail-token*
+credentials.json
+client_secret*.json
 *.log
 *.tsbuildinfo
 .DS_Store

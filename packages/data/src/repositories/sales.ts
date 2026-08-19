@@ -641,19 +641,20 @@ export class SalesRepository {
   /** Tout ce qui a été écrit sur ce domaine, dans l'ordre. */
   ledgerHistory(
     domain: string,
-  ): Array<LedgerVerdict & { channel: string | null; followUpAt: string | null }> {
+  ): Array<LedgerVerdict & { id: string; channel: string | null; followUpAt: string | null }> {
     return (
       this.db
         .prepare(
-          `SELECT kind, channel, note, follow_up_at, recorded_by, recorded_at
+          `SELECT id, kind, channel, note, follow_up_at, recorded_by, recorded_at
              FROM outreach_ledger WHERE canonical_domain = ?
             ORDER BY recorded_at ASC, rowid ASC`,
         )
         .all(canonicalDomainOf(domain)) as Array<{
-        kind: string; channel: string | null; note: string | null; follow_up_at: string | null;
-        recorded_by: string; recorded_at: string;
+        id: string; kind: string; channel: string | null; note: string | null;
+        follow_up_at: string | null; recorded_by: string; recorded_at: string;
       }>
     ).map((row) => ({
+      id: row.id,
       kind: row.kind as LedgerVerdict['kind'],
       channel: row.channel,
       note: row.note,

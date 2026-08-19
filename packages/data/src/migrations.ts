@@ -1357,4 +1357,77 @@ ALTER TABLE sales_prospects ADD COLUMN contact_suitability TEXT;
 ALTER TABLE outreach_ledger ADD COLUMN follow_up_at TEXT;
 `,
   },
+  {
+    version: 24,
+    name: 'sales-conversations',
+    sql: `
+-- ─── La suite de l'envoi : ce qui revient ─────────────────────────────────
+--
+-- Le registre dit qu'on a ecrit. Il ne dit pas ce qu'on a recu, et sans cela
+-- la boucle commerciale s'arrete au premier message : rien ne distingue une
+-- entreprise qui n'a pas repondu d'une entreprise dont l'adresse etait
+-- fausse.
+--
+-- Une conversation par entreprise, pas par lot ni par prospect. CIRMECA
+-- apparait dans trois lots ; elle n'a qu'une histoire commerciale, et deux
+-- fils de discussion pour une meme maison produiraient deux relances.
+CREATE TABLE sales_conversations (
+  id                       TEXT PRIMARY KEY,
+  canonical_domain         TEXT NOT NULL UNIQUE,
+  company_name             TEXT NOT NULL,
+  -- Le fait d'envoi dont cette conversation decoule. La relance eventuelle
+  -- vit la-bas : on la lit, on ne la recopie pas.
+  outreach_ledger_entry_id TEXT REFERENCES outreach_ledger(id),
+  channel                  TEXT,
+  destination              TEXT,
+  first_contact_at         TEXT NOT NULL,
+  last_activity_at         TEXT NOT NULL,
+  -- D'ou vient cette conversation : batch, manuel, import.
+  source                   TEXT NOT NULL,
+  created_at               TEXT NOT NULL
+);
+CREATE INDEX idx_sales_conversations_domain ON sales_conversations(canonical_domain);
+
+-- Les evenements, append-only comme le registre et pour la meme raison : un
+-- rebond efface est un rebond qu'on refera. L'etat courant se recalcule a la
+-- lecture, il n'est jamais stocke — une regle corrigee doit pouvoir revenir
+-- sur un verdict qu'elle avait rendu.
+CREATE TABLE sales_conversation_events (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES sales_conversations(id) ON DELETE CASCADE,
+  -- EMAIL_REPLY · AUTO_REPLY · BOUNCE · FORM_REPLY · MANUAL_NOTE
+  kind            TEXT NOT NULL,
+  occurred_at     TEXT NOT NULL,
+  source          TEXT NOT NULL,
+  raw_subject     TEXT,
+  sender          TEXT,
+  body_excerpt    TEXT,
+  -- BOUNCED · AUTO_REPLY · REPLIED · NEEDS_REVIEW
+  classification  TEXT NOT NULL,
+  confidence      REAL NOT NULL,
+  signals         TEXT,
+  return_date     TEXT,
+  human_reviewed  INTEGER NOT NULL DEFAULT 0,
+  -- L'etat qu'un humain a pose, quand il en a pose un. Les etats commerciaux
+  -- — INTERESTED, WON, LOST — ne s'atteignent que par ici.
+  declared_status TEXT,
+  note            TEXT,
+  recorded_at     TEXT NOT NULL
+);
+CREATE INDEX idx_sales_conversation_events_conv
+  ON sales_conversation_events(conversation_id, occurred_at);
+
+CREATE TRIGGER sales_conversation_events_no_update
+BEFORE UPDATE ON sales_conversation_events
+BEGIN
+  SELECT RAISE(ABORT, 'les evenements de conversation sont append-only : ajoutez, ne corrigez pas.');
+END;
+
+CREATE TRIGGER sales_conversation_events_no_delete
+BEFORE DELETE ON sales_conversation_events
+BEGIN
+  SELECT RAISE(ABORT, 'un rebond efface est un rebond qu''on refera : suppression interdite.');
+END;
+`,
+  },
 ];

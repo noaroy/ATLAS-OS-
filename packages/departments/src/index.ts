@@ -263,3 +263,17 @@ export {
   type RankableContact,
   type SelectionOutcome,
 } from './contact-intent.ts';
+
+export {
+  classifyInbound,
+  extractReturnDate,
+  deriveConversationState,
+  requiresHumanJudgement,
+  HUMAN_ONLY_STATUSES,
+  type InboundKind,
+  type ReplyClassification,
+  type ClassificationResult,
+  type ConversationStatus,
+  type ConversationEvent,
+  type DerivedState,
+} from './reply-intake.ts';

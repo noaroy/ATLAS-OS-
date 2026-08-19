@@ -15,6 +15,8 @@ dist/
 apps/console/dist/
 .claude/settings.local.json
 graphify-out/
+# Journal local du compteur Graphify : mesure de cette machine, pas du dépôt.
+.graphify-meter/
 # Les livrables produits pour un client : régénérables depuis la base, et
 # susceptibles de porter des données commerciales qui n'ont rien à faire dans
 # l'historique du dépôt.

@@ -6,6 +6,7 @@ import {
   resolveCompanyIdentity,
   icpStatus,
   isGenericDescriptor,
+  looksLikePageTitle,
   nameMatchesDomain,
   checkPriorityEligibility,
   type PageClassification,
@@ -434,4 +435,22 @@ test('la coupe ne sert pas d’échappatoire au profil', () => {
     icpStatus({ companyName: outcome.identity!.companyName }).status,
     'OUT_OF_ICP',
   );
+});
+
+test('un titre de page impératif n’est pas une raison sociale', () => {
+  // La famille de requêtes « besoin » ramène précisément ces pages :
+  // « Devenez Distributeur », « Fournisseurs de Stabilus ». Le titre du
+  // résultat y est une invitation, jamais un nom d'entreprise.
+  for (const title of [
+    'Devenez Distributeur',
+    'Devenir distributeur de nos produits',
+    'Fournisseurs de Stabilus',
+    'Rejoignez notre réseau de revendeurs',
+    'Nos distributeurs',
+  ]) {
+    assert.equal(looksLikePageTitle(title), true, `« ${title} »`);
+    assert.equal(isGenericDescriptor(title), true, `« ${title} » ne nomme personne`);
+  }
+  assert.equal(looksLikePageTitle('CIRMECA'), false);
+  assert.equal(looksLikePageTitle('Groupe SPL'), false);
 });

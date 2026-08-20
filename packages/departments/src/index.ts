@@ -215,6 +215,7 @@ export {
   resolveCompanyIdentity,
   icpStatus,
   isGenericDescriptor,
+  looksLikePageTitle,
   nameMatchesDomain,
   checkPriorityEligibility,
   type PageType,
@@ -292,6 +293,7 @@ export {
 export {
   scoreConversion,
   isConversionReady,
+  isForeignDomain,
   CONVERSION_MODEL,
   CONVERSION_READY_THRESHOLD,
   MIN_GROUNDED_DIMENSIONS,
@@ -305,6 +307,8 @@ export {
 
 export {
   findGrowthSignals,
+  cleanQuote,
+  readsAsSentence,
   SIGNAL_LABELS,
   type GrowthSignal,
   type GrowthSignalKind,

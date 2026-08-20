@@ -263,7 +263,28 @@ const TRADE_WORDS = new Set([
   'sur', 'dans', 'avec', 'par', 'france', 'francais', 'francaise',
 ]);
 
+/**
+ * Les titres de page qui se font passer pour des raisons sociales.
+ *
+ * « Devenez Distributeur », « Fournisseurs de Stabilus », « Nos partenaires »
+ * sont des intitulés de rubrique. La famille de requêtes « besoin » les ramène
+ * en masse — elle cherche précisément ces pages — et le titre du résultat est
+ * alors une invitation, jamais un nom d'entreprise.
+ */
+const PAGE_TITLE_OPENERS = [
+  'devenez', 'devenir', 'rejoignez', 'rejoindre', 'contactez', 'demandez',
+  'decouvrez', 'telechargez', 'inscrivez', 'trouvez', 'commandez',
+  'fournisseurs de', 'distributeurs de', 'revendeurs de', 'nos partenaires',
+  'espace revendeur', 'espace distributeur', 'nos distributeurs',
+];
+
+export function looksLikePageTitle(name: string): boolean {
+  const folded = norm(name).replace(/['’]/g, ' ').trim();
+  return PAGE_TITLE_OPENERS.some((opener) => folded.startsWith(opener));
+}
+
 export function isGenericDescriptor(name: string): boolean {
+  if (looksLikePageTitle(name)) return true;
   const words = norm(name)
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
@@ -455,7 +476,18 @@ export interface IcpDecision {
  * messages.
  */
 const OUT_OF_SCOPE_TRADES: ReadonlyArray<{ words: string[]; label: string }> = [
-  { words: ['agence marketing', 'agence de communication', 'agence web', 'agence digitale', 'communication b2b'], label: 'agence de communication ou de marketing' },
+  {
+    // Les agences numériques rejoignent les agences de communication : une
+    // agence Shopify pour fabricants est un prestataire de fabricants, pas un
+    // fabricant. Elle pourrait acheter l'étude ; le profil de cette campagne
+    // ne dit pas cela.
+    words: [
+      'agence marketing', 'agence de communication', 'agence web', 'agence digitale',
+      'communication b2b', 'agence ecommerce', 'agence e-commerce', 'agence shopify',
+      'agence seo', 'studio de design',
+    ],
+    label: 'agence de communication, de marketing ou numérique',
+  },
   { words: ['cabinet de conseil', 'cabinet conseil', 'consulting', 'conseil en strategie'], label: 'cabinet de conseil' },
   { words: ['cabinet de recrutement', 'interim', 'travail temporaire'], label: 'recrutement ou intérim' },
   { words: ['avocat', 'expert-comptable', 'notaire', 'assurance', 'courtier'], label: 'profession réglementée ou service financier' },

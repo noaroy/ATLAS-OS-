@@ -274,11 +274,36 @@ export function scoreConversion(input: ConversionInput): ConversionScore {
  * personnalisation sourcée. Un total élevé obtenu sur des déductions décrit
  * notre optimisme, pas l'entreprise.
  */
+/**
+ * Les extensions qui désignent une entreprise hors de France.
+ *
+ * La campagne vise des PME françaises : `diversitech.ca` et `humanafterall.ca`
+ * sont sorties « prêtes », l'une canadienne, l'autre une agence de Montréal.
+ * Le `.com` reste neutre — beaucoup de PME françaises l'utilisent — mais une
+ * extension nationale étrangère tranche seule.
+ */
+const FOREIGN_TLDS = [
+  '.ca', '.us', '.co.uk', '.uk', '.de', '.es', '.it', '.nl', '.pl',
+  '.cn', '.in', '.br', '.au', '.jp', '.ru', '.tr',
+];
+
+export function isForeignDomain(domain: string | null | undefined): boolean {
+  if (!domain) return false;
+  const host = domain.toLowerCase().replace(/^www\./, '');
+  return FOREIGN_TLDS.some((tld) => host.endsWith(tld));
+}
+
 export const CONVERSION_READY_THRESHOLD = 55;
 export const MIN_GROUNDED_DIMENSIONS = 3;
 
-export function isConversionReady(score: ConversionScore): { ready: boolean; blockers: string[] } {
+export function isConversionReady(
+  score: ConversionScore,
+  context: { domain?: string | null; contactValue?: string | null } = {},
+): { ready: boolean; blockers: string[] } {
   const blockers: string[] = [];
+  if (isForeignDomain(context.domain) || isForeignDomain((context.contactValue ?? '').split('@')[1] ?? '')) {
+    blockers.push('domaine hors de France : le profil de cette campagne vise des PME françaises');
+  }
   if (score.total < CONVERSION_READY_THRESHOLD) {
     blockers.push(`score ${score.total} sous ${CONVERSION_READY_THRESHOLD}`);
   }
@@ -288,5 +313,9 @@ export function isConversionReady(score: ConversionScore): { ready: boolean; blo
     );
   }
   if (!score.personalization) blockers.push('aucune personnalisation sourcée');
+  // Un canal utilisable, sans quoi « prêt à démarcher » ne veut rien dire :
+  // deux dossiers sont sortis prêts sans adresse ni formulaire ni téléphone.
+  const channel = score.components.find((c) => c.key === 'contactQuality');
+  if (!channel || channel.points === 0) blockers.push('aucun canal de contact utilisable');
   return { ready: blockers.length === 0, blockers };
 }

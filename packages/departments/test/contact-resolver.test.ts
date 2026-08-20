@@ -379,3 +379,25 @@ describe('deux domaines pour une même maison', () => {
     assert.equal(resolution.primary?.value, 'contact@france-reval.com');
   });
 });
+
+describe('les numéros qui n’appellent personne', () => {
+  test('une suite de gabarit est refusée', () => {
+    // « 01 02 03 04 05 » relevé sur un site réel : le numéro que les
+    // intégrateurs laissent dans le modèle.
+    for (const fake of ['01 02 03 04 05', '01.02.03.04.05', '09 08 07 06 05']) {
+      const resolution = resolveContacts({
+        officialDomain: 'usine.fr',
+        pages: [{ url: 'https://usine.fr/contact', html: `<p>Tél. ${fake}</p>` }],
+      });
+      assert.deepEqual(resolution.publicPhones, [], `« ${fake} » ne doit pas être retenu`);
+    }
+  });
+
+  test('un vrai numéro passe toujours', () => {
+    const resolution = resolveContacts({
+      officialDomain: 'usine.fr',
+      pages: [{ url: 'https://usine.fr/contact', html: '<p>Tél. 04 76 45 69 25</p>' }],
+    });
+    assert.equal(resolution.publicPhones.length, 1);
+  });
+});

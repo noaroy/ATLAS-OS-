@@ -177,3 +177,45 @@ describe('les signaux relevés sur un site', () => {
     assert.ok(phrase.includes(signals[0]!.quote.replace(/\.$/, '').trim().slice(0, 40)));
   });
 });
+
+describe('ce qui a failli partir dans un vrai courriel', () => {
+  const page = (html: string, url = 'https://usine.fr/') => ({ url, html });
+
+  test('les entités HTML ne survivent pas à la citation', () => {
+    // « FADILEC intervient r&eacute;guli&egrave;rement… » annonce la machine
+    // qui a écrit le message avant même qu'on l'ait lu.
+    const signals = findGrowthSignals([
+      page("<p>FADILEC intervient r&eacute;guli&egrave;rement dans les secteurs d'activit&eacute; du nucl&eacute;aire et de l'a&eacute;ronautique.</p>"),
+    ]);
+    assert.equal(signals.length, 1);
+    assert.equal(/&[a-z]+;/i.test(signals[0]!.quote), false);
+    assert.match(signals[0]!.quote, /régulièrement/);
+  });
+
+  test('une liste de champs de formulaire n’est pas une phrase', () => {
+    // Relevé pour Stabilus : « Type of request * Required field please select ».
+    const signals = findGrowthSignals([
+      page('<p>Aerospace Rail Marine Defense Type of request * Required field please select Quantity required *</p>'),
+    ]);
+    assert.deepEqual(signals, []);
+  });
+
+  test('un prospect sans canal n’est jamais prêt', () => {
+    const score = scoreConversion({
+      companyName: 'Sans canal',
+      contactIntent: null,
+      contactSuitability: null,
+      qualificationScore: 80,
+      qualificationTier: 'PRIORITY',
+      facts: [
+        fact('Nous recherchons des distributeurs pour l’export en Europe'),
+        fact('Machines spéciales sur mesure pour l’agroalimentaire'),
+        fact('PME familiale, nos clients sont des industriels'),
+      ],
+    });
+    assert.ok(score.total > 55, 'le score peut être élevé');
+    const verdict = isConversionReady(score);
+    assert.equal(verdict.ready, false, 'et pourtant il n’y a personne à qui écrire');
+    assert.ok(verdict.blockers.some((b) => b.includes('canal de contact utilisable')));
+  });
+});

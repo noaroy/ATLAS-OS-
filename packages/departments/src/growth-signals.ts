@@ -100,9 +100,24 @@ const strip = (html: string): string =>
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
+    // Les entités doivent partir : une phrase citée dans un courriel avec
+    // « r&eacute;guli&egrave;rement » dedans annonce la machine qui l'a écrite.
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
-    .replace(/&#39;|&rsquo;/g, "'")
+    .replace(/&#39;|&rsquo;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&(?:e|E)acute;/g, 'é')
+    .replace(/&(?:e|E)grave;/g, 'è')
+    .replace(/&ecirc;/g, 'ê')
+    .replace(/&agrave;/g, 'à')
+    .replace(/&acirc;/g, 'â')
+    .replace(/&ccedil;/g, 'ç')
+    .replace(/&ugrave;/g, 'ù')
+    .replace(/&ucirc;/g, 'û')
+    .replace(/&ocirc;/g, 'ô')
+    .replace(/&icirc;/g, 'î')
+    .replace(/&iuml;/g, 'ï')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -118,6 +133,10 @@ const NOT_A_SIGNAL = [
   'politique de confidentialite', 'mentions legales', 'hebergeur',
   'droit d acces', 'traitement des donnees', 'consentement',
   'conditions generales', 'propriete intellectuelle', 'navigateur',
+  // Un formulaire n'est pas une phrase : « Type of request * Required field
+  // please select » a été retenu comme personnalisation pour Stabilus.
+  'required field', 'champ obligatoire', 'please select', 'veuillez selectionner',
+  'type of request', 'votre message', 'nom prenom', 'saisissez',
 ];
 
 /**
@@ -174,16 +193,66 @@ export function findGrowthSignals(
         // Une phrase trop courte ne prouve rien et ne se cite pas ; une phrase
         // trop longue est un paragraphe entier collé dans un message.
         if (quote.length < 25 || quote.length > 260) continue;
+        // Une accumulation de mots sans verbe est une liste de menu ou de
+        // champs, pas une phrase qu'on peut citer.
+        if ((quote.match(/\*/g) ?? []).length >= 2) continue;
+        if (/&[a-z]+;|&#\d+;/i.test(quote)) continue;
         const foldedQuote = fold(quote);
         if (NOT_A_SIGNAL.some((bad) => foldedQuote.includes(bad))) continue;
 
-        found.push({ kind: pattern.kind, quote, marker, sourceUrl: page.url });
+        found.push({ kind: pattern.kind, quote: cleanQuote(quote), marker, sourceUrl: page.url });
         counts.set(pattern.kind, (counts.get(pattern.kind) ?? 0) + 1);
         break;
       }
     }
   }
   return found;
+}
+
+/**
+ * Nettoie une citation avant qu'elle serve d'ouverture à un message.
+ *
+ * Les sites décorent leurs titres — émojis, puces, chevrons. Repris tels quels
+ * dans un courriel, ils font de la phrase un copier-coller visible : « 🍽️
+ * Agroalimentaire & Embouteillage… » annonce la machine avant la deuxième
+ * ligne. Le texte lui-même n'est pas retouché : on retire l'ornement, on ne
+ * reformule pas.
+ */
+export function cleanQuote(quote: string): string {
+  return quote
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, ' ')
+    .replace(/[\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}]/gu, ' ')
+    .replace(/^[\s•·▪▶>«»–—-]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Les fragments de navigation qui ne sont jamais une phrase du site. */
+const NAVIGATION = [
+  'contactez-nous', 'en savoir plus', 'lire la suite', 'accueil', 'menu',
+  'nos services', 'voir tous', 'demander un devis', 'newsletter',
+  'suivez-nous', 'plan du site', 'retour', 'cliquez',
+];
+
+/**
+ * Cette citation se lit-elle comme une phrase ?
+ *
+ * Un titre de rubrique — « Agroalimentaire & Embouteillage Tests
+ * d'étanchéité » — passe tous les autres filtres et fait pourtant un mauvais
+ * début de message : personne n'écrit ainsi. La proportion de mots capitalisés
+ * les sépare, sans avoir à analyser la grammaire : une phrase a une majuscule
+ * au début et peu ailleurs, un titre en a partout.
+ */
+export function readsAsSentence(quote: string): boolean {
+  const words = quote.split(/\s+/).filter((w) => w.length > 1);
+  if (words.length < 8) return false;
+  if (NAVIGATION.some((nav) => quote.toLowerCase().includes(nav))) return false;
+
+  const capitalised = words.filter((w) => /^[A-ZÀ-Ü]/.test(w)).length;
+  if (capitalised / words.length > 0.4) return false;
+  // Une phrase contient au moins un mot de liaison : sans cela, c'est une
+  // énumération.
+  return /\b(de|des|du|le|la|les|et|en|pour|dans|avec|nos|notre|qui|que)\b/i.test(quote);
 }
 
 /** Le libellé lisible d'un signal, pour un rapport de revue. */

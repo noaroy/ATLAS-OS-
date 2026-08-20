@@ -21,6 +21,8 @@ import {
   scoreConversion,
   isConversionReady,
   findGrowthSignals,
+  cleanQuote,
+  readsAsSentence,
   SIGNAL_LABELS,
   type ContactPage,
   type ObservedFact,
@@ -149,9 +151,32 @@ if (!has('skip-contacts')) {
 const ranked = pool
   .map((prospect) => {
     const fresh = repos.sales.require(prospect.id);
-    const facts: ObservedFact[] = repos.sales.evidenceFor(prospect.id).map((e) => ({
+    const evidence = repos.sales.evidenceFor(prospect.id);
+    const facts: ObservedFact[] = evidence.map((e) => ({
       claim: e.claim, sourceUrl: e.sourceUrl, nature: e.nature,
     }));
+
+    // La phrase de personnalisation vient d'abord d'une citation littérale du
+    // site. Les résumés produits par la qualification sont à la troisième
+    // personne — « Propose un programme… » — et donnent « J'ai vu que propose
+    // un programme », qui annonce la machine dès la deuxième ligne.
+    const quoted =
+      evidence
+        .filter((e) => e.field.startsWith('signal:') && e.nature === 'observed' && e.sourceUrl)
+        .map((e) => ({ ...e, claim: cleanQuote(e.claim) }))
+        // Une citation qui commence par une norme ou un fragment de menu
+        // n'ouvre pas une conversation : on veut une phrase.
+        .filter((e) => readsAsSentence(e.claim))
+        // L'ordre des natures compte plus que la longueur : « nous cherchons
+        // des distributeurs » ouvre mieux qu'une liste de secteurs, même
+        // courte.
+        .sort((a, b) => {
+          const rank = (field: string) =>
+            ['signal:DISTRIBUTION', 'signal:SALES_HIRING', 'signal:EXPORT',
+             'signal:NEW_CAPACITY', 'signal:NAMED_MARKETS'].indexOf(field);
+          const byKind = rank(a.field) - rank(b.field);
+          return byKind !== 0 ? byKind : b.claim.length - a.claim.length;
+        })[0] ?? null;
     const score = scoreConversion({
       companyName: fresh.companyName,
       facts,
@@ -161,7 +186,15 @@ const ranked = pool
       qualificationTier: fresh.tier,
       whyFit: fresh.whyFit,
     });
-    return { prospect: fresh, score, verdict: isConversionReady(score) };
+    return {
+      prospect: fresh,
+      quoted,
+      score,
+      verdict: isConversionReady(score, {
+        domain: fresh.domain,
+        contactValue: fresh.contactEmail,
+      }),
+    };
   })
   .sort((a, b) => b.score.total - a.score.total);
 
@@ -177,7 +210,7 @@ const say = (text = '') => { lines.push(text); console.log(text); };
 say(`  ${c.bold}TOP ${Math.min(top, ranked.length)}${c.reset}  ${c.dim}trié par score de conversion${c.reset}\n`);
 
 let rank = 0;
-for (const { prospect, score, verdict } of ranked.slice(0, top)) {
+for (const { prospect, quoted, score, verdict } of ranked.slice(0, top)) {
   rank += 1;
   const best = score.components
     .filter((component) => component.points > 0 && component.basis)
@@ -197,17 +230,23 @@ for (const { prospect, score, verdict } of ranked.slice(0, top)) {
   say(`OBSERVED SIGNAL      ${best?.basis ?? '— aucun signal constaté'}`);
   say(`  SOURCE             ${best?.sourceUrl ?? '—'}`);
   say(`BEST CONTACT METHOD  ${method}${prospect.contactIntent ? ` · ${prospect.contactIntent}` : ''} · ${destination}`);
-  say(`PERSONALIZATION LINE ${score.personalization?.line ?? '— aucune, ne pas écrire'}`);
+  const personal = quoted
+    ? { line: quoted.claim, sourceUrl: quoted.sourceUrl }
+    : score.personalization;
+  say(`PERSONALIZATION LINE ${personal?.line ?? '— aucune, ne pas écrire'}`);
+  say(`  PERSO SOURCE       ${personal?.sourceUrl ?? '—'}`);
   say(`CONVERSION SCORE     ${score.total}${verdict.ready ? '' : `   ${c.amber}non prêt : ${verdict.blockers.join(' · ')}${c.reset}`}`);
   say('');
 
-  if (verdict.ready && score.personalization) {
+  if (verdict.ready && personal) {
     // Le brouillon n'existe que si la personnalisation est sourcée : un
     // « j'ai vu que… » inventé se repère en dix secondes.
     say('BROUILLON');
     say('  Bonjour,');
     say('');
-    say(`  J'ai vu que ${score.personalization.line.charAt(0).toLowerCase()}${score.personalization.line.slice(1)}.`);
+    // La citation est encadrée plutôt que reformulée : elle reste vraie mot
+    // pour mot, et l'encadrement fonctionne quelle que soit la phrase.
+    say(`  En parcourant votre site, j'ai relevé : « ${cleanQuote(personal.line)} »`);
     say('');
     say('  Je développe un service qui identifie et qualifie des entreprises B2B');
     say('  sur un marché précis, avec les sources associées.');

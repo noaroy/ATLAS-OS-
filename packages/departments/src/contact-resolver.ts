@@ -297,6 +297,16 @@ function normalisePhone(raw: string): string | null {
   // capital social, un numéro de sirène — pas un téléphone.
   if (/000/.test(digits)) return null;
   if (/^(\d)+$/.test(digits)) return null;
+  // « 01 02 03 04 05 » est le numéro que les intégrateurs laissent dans les
+  // gabarits. Une suite strictement croissante ou décroissante n'appelle
+  // personne.
+  const pairs = digits.match(/\d{2}/g) ?? [];
+  if (pairs.length >= 4) {
+    const ascending = pairs.every((pair, i) => i === 0 || Number(pair) === Number(pairs[i - 1]) + 1);
+    const descending = pairs.every((pair, i) => i === 0 || Number(pair) === Number(pairs[i - 1]) - 1);
+    if (ascending || descending) return null;
+  }
+  if (/^(?:0123456789|1234567890)/.test(digits)) return null;
   return phone;
 }
 

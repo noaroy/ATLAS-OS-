@@ -288,3 +288,24 @@ export {
   type MatchResult,
   type IncomingForMatch,
 } from './reply-matching.ts';
+
+export {
+  scoreConversion,
+  isConversionReady,
+  CONVERSION_MODEL,
+  CONVERSION_READY_THRESHOLD,
+  MIN_GROUNDED_DIMENSIONS,
+  type ConversionDimensionKey,
+  type ConversionDimension,
+  type ConversionInput,
+  type ConversionScore,
+  type ConversionComponent,
+  type ObservedFact,
+} from './sales-conversion.ts';
+
+export {
+  findGrowthSignals,
+  SIGNAL_LABELS,
+  type GrowthSignal,
+  type GrowthSignalKind,
+} from './growth-signals.ts';

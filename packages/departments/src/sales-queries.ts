@@ -106,6 +106,32 @@ export function planQueries(
   const [activity = 'fabricant', ...otherActivities] = activities;
   const region = vocabulary.regions[wave % Math.max(1, vocabulary.regions.length)] ?? 'France';
 
+  // ── Famille « besoin » : ceux qui écrivent qu'ils cherchent ──────────────
+  //
+  // Les trois autres familles trouvent des entreprises conformes au profil.
+  // Aucune ne trouve d'entreprises qui *cherchent des clients* — et le
+  // classement d'acquisition s'est heurté à ce vide : treize dossiers, zéro
+  // signal de croissance, un plafond à 52 sur 100.
+  //
+  // Ces formulations existent mot pour mot sur les sites qui recrutent des
+  // revendeurs ou des commerciaux. Les chercher revient à laisser l'entreprise
+  // déclarer son besoin elle-même, au lieu de le lui supposer.
+  const NEEDS = [
+    '"devenir distributeur"',
+    '"devenir revendeur"',
+    '"nous recherchons des distributeurs"',
+    '"rejoindre notre réseau" distributeurs',
+    '"technico-commercial" recrutement',
+  ];
+  for (const [i, phrase] of NEEDS.entries()) {
+    const offering = offerings[i % offerings.length]!;
+    plans.push({
+      query: `${phrase} ${offering} ${region}`,
+      family: 'besoin',
+      intent: `entreprises qui déclarent chercher : ${phrase}`,
+    });
+  }
+
   // ── Famille « métier » : qui fabrique quoi, et où ────────────────────────
   for (const offering of offerings) {
     plans.push({
@@ -138,7 +164,34 @@ export function planQueries(
     });
   }
 
-  return plans.slice(0, limit);
+  // Entrelacement plutôt que troncature.
+  //
+  // Ranger les familles bout à bout puis couper à `limit` supprimait les
+  // dernières entièrement : la famille « besoin » placée en fin n'aurait
+  // jamais tourné, celle du « site » a disparu dès qu'on l'a mise en tête.
+  // Un tour par famille garantit que chacune est représentée, et l'ordre des
+  // familles décide seulement de qui passe en premier.
+  const FAMILY_ORDER = ['besoin', 'metier', 'site', 'expansion'];
+  const buckets = new Map<string, QueryPlan[]>();
+  for (const plan of plans) {
+    const bucket = buckets.get(plan.family) ?? [];
+    bucket.push(plan);
+    buckets.set(plan.family, bucket);
+  }
+
+  const interleaved: QueryPlan[] = [];
+  for (let round = 0; interleaved.length < limit; round++) {
+    let added = false;
+    for (const family of FAMILY_ORDER) {
+      const plan = buckets.get(family)?.[round];
+      if (!plan) continue;
+      interleaved.push(plan);
+      added = true;
+      if (interleaved.length >= limit) break;
+    }
+    if (!added) break;
+  }
+  return interleaved;
 }
 
 /** Décale une liste sans la modifier. Rotation, pas mélange : reproductible. */

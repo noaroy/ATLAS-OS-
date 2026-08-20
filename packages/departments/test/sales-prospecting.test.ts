@@ -482,10 +482,32 @@ test('la rotation est bornée : aucune vague ne produit de requête vide', () =>
     assert.ok(plans.length > 0, `vague ${wave} sans requête`);
     for (const plan of plans) {
       assert.ok(plan.query.trim().length > 10, `vague ${wave} : requête vide`);
+      // La famille « besoin » cite des phrases exactes plutôt qu'un métier :
+      // c'est l'entreprise qui déclare, pas nous qui décrivons.
+      if (plan.family === 'besoin') continue;
       assert.ok(
         vocabulary.activities.some((a) => plan.query.includes(a)),
         `vague ${wave} : « ${plan.query} » sort du vocabulaire`,
       );
     }
   }
+});
+
+test('une famille cherche les entreprises qui déclarent un besoin', () => {
+  // Les familles « métier » et « site » trouvent des entreprises conformes au
+  // profil ; aucune ne trouvait celles qui cherchent des clients. Le
+  // classement d'acquisition a plafonné à 52 sur 100 faute de ce signal.
+  // Elle passe en tête : avec le plafond de huit requêtes du lot, placée en
+  // dernier elle était tronquée et n'aurait jamais tourné.
+  const plan = planQueries(undefined, 8, 0);
+  const besoin = plan.filter((p) => p.family === 'besoin');
+  assert.ok(besoin.length >= 2, 'la famille existe et survit à la troncature');
+  assert.equal(plan[0]!.family, 'besoin', 'et elle part la première');
+  // Les autres familles survivent aussi : le plan les entrelace au lieu de
+  // les ranger bout à bout puis de couper.
+  assert.ok(new Set(plan.map((p) => p.family)).size >= 3, 'aucune famille écrasée');
+  for (const plan of besoin) {
+    assert.ok(/"/.test(plan.query), 'une phrase exacte, pas un thème');
+  }
+  assert.ok(besoin.some((p) => p.query.includes('distributeur')));
 });

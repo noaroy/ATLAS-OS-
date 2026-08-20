@@ -293,6 +293,26 @@ export function isForeignDomain(domain: string | null | undefined): boolean {
   return FOREIGN_TLDS.some((tld) => host.endsWith(tld));
 }
 
+/**
+ * Les marques d'un groupe international, sur ses propres adresses.
+ *
+ * Getinge est sorti « prêt » à 61,6 : programme distributeurs réel, adresse
+ * publiée, secteurs nommés. C'est aussi un groupe médical suédois de plusieurs
+ * milliers de personnes. Le profil de cette campagne dit « PME française », et
+ * rien ne vérifiait la taille — la dimension `decisionSpeed` notait zéro sans
+ * pour autant disqualifier.
+ *
+ * Les chemins `/int/`, `/global/` et `/corporate/` n'existent que sur les sites
+ * qui servent plusieurs pays. Ce n'est pas une mesure d'effectif, mais c'est un
+ * fait observable, et il suffit à écarter ceux pour qui 49 € ne se décide pas
+ * en lisant un courriel.
+ */
+const MULTINATIONAL_PATHS = ['/int/', '/global/', '/corporate/', '/worldwide/', '/ww/'];
+
+export function looksMultinational(urls: readonly (string | null)[]): boolean {
+  return urls.some((url) => url != null && MULTINATIONAL_PATHS.some((path) => url.includes(path)));
+}
+
 export const CONVERSION_READY_THRESHOLD = 55;
 export const MIN_GROUNDED_DIMENSIONS = 3;
 

@@ -17,6 +17,7 @@ import { createRepositories } from '../packages/data/src/index.ts';
 import {
   scoreConversion,
   isForeignDomain,
+  looksMultinational,
   SIGNAL_LABELS,
   cleanQuote,
   type ObservedFact,
@@ -29,6 +30,11 @@ const flag = (name: string) =>
 const logger = createLogger({ level: 'error', pretty: false });
 const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
 const limit = Number(flag('top') ?? 10);
+/**
+ * Le plancher. Par défaut celui de la file d'attente ; `--min=55` demande le
+ * seuil de « prêt à démarcher », qui exige un signal de besoin réel.
+ */
+const floor = Number(flag('min') ?? 40);
 
 /** Un signal explicite, dans l'ordre où il ouvre une conversation. */
 const SIGNAL_PRIORITY: GrowthSignalKind[] = [
@@ -93,20 +99,26 @@ const queue = repos.sales
       .sort((a, b) => SIGNAL_PRIORITY.indexOf(a.kind) - SIGNAL_PRIORITY.indexOf(b.kind));
 
     const channel = writtenChannel(repos.sales.channelsFor(prospect.id));
-    return { prospect, score, signal: signals[0] ?? null, channel };
+    // Un groupe international n'est pas la cible : 49 € n'y décident personne.
+    const multinational = looksMultinational([
+      prospect.website, prospect.contactSourceUrl,
+      ...evidence.map((e) => e.sourceUrl),
+      ...repos.sales.channelsFor(prospect.id).map((c) => c.sourceUrl),
+    ]);
+    return { prospect, score, signal: signals[0] ?? null, channel, multinational };
   })
   // Les deux conditions : un signal explicite, et de quoi écrire.
   // Un plancher : sous quarante, le dossier n'a pas de quoi soutenir une
   // conversation, et compléter la liste jusqu'à dix la rendrait plus longue
   // sans la rendre meilleure.
-  .filter((entry) => entry.signal !== null && entry.channel.pick !== null && entry.score.total >= 40)
+  .filter((entry) => entry.signal !== null && entry.channel.pick !== null && entry.score.total >= floor && !entry.multinational)
   .sort((a, b) => b.score.total - a.score.total)
   .slice(0, limit);
 
 const lines: string[] = [];
 const say = (t = '') => { lines.push(t); console.log(t); };
 
-say(`FILE D'ATTENTE — ${queue.length} prospect(s)`);
+say(`FILE D'ATTENTE — ${queue.length} prospect(s) · score minimum ${floor}`);
 say(`Jamais contactés · canal écrit uniquement · signal relevé sur leur site`);
 say('');
 

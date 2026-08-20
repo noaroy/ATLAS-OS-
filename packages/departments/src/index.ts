@@ -294,6 +294,7 @@ export {
   scoreConversion,
   isConversionReady,
   isForeignDomain,
+  looksMultinational,
   CONVERSION_MODEL,
   CONVERSION_READY_THRESHOLD,
   MIN_GROUNDED_DIMENSIONS,

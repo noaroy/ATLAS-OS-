@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   scoreConversion,
   isConversionReady,
+  looksMultinational,
   CONVERSION_MODEL,
   type ObservedFact,
 } from '../src/sales-conversion.ts';
@@ -240,5 +241,16 @@ describe('les faux signaux de la file d’attente', () => {
         'https://usine.fr/mentions-legales/'),
     ]);
     assert.deepEqual(signals, []);
+  });
+});
+
+describe('la taille de l’entreprise', () => {
+  test('un chemin corporate international disqualifie', () => {
+    // Getinge est sorti « prêt » à 61,6 : programme distributeurs réel,
+    // adresse publiée, secteurs nommés — et plusieurs milliers de salariés.
+    assert.equal(looksMultinational(['https://www.getinge.com/int/contact/']), true);
+    assert.equal(looksMultinational(['https://x.com/global/about']), true);
+    assert.equal(looksMultinational([null, 'https://usine.fr/contact']), false);
+    assert.equal(looksMultinational(['https://usine.fr/international']), false, 'un mot n’est pas un chemin');
   });
 });

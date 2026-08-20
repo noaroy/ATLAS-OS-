@@ -299,3 +299,30 @@ describe('la boîte qui porte le nom de la maison', () => {
     assert.equal(classifyContactIntent({ value: 'jd@usine.fr', kind: 'EMAIL' }), 'PERSONAL');
   });
 });
+
+describe('la boîte d’une unité au sein d’un groupe', () => {
+  test('marque + activité est une adresse d’organisation', () => {
+    // « fadilec-automation@fauche.com » restait UNKNOWN, donc jamais retenue,
+    // alors que c'est la boîte de l'unité qui fait le travail.
+    assert.equal(
+      classifyContactIntent({
+        value: 'fadilec-automation@fauche.com', kind: 'EMAIL', officialDomain: 'fadilec-groupe.fr',
+      }),
+      'GENERAL',
+    );
+  });
+
+  test('mais la nature de la boîte l’emporte sur l’appartenance', () => {
+    for (const [address, expected] of [
+      ['fadilec-services@fauche.com', 'TECHNICAL_SUPPORT'],
+      ['fadilec-support@fauche.com', 'TECHNICAL_SUPPORT'],
+      ['fadilec-juridique@fauche.com', 'LEGAL'],
+    ] as const) {
+      assert.equal(
+        classifyContactIntent({ value: address, kind: 'EMAIL', officialDomain: 'fadilec-groupe.fr' }),
+        expected,
+        address,
+      );
+    }
+  });
+});

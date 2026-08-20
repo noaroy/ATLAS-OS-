@@ -24,10 +24,22 @@ import {
 
 const logger = createLogger({ level: 'error', pretty: false });
 
-const TARGETS = [
-  { name: 'Groupe SPL', domain: 'spl-group.eu', website: 'https://www.spl-group.eu' },
-  { name: 'STP Concept', domain: 'stp-concept.com', website: 'https://stp-concept.com' },
-];
+/**
+ * Les cibles viennent de la ligne de commande — `nom=domaine` — pour qu'une
+ * nouvelle paire n'exige pas de modifier ce fichier.
+ */
+const TARGETS = process.argv
+  .slice(2)
+  .filter((a) => a.includes('='))
+  .map((arg) => {
+    const [name, domain] = arg.split('=');
+    return { name: name!, domain: domain!, website: `https://${domain}` };
+  });
+
+if (TARGETS.length === 0) {
+  console.error('usage: written-channel "Nom=domaine.fr" ["Autre=domaine.com"]');
+  process.exit(1);
+}
 
 /** Des chemins supplémentaires : une adresse commerciale se cache plus loin. */
 const EXTRA_PATHS = [

@@ -171,6 +171,30 @@ export function classifyContactIntent(input: {
     .filter((b) => b.length >= 2);
   if (brands.includes(mailbox)) return 'GENERAL';
 
+  // Une marque suivie d'un service — `fadilec-automation@fauche.com` — est la
+  // boîte d'une unité, pas d'une personne. Elle restait UNKNOWN, donc jamais
+  // retenue, alors que c'est le bon interlocuteur écrit.
+  //
+  // L'exception compte autant que la règle : si ce qui suit la marque désigne
+  // un support ou un service juridique, la nature de la boîte l'emporte sur
+  // son appartenance. `fadilec-services@` reste un après-vente.
+  // `normalise` a retiré les tirets : « fadilec-automation » est arrivé ici
+  // sous la forme « fadilecautomation », si bien qu'un préfixe cherché avec
+  // son séparateur ne correspondait jamais.
+  const brandPrefixed = brands.find(
+    (brand) => brand.length >= 3 && mailbox.startsWith(brand) && mailbox.length > brand.length + 2,
+  );
+  if (brandPrefixed) {
+    const suffix = mailbox.slice(brandPrefixed.length).replace(/^[.-]/, '');
+    const reserved = MAILBOX_INTENTS.filter((rule) =>
+      rule.intent === 'TECHNICAL_SUPPORT' || rule.intent === 'LEGAL' ||
+      rule.intent === 'PRIVACY' || rule.intent === 'WEBMASTER');
+    const conflict = reserved.find((rule) =>
+      rule.mailboxes.some((m) => suffix === m || (m.length >= 6 && suffix.includes(m))));
+    if (conflict) return conflict.intent;
+    return 'GENERAL';
+  }
+
   // La forme d'un nom passe avant le sous-mot : `c.serviceau` a la forme
   // « initiale point patronyme », et cela vaut quelles que soient les lettres
   // du patronyme. Un mot entier, lui, a déjà été reconnu au-dessus.

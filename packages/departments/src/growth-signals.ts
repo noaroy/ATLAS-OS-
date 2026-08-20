@@ -232,6 +232,10 @@ const NAVIGATION = [
   'contactez-nous', 'en savoir plus', 'lire la suite', 'accueil', 'menu',
   'nos services', 'voir tous', 'demander un devis', 'newsletter',
   'suivez-nous', 'plan du site', 'retour', 'cliquez',
+  // Le squelette d'une page : relevé pour de vrai comme « fait observé » —
+  // « Passer au contenu Rechercher: Qui sommes nous ? »
+  'passer au contenu', 'aller au contenu', 'rechercher', 'qui sommes nous',
+  'mon compte', 'panier', 'connexion', 'inscription', 'partager',
 ];
 
 /**

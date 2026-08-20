@@ -419,6 +419,7 @@ export function resolveContacts(input: {
       if (!email || emails.has(email)) continue;
       const intent = classifyContactIntent({
         value: email, kind: 'EMAIL', role: person.role, sourceUrl: page.url,
+        officialDomain: input.officialDomain,
       });
       emails.set(email, {
         type: 'EMAIL',

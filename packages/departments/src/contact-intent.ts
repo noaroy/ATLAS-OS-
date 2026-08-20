@@ -131,6 +131,8 @@ export function classifyContactIntent(input: {
   role?: string | null;
   /** L'adresse de la page où la coordonnée a été lue. */
   sourceUrl?: string | null;
+  /** Le domaine officiel de l'entreprise, quand il est connu. */
+  officialDomain?: string | null;
 }): ContactIntent {
   if (input.kind === 'PHONE') return 'GENERAL';
   if (input.kind === 'FORM') {
@@ -155,6 +157,20 @@ export function classifyContactIntent(input: {
   for (const rule of MAILBOX_INTENTS) {
     if (tokens.some((token) => rule.mailboxes.includes(token))) return rule.intent;
   }
+  // Une boîte qui porte le nom de la maison est l'accueil de la maison.
+  // `spl@spl-france.com` a été lu comme des initiales — trois lettres — alors
+  // que c'est l'adresse générale de SPL. La règle des initiales ne doit pas
+  // s'appliquer à la marque elle-même.
+  const brandOf = (host: string): string => {
+    const parts = host.toLowerCase().replace(/^www\./, '').split('.');
+    const root = parts.length >= 2 ? parts[parts.length - 2]! : (parts[0] ?? '');
+    return root.split('-')[0] ?? '';
+  };
+  const ownHost = input.value.split('@')[1] ?? '';
+  const brands = [brandOf(ownHost), input.officialDomain ? brandOf(input.officialDomain) : '']
+    .filter((b) => b.length >= 2);
+  if (brands.includes(mailbox)) return 'GENERAL';
+
   // La forme d'un nom passe avant le sous-mot : `c.serviceau` a la forme
   // « initiale point patronyme », et cela vaut quelles que soient les lettres
   // du patronyme. Un mot entier, lui, a déjà été reconnu au-dessus.

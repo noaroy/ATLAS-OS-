@@ -276,3 +276,26 @@ describe('les deux défauts trouvés en reprenant le lot 005', () => {
     assert.equal(outcome.selected?.value, 'contact@x.fr');
   });
 });
+
+describe('la boîte qui porte le nom de la maison', () => {
+  test('spl@spl-france.com est l’accueil, pas des initiales', () => {
+    // Trois lettres : la règle des initiales s'appliquait, et l'adresse
+    // générale de SPL sortait « personnelle », donc non retenue.
+    assert.equal(
+      classifyContactIntent({ value: 'spl@spl-france.com', kind: 'EMAIL' }),
+      'GENERAL',
+    );
+    assert.equal(
+      classifyContactIntent({
+        value: 'spl@autre-hebergeur.fr', kind: 'EMAIL', officialDomain: 'spl-group.eu',
+      }),
+      'GENERAL',
+      'la marque du domaine officiel compte aussi',
+    );
+  });
+
+  test('de vraies initiales restent personnelles', () => {
+    assert.equal(classifyContactIntent({ value: 'sg@mecapole.fr', kind: 'EMAIL' }), 'PERSONAL');
+    assert.equal(classifyContactIntent({ value: 'jd@usine.fr', kind: 'EMAIL' }), 'PERSONAL');
+  });
+});

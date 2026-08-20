@@ -417,6 +417,22 @@ export function resolveContacts(input: {
     for (const candidate of raw) {
       const email = cleanEmail(candidate);
       if (!email || emails.has(email)) continue;
+      // Les mentions légales nomment l'éditeur du site. Quand l'adresse qu'on
+      // y trouve porte une marque sans rapport avec l'entreprise, c'est celle
+      // de l'agence web — `contact@quentinbernard.fr` sur cim-atlantique.com.
+      // Écrire là, c'est écrire au prestataire de quelqu'un d'autre.
+      const onLegalPage = /(mention|legal|impressum|cgv|cgu)/i.test(page.url);
+      const foreignBrand = !brandsRelated(email.split('@')[1] ?? '', input.officialDomain);
+      if (onLegalPage && foreignBrand) {
+        skipped.push({
+          url: page.url,
+          reason:
+            `« ${email} » porte une marque étrangère à ${input.officialDomain} et figure ` +
+            `dans les mentions légales : c'est l'éditeur du site, pas l'entreprise.`,
+        });
+        continue;
+      }
+
       const intent = classifyContactIntent({
         value: email, kind: 'EMAIL', role: person.role, sourceUrl: page.url,
         officialDomain: input.officialDomain,

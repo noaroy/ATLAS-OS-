@@ -401,3 +401,35 @@ describe('les numéros qui n’appellent personne', () => {
     assert.equal(resolution.publicPhones.length, 1);
   });
 });
+
+describe('l’adresse de l’agence web', () => {
+  test('une marque étrangère dans les mentions légales est l’éditeur du site', () => {
+    // Relevé pour de vrai : « contact@quentinbernard.fr » sur
+    // cim-atlantique.com. Écrire là, c'est écrire au prestataire.
+    const resolution = resolveContacts({
+      officialDomain: 'cim-atlantique.com',
+      pages: [
+        {
+          url: 'https://www.cim-atlantique.com/fr/mentions-legales/',
+          html: '<p>Réalisation du site : <a href="mailto:contact@quentinbernard.fr">contact@quentinbernard.fr</a></p>',
+        },
+      ],
+    });
+    assert.deepEqual(resolution.publicEmails, []);
+    assert.equal(resolution.method, 'NONE');
+    assert.match(resolution.skipped[0]!.reason, /éditeur du site/);
+  });
+
+  test('mais l’adresse de la maison y reste valable', () => {
+    const resolution = resolveContacts({
+      officialDomain: 'usine.fr',
+      pages: [
+        {
+          url: 'https://usine.fr/mentions-legales/',
+          html: '<p>Contact : <a href="mailto:contact@usine.fr">contact@usine.fr</a></p>',
+        },
+      ],
+    });
+    assert.equal(resolution.publicEmails[0]?.value, 'contact@usine.fr');
+  });
+});

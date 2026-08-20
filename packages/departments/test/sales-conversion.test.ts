@@ -219,3 +219,26 @@ describe('ce qui a failli partir dans un vrai courriel', () => {
     assert.ok(verdict.blockers.some((b) => b.includes('canal de contact utilisable')));
   });
 });
+
+describe('les faux signaux de la file d’attente', () => {
+  const page = (html: string, url = 'https://usine.fr/') => ({ url, html });
+
+  test('un menu recopié n’est pas une phrase du site', () => {
+    // Relevé sur apollo-meca : « En savoir plus Nos clients Accueil
+    // Développement industriel … Qui suis-je ? Contact ».
+    const signals = findGrowthSignals([
+      page('<p>En savoir plus Nos clients Accueil Développement industriel Concepteur de Machines Spéciales Projets Le bureau d’études Qui suis-je ? Contact</p>'),
+    ]);
+    assert.deepEqual(signals, []);
+  });
+
+  test('une phrase de conformité RGPD n’est pas un signal export', () => {
+    // Relevé sur efa-controls : « Il existe une décision d'adéquation de la
+    // Commission européenne (certification Privacy Framework). »
+    const signals = findGrowthSignals([
+      page("<p>Il existe une décision d'adéquation de la Commission européenne (certification Privacy Framework) pour ce transfert.</p>",
+        'https://usine.fr/mentions-legales/'),
+    ]);
+    assert.deepEqual(signals, []);
+  });
+});

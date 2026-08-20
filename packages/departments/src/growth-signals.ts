@@ -137,6 +137,10 @@ const NOT_A_SIGNAL = [
   // please select » a été retenu comme personnalisation pour Stabilus.
   'required field', 'champ obligatoire', 'please select', 'veuillez selectionner',
   'type of request', 'votre message', 'nom prenom', 'saisissez',
+  // Relevé sur efa-controls : une phrase de conformité citée comme signal
+  // commercial. « Europe » y figure, et rien d'autre.
+  'privacy framework', 'commission europeenne', 'decision d adequation',
+  'sous-traitant au sens', 'responsable de traitement', 'finalite du traitement',
 ];
 
 /**
@@ -199,6 +203,10 @@ export function findGrowthSignals(
         if (/&[a-z]+;|&#\d+;/i.test(quote)) continue;
         const foldedQuote = fold(quote);
         if (NOT_A_SIGNAL.some((bad) => foldedQuote.includes(bad))) continue;
+        // La même exigence que pour une citation d'ouverture : ce qui n'est
+        // pas une phrase n'est pas un signal. La garde vivait à côté du chemin
+        // qu'elle devait protéger.
+        if (!readsAsSentence(cleanQuote(quote))) continue;
 
         found.push({ kind: pattern.kind, quote: cleanQuote(quote), marker, sourceUrl: page.url });
         counts.set(pattern.kind, (counts.get(pattern.kind) ?? 0) + 1);
@@ -232,6 +240,7 @@ const NAVIGATION = [
   'contactez-nous', 'en savoir plus', 'lire la suite', 'accueil', 'menu',
   'nos services', 'voir tous', 'demander un devis', 'newsletter',
   'suivez-nous', 'plan du site', 'retour', 'cliquez',
+  'qui suis-je', 'nos realisations', 'nos produits', 'notre equipe',
   // Le squelette d'une page : relevé pour de vrai comme « fait observé » —
   // « Passer au contenu Rechercher: Qui sommes nous ? »
   'passer au contenu', 'aller au contenu', 'rechercher', 'qui sommes nous',
@@ -254,6 +263,14 @@ export function readsAsSentence(quote: string): boolean {
 
   const capitalised = words.filter((w) => /^[A-ZÀ-Ü]/.test(w)).length;
   if (capitalised / words.length > 0.4) return false;
+
+  // Un menu recopié en ligne : « En savoir plus Nos clients Accueil
+  // Développement industriel … Qui suis-je ? Contact ». Aucun de ces mots
+  // n'est disqualifiant seul ; trois ensemble le sont.
+  const MENU_WORDS = ['accueil', 'contact', 'nos clients', 'en savoir plus', 'projets',
+    'le bureau', 'qui suis', 'mentions', 'blog', 'actualites', 'services'];
+  const hits = MENU_WORDS.filter((w) => quote.toLowerCase().includes(w)).length;
+  if (hits >= 3) return false;
   // Une phrase contient au moins un mot de liaison : sans cela, c'est une
   // énumération.
   return /\b(de|des|du|le|la|les|et|en|pour|dans|avec|nos|notre|qui|que)\b/i.test(quote);

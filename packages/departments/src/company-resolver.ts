@@ -488,6 +488,20 @@ const OUT_OF_SCOPE_TRADES: ReadonlyArray<{ words: string[]; label: string }> = [
     ],
     label: 'agence de communication, de marketing ou numérique',
   },
+  {
+    // Les requêtes « besoin » cherchent les pages qui parlent de distributeurs
+    // et de prospection. Elles ramènent donc, par construction, les sociétés
+    // qui *vendent* de la prospection — nos concurrents, et des prestataires,
+    // pas des fabricants. C'est Industriailes une troisième fois.
+    words: [
+      'agence de prospection', 'prospection commerciale', 'externalisation commerciale',
+      'force de vente externalisee', 'force de vente externalisée',
+      'organisation commerciale', 'conseil commercial', 'coaching commercial',
+      'formation commerciale', 'developpement commercial externalise',
+      'generation de leads', 'lead generation', 'closing', 'phoning',
+    ],
+    label: 'prestataire de prospection ou de développement commercial',
+  },
   { words: ['cabinet de conseil', 'cabinet conseil', 'consulting', 'conseil en strategie'], label: 'cabinet de conseil' },
   { words: ['cabinet de recrutement', 'interim', 'travail temporaire'], label: 'recrutement ou intérim' },
   { words: ['avocat', 'expert-comptable', 'notaire', 'assurance', 'courtier'], label: 'profession réglementée ou service financier' },

@@ -454,3 +454,22 @@ test('un titre de page impératif n’est pas une raison sociale', () => {
   assert.equal(looksLikePageTitle('CIRMECA'), false);
   assert.equal(looksLikePageTitle('Groupe SPL'), false);
 });
+
+test('un prestataire de prospection n’est pas un fabricant', () => {
+  // Les requêtes « besoin » ramènent par construction les sociétés qui vendent
+  // de la prospection : elles parlent de distributeurs et de développement
+  // commercial mieux que personne.
+  for (const name of [
+    'Agence de prospection commerciale B2B à Grenoble',
+    'Organisation Commerciale PME',
+    'Force de vente externalisée pour l’industrie',
+    'Conseil commercial et génération de leads',
+  ]) {
+    assert.equal(
+      icpStatus({ companyName: name }).status,
+      'OUT_OF_ICP',
+      `« ${name} » doit sortir du profil`,
+    );
+  }
+  assert.equal(icpStatus({ companyName: 'CIRMECA', snippet: 'fabricant de machines spéciales' }).status !== 'OUT_OF_ICP', true);
+});

@@ -98,6 +98,13 @@ const queue = repos.sales
       }))
       .sort((a, b) => SIGNAL_PRIORITY.indexOf(a.kind) - SIGNAL_PRIORITY.indexOf(b.kind));
 
+    // Deux faits observés sourcés au minimum : un seul se conteste, deux
+    // montrent qu'on a lu le site. La file ne le vérifiait pas — le score
+    // pouvait franchir le plancher sur un unique signal.
+    const groundedFacts = evidence.filter(
+      (e) => e.nature === 'observed' && Boolean(e.sourceUrl),
+    ).length;
+
     const channel = writtenChannel(repos.sales.channelsFor(prospect.id));
     // Un groupe international n'est pas la cible : 49 € n'y décident personne.
     const multinational = looksMultinational([
@@ -105,13 +112,13 @@ const queue = repos.sales
       ...evidence.map((e) => e.sourceUrl),
       ...repos.sales.channelsFor(prospect.id).map((c) => c.sourceUrl),
     ]);
-    return { prospect, score, signal: signals[0] ?? null, channel, multinational };
+    return { prospect, score, signal: signals[0] ?? null, channel, multinational, groundedFacts };
   })
   // Les deux conditions : un signal explicite, et de quoi écrire.
   // Un plancher : sous quarante, le dossier n'a pas de quoi soutenir une
   // conversation, et compléter la liste jusqu'à dix la rendrait plus longue
   // sans la rendre meilleure.
-  .filter((entry) => entry.signal !== null && entry.channel.pick !== null && entry.score.total >= floor && !entry.multinational)
+  .filter((entry) => entry.signal !== null && entry.channel.pick !== null && entry.score.total >= floor && !entry.multinational && entry.groundedFacts >= 2)
   .sort((a, b) => b.score.total - a.score.total)
   .slice(0, limit);
 

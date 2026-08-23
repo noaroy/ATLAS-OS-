@@ -473,3 +473,18 @@ test('un prestataire de prospection n’est pas un fabricant', () => {
   }
   assert.equal(icpStatus({ companyName: 'CIRMECA', snippet: 'fabricant de machines spéciales' }).status !== 'OUT_OF_ICP', true);
 });
+
+test('un intitulé de métier ne nomme aucune entreprise', () => {
+  // « Tableautier électrique industriel » décrit un savoir-faire. Le titre du
+  // résultat de recherche le ramène souvent, et il devenait la raison sociale.
+  for (const title of [
+    'Tableautier électrique industriel',
+    'Distributeur matériel électrique',
+    'Grossiste fournitures industrielles',
+    'Installateur intégrateur automatisme',
+  ]) {
+    assert.equal(isGenericDescriptor(title), true, `« ${title} » ne nomme personne`);
+  }
+  assert.equal(isGenericDescriptor('ARMEL'), false);
+  assert.equal(isGenericDescriptor('TEC Electrotechnique'), false);
+});

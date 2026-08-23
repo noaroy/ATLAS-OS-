@@ -259,6 +259,13 @@ const TRADE_WORDS = new Set([
   'service', 'services', 'entreprise', 'entreprises', 'societe', 'societes',
   'specialiste', 'expert', 'specialisee', 'professionnel', 'professionnels',
   'secteur', 'secteurs', 'marche', 'marches', 'domaine', 'activite', 'activites',
+  // Les intitules de metier : « Tableautier electrique industriel » nomme un
+  // savoir-faire, pas une societe. Le titre du resultat les ramene souvent.
+  'tableautier', 'electrique', 'electriques', 'electricite', 'electronique',
+  'distributeur', 'distributeurs', 'grossiste', 'fournisseur', 'fournisseurs',
+  'negoce', 'revendeur', 'revendeurs', 'installateur', 'integrateur',
+  'fourniture', 'fournitures', 'approvisionnement', 'vente', 'ventes',
+  'automatisme', 'automatismes', 'robotique', 'usinage', 'chaudronnerie',
   'de', 'du', 'des', 'la', 'le', 'les', 'et', 'en', 'pour', 'aux', 'au',
   'sur', 'dans', 'avec', 'par', 'france', 'francais', 'francaise',
 ]);

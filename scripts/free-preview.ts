@@ -38,44 +38,63 @@ const c = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[32m'
  */
 const BRIEFS = [
   {
-    client: 'ACRN',
-    clientDomain: 'acrn.fr',
-    sells: 'équipements de mesure de couple, de force et de test d’étanchéité d’emballages',
-    fit: 'ce sont exactement les opérations qu’ACRN permet de contrôler',
+    client: 'Ardes Solution',
+    clientDomain: 'ardes-solution.com',
+    sells: 'identification animale, boucles RFID, materiel d’injection et marquage laser',
+    fit: 'ce sont exactement les circuits par lesquels ses produits se vendent',
     header:
-      'Ces trois entreprises conditionnent en emballage souple : leurs soudures et leurs ' +
-      'scellages doivent être contrôlés. Chacune le dit sur son propre site.',
+      'Ces trois entreprises distribuent du materiel d’elevage ou veterinaire en France. ' +
+      'Chacune le dit sur son propre site.',
     queries: [
-      'fabricant doypack sachets souples conditionnement France',
-      'conditionnement agroalimentaire sachets souples fabricant France',
-      'flaconnage aérosol conditionnement cosmétique fabricant France',
-      'fabricant emballage souple soudure thermoscellage France',
+      'negoce agricole distribution materiel elevage France',
+      'centrale achat veterinaire distribution France',
+      'cooperative agricole distribution materiel elevage adherents',
+      'grossiste produits veterinaires elevage France',
     ],
-    // Les mots qui prouvent le besoin : ils désignent ce qu'ACRN contrôle.
     proof: [
-      'doypack', 'sachet souple', 'sachets souples', 'thermoscellage', 'operculage',
-      'etancheite', 'soudure', 'scellage', 'flaconnage', 'aerosol', 'emballage souple',
-      'conditionnement', 'controle qualite', 'agroalimentaire', 'cosmetique',
+      'elevage', 'eleveur', 'veterinaire', 'boucle', 'identification animale',
+      'bovin', 'ovin', 'caprin', 'porcin', 'agricole', 'cheptel', 'troupeau',
+      'materiel d elevage', 'sante animale',
     ],
   },
   {
-    client: 'BMJ Electronics',
-    clientDomain: 'bmjelec.com',
-    sells: 'stations de brasage, robots de brasage et outillage d’atelier électronique',
-    fit: 'ce sont exactement les postes que BMJ Electronics équipe',
+    client: 'AeroXSense',
+    clientDomain: 'aeroxsense.com',
+    sells: 'protection incendie par aerosol condense pour tableaux et armoires electriques',
+    fit: 'ce sont exactement les equipements que ses generateurs protegent',
     header:
-      'Ces trois entreprises assemblent des cartes électroniques : brasage, CMS, câblage. ' +
-      'Ce sont les postes que BMJ équipe. Chacune le dit sur son propre site.',
+      'Ces trois entreprises fabriquent ou distribuent des tableaux et armoires electriques. ' +
+      'Chacune le dit sur son propre site.',
     queries: [
-      'sous-traitance électronique assemblage cartes France',
-      'fabrication cartes électroniques sous-traitant France',
-      'atelier production électronique câblage France',
-      'EMS électronique prototypage cartes France',
+      'tableautier armoires electriques industrielles France',
+      'fabricant tableaux electriques basse tension France',
+      'distributeur materiel electrique industriel France',
+      'installateur armoires electriques automatisme France',
     ],
     proof: [
-      'carte electronique', 'cartes electroniques', 'brasage', 'soudure', 'cms',
-      'assemblage electronique', 'cablage', 'sous-traitance electronique',
-      'prototypage', 'circuit imprime', 'atelier', 'production electronique',
+      'tableau electrique', 'tableaux electriques', 'armoire electrique',
+      'armoires electriques', 'tableautier', 'basse tension', 'coffret electrique',
+      'materiel electrique', 'installation electrique', 'automatisme',
+    ],
+  },
+  {
+    client: 'Deleo',
+    clientDomain: 'deleo.fr',
+    sells: 'appareils de soins esthetiques et dispositifs medicaux — cryolipolyse, lasers, radiofrequence',
+    fit: 'ce sont exactement les etablissements qui achetent ses appareils',
+    header:
+      'Ces trois entreprises distribuent ou installent du materiel esthetique professionnel ' +
+      'en France. Chacune le dit sur son propre site.',
+    queries: [
+      'distributeur materiel esthetique professionnel France',
+      'fournisseur appareils medecine esthetique France',
+      'grossiste equipement institut de beaute France',
+      'distributeur laser esthetique dispositif medical France',
+    ],
+    proof: [
+      'esthetique', 'institut de beaute', 'medecine esthetique', 'dermatologie',
+      'cabine', 'soin du corps', 'amincissement', 'epilation', 'laser',
+      'dispositif medical', 'materiel esthetique', 'spa',
     ],
   },
 ];

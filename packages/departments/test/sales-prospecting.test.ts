@@ -213,6 +213,8 @@ describe('l’approche ne se personnalise que sur un fait réel', () => {
     evidenceId: 'sev_1',
     claim:
       'Le site indique rechercher des distributeurs pour accompagner le développement export.',
+    // Le message porte l'interprétation ; la citation exacte reste la preuve.
+    normalizedClaim: 'Atelier Mécanique Durand recherche des distributeurs à l’export',
     sourceUrl: 'https://atelier-durand.fr/partenaires',
     nature: 'observed',
     ...over,
@@ -254,19 +256,31 @@ describe('l’approche ne se personnalise que sur un fait réel', () => {
     assert.equal(outcome.draft, null);
   });
 
-  test('le message cite bien le fait, pas une paraphrase', () => {
+  test('le message porte l’observation, ancrée sur le fait', () => {
+    /*
+     * Le message portait la citation exacte, collée après « j'ai relevé ceci,
+     * publié sur votre site : » — une forme mécanique qui se reconnaît d'une
+     * boîte à l'autre. Il porte désormais l'interprétation, et
+     * `personalizationIsGrounded` vérifie que cette observation vient bien du
+     * fait retenu. La citation exacte reste la preuve, stockée et visible dans
+     * Approvals.
+     */
     const outcome = draftWith([fact()]);
-    const excerpt = trimSentence(fact().claim);
-    assert.ok(outcome.draft!.messageShort.includes(excerpt));
-    assert.ok(outcome.draft!.messageEmail.includes(excerpt));
+    assert.equal(personalizationIsGrounded(outcome.draft!), true);
+    assert.match(outcome.draft!.messageEmail, /recherche des distributeurs à l’export/);
+    assert.doesNotMatch(outcome.draft!.messageEmail, /j'ai relevé ceci/i);
   });
 
-  test('le courriel cite l’adresse de la source', () => {
-    // Le destinataire doit pouvoir vérifier en un clic ce qu'on prétend avoir
-    // vu — c'est l'argument central de l'offre, il doit valoir pour le message
-    // lui-même.
+  test('la source reste attachée au brouillon, hors du texte', () => {
+    /*
+     * L'adresse était collée dans le corps, sous une ligne « Source : ». La
+     * politique d'humanisation la retire du message — une URL brute après
+     * chaque phrase se lit comme un rapport — mais elle ne disparaît pas : le
+     * brouillon la porte, et Approvals l'affiche.
+     */
     const outcome = draftWith([fact()]);
-    assert.match(outcome.draft!.messageEmail, /https:\/\/atelier-durand\.fr\/partenaires/);
+    assert.equal(outcome.draft!.sourceUsedForPersonalization, 'https://atelier-durand.fr/partenaires');
+    assert.doesNotMatch(outcome.draft!.messageEmail, /https?:\/\//);
   });
 
   test('le fait le plus spécifique est retenu', () => {

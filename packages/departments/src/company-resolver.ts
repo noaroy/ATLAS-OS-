@@ -25,6 +25,9 @@
  *
  * Aucun appel au modèle avant que les trois aient répondu.
  */
+import { countryFit } from './country-evidence.ts';
+import { ATLAS_SALES_ICP } from './sales-icp.ts';
+
 
 export type PageType =
   /** Le site d'une entreprise, qui parle d'elle-même. */
@@ -463,7 +466,7 @@ function cleanTitle(title: string): string {
 
 // ─── Profil ─────────────────────────────────────────────────────────────────
 
-export type IcpStatus = 'MATCH' | 'OUT_OF_ICP' | 'UNKNOWN';
+export type IcpStatus = 'MATCH' | 'OUT_OF_ICP' | 'UNKNOWN' | 'NEEDS_VERIFICATION';
 
 export interface IcpDecision {
   status: IcpStatus;
@@ -538,8 +541,41 @@ export function icpStatus(input: {
   snippet?: string | null;
   industry?: string | null;
   country?: string | null;
+  /** Les pays du profil. Par defaut ceux de l'ICP declare. */
+  acceptedCountries?: readonly string[];
 }): IcpDecision {
   const haystack = norm([input.companyName, input.industry, input.snippet].filter(Boolean).join(' '));
+
+  /*
+   * Le pays, enfin lu.
+   *
+   * Cette fonction recevait `country` depuis le premier jour et ne l'ouvrait
+   * jamais : le profil annoncait « France, Belgique, Suisse » et ne verifiait
+   * que le metier. Deux defauts se couvraient l'un l'autre -- le lot ecrivait
+   * « France » sans preuve, et le filtre ne l'aurait de toute facon pas lu.
+   * Corriger l'un sans l'autre n'aurait rien change.
+   *
+   * Le pays tranche AVANT le metier : un fabricant chinois est un fabricant,
+   * et le reconnaitre comme tel avant de regarder ou il se trouve donnait
+   * exactement le faux positif qu'on cherche a supprimer.
+   */
+  const pays = countryFit(input.country, input.acceptedCountries ?? ATLAS_SALES_ICP.countries);
+  if (pays.fit === 'OUT_OF_SCOPE') {
+    return { status: 'OUT_OF_ICP', reason: pays.reason };
+  }
+  /*
+   * Un pays inconnu ne tranche pas ICI, et c'est deliberé.
+   *
+   * Ce tri s'execute a la decouverte, sur un titre et un extrait : aucune page
+   * n'a encore ete lue, donc aucun pays ne peut avoir ete etabli. Refuser tout
+   * candidat sans pays reviendrait a n'en retenir aucun -- la premiere version
+   * de cette garde faisait exactement cela, et douze tests d'integration l'ont
+   * dit avant qu'un cycle ne le decouvre.
+   *
+   * L'inconnu est donc porte plus loin, jusqu'a `checkPriorityEligibility`, qui
+   * s'execute apres l'enrichissement : la, les pages ont ete lues, le pays a pu
+   * etre etabli, et son absence redevient une raison de ne pas ecrire.
+   */
 
   const outOfScope = OUT_OF_SCOPE_TRADES.find((t) => t.words.some((w) => haystack.includes(norm(w))));
   if (outOfScope) {
@@ -592,6 +628,9 @@ export function checkPriorityEligibility(input: {
   score: number;
   scoreThreshold: number;
   hasSourcedPersonalization: boolean;
+  /** Le pays etabli sur preuve, ou null. Jamais suppose. */
+  country?: string | null;
+  acceptedCountries?: readonly string[];
 }): PriorityCheck {
   const blockers: string[] = [];
 
@@ -615,6 +654,32 @@ export function checkPriorityEligibility(input: {
   }
   if (input.icp !== 'MATCH') {
     blockers.push(`profil ${input.icp} : seul MATCH peut être prioritaire`);
+  }
+
+  /*
+   * Le pays, exigé ici et pas avant.
+   *
+   * A ce stade les pages ont ete lues : si aucune ne publie d'adresse, d'
+   * identifiant national ni de metadonnee de pays, l'entreprise reste non
+   * localisee -- et on ne demarche pas une entreprise dont on ignore le pays
+   * quand le profil en nomme trois.
+   *
+   * Le defaut d'origine ecrivait « France » pour tout le monde : Zhejiang NPC
+   * Machinery et Diversitech Equipment & Sales sont ainsi devenues eligibles.
+   */
+  /*
+   * Le pays est porte par l'identite resolue, pas par un champ parallele.
+   *
+   * Le lire ailleurs creait une seconde source de verite : un dossier dont
+   * l'identite disait « France » ressortait « pays non etabli » parce que la
+   * garde regardait un champ que personne ne remplissait.
+   */
+  const paysFit = countryFit(
+    input.country ?? input.identity?.country,
+    input.acceptedCountries ?? ATLAS_SALES_ICP.countries,
+  );
+  if (paysFit.fit !== 'IN_SCOPE') {
+    blockers.push(paysFit.reason);
   }
   if (input.observedFacts < 2) {
     blockers.push(`${input.observedFacts} fait(s) observé(s) — deux au minimum`);

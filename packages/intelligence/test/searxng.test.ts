@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLogger } from '@atlas/core';
+import { createLogger, isFailoverWorthy } from '@atlas/core';
 import { SearxngSearchProvider } from '@atlas/intelligence';
 
 /**
@@ -224,5 +224,94 @@ describe('SearXNG', () => {
     const response = await broken.search({ query: 'x', count: 10 }, { logger });
     assert.equal(response.outcome, 'unavailable');
     assert.match(response.detail, /invalide/);
+  });
+});
+
+/**
+ * Zéro résultat n'a pas une seule cause.
+ *
+ * Le 8 septembre l'instance a rendu zéro pendant que trois moteurs sur quatre
+ * étaient en CAPTCHA ou bridés. Le tissu l'a lu comme une réponse valide et
+ * n'a basculé sur personne : une journée de prospection perdue, sans qu'aucune
+ * ligne ne dise que personne n'avait cherché. Ces quatre cas fixent la lecture.
+ */
+describe('SearXNG — ce que vaut un zéro résultat', () => {
+  const vide = (unresponsive: unknown, results: unknown[] = []) =>
+    new Response(JSON.stringify({ results, unresponsive_engines: unresponsive }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  const chercher = (corps: Response) =>
+    withFetch(
+      async () => corps,
+      () => provider().search({ query: 'fabricant recherche distributeurs', count: 10 }, { logger }),
+    );
+
+  test('A — personne n’a été empêché : le vide reste le vide', async () => {
+    const r = await chercher(vide([]));
+    assert.equal(r.outcome, 'empty');
+    assert.equal(r.results.length, 0);
+    // Le tissu doit continuer de clore l'appel : c'est une information sur le
+    // monde, et relancer un autre moteur ne ferait que payer deux fois.
+    assert.equal(isFailoverWorthy(r.outcome), false);
+  });
+
+  test('B — un moteur bridé ou en CAPTCHA rend l’incident, pas le vide', async () => {
+    const r = await chercher(vide([
+      ['brave', 'Suspended: too many requests'],
+      ['duckduckgo', 'CAPTCHA'],
+      ['startpage', 'Suspended: CAPTCHA'],
+    ]));
+    assert.equal(r.outcome, 'rate-limited');
+    assert.match(r.detail, /bridé/);
+    assert.match(r.detail, /duckduckgo/);
+    // La conséquence utile : le tissu bascule au lieu de conclure au néant.
+    assert.equal(isFailoverWorthy(r.outcome), true);
+  });
+
+  test('B bis — un HTTP 429 publié dans la raison suffit', async () => {
+    const r = await chercher(vide([['google', 'engine error: 429']]));
+    assert.equal(r.outcome, 'rate-limited');
+  });
+
+  test('C — un moteur tombé sans bridage démontré est une indisponibilité', async () => {
+    const r = await chercher(vide([
+      ['mojeek', 'timeout'],
+      ['startpage', 'engine error'],
+    ]));
+    assert.equal(r.outcome, 'unavailable');
+    assert.match(r.detail, /sans réponse/);
+    assert.equal(isFailoverWorthy(r.outcome), true);
+  });
+
+  test('C bis — « suspended » seul ne prouve aucun bridage', async () => {
+    // Une suspension peut suivre une panne comme un bridage. Deviner laquelle
+    // reviendrait à inventer la raison au lieu de la lire.
+    const r = await chercher(vide([['brave', 'Suspended']]));
+    assert.equal(r.outcome, 'unavailable');
+  });
+
+  test('D — une vraie réponse n’est jamais jetée pour un moteur d’appoint tombé', async () => {
+    const r = await chercher(vide(
+      [['brave', 'CAPTCHA']],
+      [
+        { title: 'Harmony Béton', url: 'https://harmony-beton.com/', engine: 'mojeek' },
+        { title: 'K2TEC', url: 'https://k2tec.com/', engine: 'mojeek' },
+      ],
+    ));
+    assert.equal(r.outcome, 'ok');
+    assert.equal(r.results.length, 2);
+    assert.equal(r.results[0]!.url, 'https://harmony-beton.com/');
+    assert.equal(isFailoverWorthy(r.outcome), false);
+  });
+
+  test('une liste illisible ne fabrique aucun incident', async () => {
+    // Une instance qui rend autre chose qu'une liste ne déclare rien : sans
+    // déclaration, il n'y a pas de moteur muet à signaler.
+    for (const brut of [undefined, null, 'CAPTCHA', 42, [[]], [['', '']]]) {
+      const r = await chercher(vide(brut));
+      assert.equal(r.outcome, 'empty', `entrée ${JSON.stringify(brut)}`);
+    }
   });
 });

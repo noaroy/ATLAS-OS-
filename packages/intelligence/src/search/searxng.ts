@@ -115,9 +115,12 @@ export class SearxngSearchProvider implements SearchProvider {
         return fail('http-error', `SearXNG a répondu HTTP ${response.status}.`, started);
       }
 
-      let body: { results?: SearxngResult[] };
+      let body: { results?: SearxngResult[]; unresponsive_engines?: unknown };
       try {
-        body = (await response.json()) as { results?: SearxngResult[] };
+        body = (await response.json()) as {
+          results?: SearxngResult[];
+          unresponsive_engines?: unknown;
+        };
       } catch {
         // Une instance mal configurée rend du HTML là où on attend du JSON :
         // le dire clairement évite une heure de recherche à côté.
@@ -146,13 +149,16 @@ export class SearxngSearchProvider implements SearchProvider {
         if (results.length >= request.count) break;
       }
 
+      const muets = readUnresponsive(body.unresponsive_engines);
+      const verdict = classifySearxngOutcome(results.length, muets);
+
       return {
         results,
-        outcome: results.length > 0 ? 'ok' : 'empty',
+        outcome: verdict.outcome,
         detail:
           results.length > 0
             ? `${results.length} résultat(s) pour « ${request.query} ».`
-            : `Aucun résultat pour « ${request.query} ».`,
+            : `${verdict.detail} — requête « ${request.query} ».`,
         // Auto-hébergé : la requête ne coûte rien au-delà du VPS déjà payé.
         costUsd: 0,
         durationMs: Date.now() - started,
@@ -169,6 +175,98 @@ export class SearxngSearchProvider implements SearchProvider {
       );
     }
   }
+}
+
+/** Un moteur que SearXNG déclare muet, et la raison qu'il en donne. */
+export interface MoteurMuet {
+  engine: string;
+  reason: string;
+}
+
+/**
+ * Les moteurs muets, quelle que soit la forme sous laquelle l'instance les rend.
+ *
+ * SearXNG publie historiquement des paires `[moteur, raison]` ; certaines
+ * versions rendent des objets. Une entrée sans nom ni raison n'apprend rien et
+ * ne compte pas : le statut qui suit doit reposer sur une déclaration réelle.
+ */
+function readUnresponsive(brut: unknown): MoteurMuet[] {
+  if (!Array.isArray(brut)) return [];
+  const sortie: MoteurMuet[] = [];
+  for (const entree of brut) {
+    let engine = '';
+    let reason = '';
+    if (Array.isArray(entree)) {
+      engine = String(entree[0] ?? '').trim();
+      reason = String(entree[1] ?? '').trim();
+    } else if (entree !== null && typeof entree === 'object') {
+      const o = entree as { engine?: unknown; reason?: unknown };
+      engine = String(o.engine ?? '').trim();
+      reason = String(o.reason ?? '').trim();
+    } else if (typeof entree === 'string') {
+      engine = entree.trim();
+    }
+    if (engine === '' && reason === '') continue;
+    sortie.push({ engine, reason });
+  }
+  return sortie;
+}
+
+/**
+ * Un blocage, dit par le moteur lui-même.
+ *
+ * La liste reste volontairement étroite : elle ne reconnaît que ce qu'un moteur
+ * écrit quand il refuse de servir. « Suspended » seul n'y figure pas — une
+ * suspension peut suivre une panne comme un bridage, et deviner laquelle
+ * reviendrait à inventer la raison au lieu de la lire.
+ */
+const BRIDAGE = /captcha|too many requests|rate.?limit|\b429\b|quota exceeded/i;
+
+/**
+ * Ce que vaut vraiment un « zéro résultat ».
+ *
+ * Zéro résultat se lisait « le web n'a rien », toujours. Le tissu de recherche
+ * en déduisait une réponse valide et ne basculait sur aucun autre moteur —
+ * `failedOver: false`, en toutes lettres dans la trace. Or le 8 septembre
+ * l'instance rendait zéro avec trois moteurs sur quatre en CAPTCHA ou bridés :
+ * la prospection s'est arrêtée une journée entière sans qu'aucune ligne ne
+ * signale que personne n'avait cherché.
+ *
+ * Trois cas, et un seul change de statut :
+ *
+ * - des résultats → `ok`, quoi qu'un moteur secondaire soit tombé. Une vraie
+ *   réponse ne se jette pas parce qu'un moteur d'appoint manque à l'appel ;
+ * - zéro, aucun moteur muet → `empty`. Personne n'a été empêché : le vide est
+ *   une information sur le monde, pas sur la plomberie ;
+ * - zéro, au moins un moteur muet → l'incident remonte. `rate-limited` si une
+ *   raison publiée dit le blocage, `unavailable` sinon. Les deux font basculer
+ *   le tissu, qui savait déjà le faire.
+ *
+ * Le statut ne se déduit jamais de la seule présence d'une liste : c'est la
+ * raison écrite qui décide entre bridage et indisponibilité.
+ */
+export function classifySearxngOutcome(
+  resultCount: number,
+  muets: readonly MoteurMuet[],
+): { outcome: SearchResponse['outcome']; detail: string } {
+  if (resultCount > 0) return { outcome: 'ok', detail: `${resultCount} résultat(s).` };
+  if (muets.length === 0) return { outcome: 'empty', detail: 'Aucun résultat' };
+
+  const nommes = muets
+    .map((m) => (m.reason === '' ? m.engine : `${m.engine} (${m.reason})`))
+    .join(', ');
+  const bride = muets.filter((m) => BRIDAGE.test(m.reason));
+
+  if (bride.length > 0) {
+    return {
+      outcome: 'rate-limited',
+      detail: `Aucun résultat : moteur(s) bridé(s) — ${nommes}`,
+    };
+  }
+  return {
+    outcome: 'unavailable',
+    detail: `Aucun résultat : moteur(s) sans réponse — ${nommes}`,
+  };
 }
 
 function fail(

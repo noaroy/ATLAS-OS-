@@ -23,6 +23,8 @@ describe('un premier contact généré est directement humain', () => {
     normalizedClaim: 'Harmony Béton cherche des distributeurs parmi les magasins de revêtement de sol',
     sourceUrl: 'https://harmony-beton.com/fr/content/15-devenir-distributeur',
     nature: 'observed',
+    // Relue à sa source : seule une citation relue peut parler au client.
+    verbatim: true,
     ...o,
   });
 
@@ -42,7 +44,8 @@ describe('un premier contact généré est directement humain', () => {
 
   test('l’ouverture est spécifique et nomme la page', () => {
     const out = construire([fait()]);
-    assert.match(out.draft!.messageEmail, /^Bonjour,\n\nJ'ai vu sur votre page distributeurs que /);
+    // Le connecteur s'élide devant une voyelle : « que » ou « qu’ », selon.
+    assert.match(out.draft!.messageEmail, /^Bonjour,\n\nJ'ai vu sur votre page distributeurs qu(?:e |’)/);
   });
 
   test('l’ancienne formule mécanique a disparu', () => {
@@ -88,20 +91,28 @@ describe('un premier contact généré est directement humain', () => {
     assert.equal(pickPersonalizationFact([long, signal])?.evidenceId, 'sig');
   });
 
-  test('les noms propres gardent leur majuscule', () => {
+  test('la citation garde exactement sa casse', () => {
     // « que harmony Béton est fabricant » : forcer la minuscule mutilait le nom.
-    assert.match(construire([fait()]).draft!.messageEmail, /que Harmony Béton/);
+    // Le client lit désormais ses propres mots, entre guillemets, tels quels.
+    assert.match(construire([fait()]).draft!.messageEmail, /« Vous êtes un magasin de revêtement de sol/);
   });
 
-  test('sans interprétation lisible, aucun brouillon n’est produit', () => {
+  test('un fragment de catalogue ne produit aucun brouillon', () => {
     /*
-     * La citation brute est souvent un fragment de catalogue — « distribution
-     * de colis, consigne de matériels informatiques… » — qui ne s'enchaîne
-     * après aucun connecteur. Mieux vaut aucun message qu'une phrase bancale.
+     * « distribution de colis, consigne de matériels informatiques… » ne
+     * s'enchaîne après aucun connecteur, et aucune interprétation ne peut le
+     * remplacer : mieux vaut aucun message qu'une phrase que la source ne
+     * soutient pas.
      */
-    const out = construire([fait({ normalizedClaim: null })]);
+    const out = construire([fait({ claim: 'Distribution de colis, consigne de matériels informatiques', normalizedClaim: 'Logiprox distribue des colis' })]);
     assert.equal(out.draft, null);
     assert.equal(out.refusal, 'NO_SOURCED_FACT');
+  });
+
+  test('une citation jamais relue ne produit aucun brouillon', () => {
+    const out = construire([fait({ verbatim: false })]);
+    assert.equal(out.draft, null);
+    assert.match(out.reason, /non relue/);
   });
 
   test('l’objet est court et sans suffixe de campagne', () => {

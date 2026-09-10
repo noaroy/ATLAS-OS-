@@ -55,6 +55,27 @@ const EMAIL = /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
 /** Un numéro composable : au moins huit chiffres une fois l'habillage retiré. */
 const chiffres = (raw: string): number => raw.replace(/\D/g, '').length;
 
+/**
+ * Une adresse de formulaire réellement relevée, et non la page d'accueil.
+ *
+ * Sur asytec.fr la résolution de contact a consigné `FORM` avec pour cible
+ * `https://asytec.fr/` — la racine du site. Aucun formulaire n'y a été vu ;
+ * c'est le repli « il doit bien y en avoir un quelque part ». Présenter cette
+ * adresse comme FORM URL reviendrait à demander à quelqu'un de soumettre un
+ * formulaire qui n'existe peut-être pas.
+ *
+ * Un formulaire observé a un chemin. La racine n'en a pas.
+ */
+export function isVerifiedFormUrl(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    const chemin = new URL(url).pathname.replace(/\/+$/, '');
+    return chemin.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 const propre = (v: string | null): string | null => {
   const t = v?.trim() ?? '';
   return t.length > 0 ? t : null;
@@ -67,7 +88,7 @@ export function classifyActionChannel(input: ChannelInput): ChannelVerdict {
 
   const emailUtilisable = email !== null && EMAIL.test(email);
   const phoneUtilisable = phone !== null && chiffres(phone) >= 8;
-  const formUtilisable = form !== null && /^https?:\/\//i.test(form);
+  const formUtilisable = form !== null && isVerifiedFormUrl(form);
 
   if (!emailUtilisable && !phoneUtilisable && !formUtilisable) {
     return {

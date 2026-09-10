@@ -32,6 +32,11 @@ export interface MessageToCheck {
   subject?: string | null;
   /** Premier contact ou relance : les longueurs et les attentes diffèrent. */
   kind: 'FIRST_TOUCH' | 'FOLLOW_UP' | 'REPLY';
+  /**
+   * Le canal d'envoi. `EMAIL` par defaut : c'est le cas historique, et un
+   * appelant qui ne se pose pas la question doit garder les regles du courriel.
+   */
+  channel?: MessageChannel;
   /** Les messages déjà envoyés à cette entreprise, pour ne rien répéter. */
   previousMessages?: readonly string[];
 }
@@ -95,6 +100,27 @@ const LONGUEURS: Record<MessageToCheck['kind'], { min: number; max: number }> = 
   // Une réponse s'adapte à ce qu'on lui demande : seul l'excès est signalé.
   REPLY: { min: 10, max: 200 },
 };
+
+/**
+ * Le canal change la longueur attendue, et rien d'autre.
+ *
+ * Un formulaire de contact n'est pas une boîte mail : le champ est court, le
+ * lecteur est déjà sur le site, et la mise en contexte que réclame un courriel
+ * froid y est superflue. Le message d'ASYTEC — 46 mots, exact et spécifique —
+ * était classé NEEDS_EDIT parce qu'on lui appliquait le plancher du courriel.
+ *
+ * Le plancher tombe donc pour le formulaire, et lui seul. Le plafond, les
+ * formules de gabarit, le vocabulaire interne, l'ouverture centrée sur nous,
+ * les URL brutes et la question utile restent exactement les mêmes : la
+ * politique ne baisse pas d'un cran, elle cesse d'exiger une longueur que le
+ * canal ne justifie pas.
+ */
+export type MessageChannel = 'EMAIL' | 'FORM';
+
+function bornesFor(kind: MessageToCheck['kind'], channel: MessageChannel): { min: number; max: number } {
+  const base = LONGUEURS[kind];
+  return channel === 'FORM' ? { min: 0, max: base.max } : base;
+}
 
 const mots = (t: string): number => t.trim().split(/\s+/).filter(Boolean).length;
 
@@ -169,7 +195,7 @@ export function checkHumanization(input: MessageToCheck): HumanizationCheck {
   if (!q.present) remarks.push('aucune question : rien n’invite à répondre');
   else if (q.seulementSortie) remarks.push('la seule question est la porte de sortie');
 
-  const bornes = LONGUEURS[input.kind];
+  const bornes = bornesFor(input.kind, input.channel ?? 'EMAIL');
   if (n > bornes.max) remarks.push(`${n} mots — au-delà de ${bornes.max} pour ce type de message`);
   if (n < bornes.min) remarks.push(`${n} mots — en deçà de ${bornes.min}, le message dit peu`);
 

@@ -22,6 +22,7 @@
  */
 
 import { greetingFor } from './humanization.ts';
+import { readNormalizedClaim } from './verbatim-selection.ts';
 
 /** Le saut de ligne, nomme pour survivre a tout outillage de patch. */
 const SAUT = String.fromCharCode(10);
@@ -35,18 +36,77 @@ export interface OutreachFact {
   sourceUrl: string;
   nature: 'observed' | 'reported' | 'inferred';
   /**
-   * Ce que le passage etablit, en une phrase.
+   * La citation a-t-elle été relue à sa source, mot pour mot ?
    *
-   * La citation exacte prouve ; l'interpretation se lit. Coller la citation
-   * telle quelle dans un courriel donne « j'ai releve ceci, publie sur votre
-   * site : ... » suivi d'un paragraphe entier -- exactement la forme mecanique
-   * que la politique interdit. L'interpretation, elle, s'insere dans une phrase
-   * francaise.
+   * Vrai pour une preuve du pipeline verbatim : le modèle a rendu un numéro de
+   * passage, et le texte a été relu à ce numéro. Faux pour une reformulation de
+   * la qualification, même marquée « observed » — c'est le modèle qui l'a dite
+   * observée, personne ne l'a relue.
    *
-   * Toujours adossee a `claim`, jamais a sa place : la preuve reste stockee et
-   * visible dans Approvals.
+   * Seule une citation relue peut parler au client.
+   */
+  verbatim?: boolean;
+  /**
+   * Ce que le modèle a compris du passage. USAGE INTERNE SEULEMENT.
+   *
+   * Sert à classer, à noter, à comprendre. Ne sert JAMAIS à formuler une
+   * affirmation dans un message : sur asytec.fr, « la soudure TIG incarne
+   * l'apogée de la technique dans la production des capots de véhicules » est
+   * devenu « ASYTEC produit des capots de véhicules » — plausible, non prouvé,
+   * et le message l'aurait affirmé. Ce qui part au client vient de `claim`.
    */
   normalizedClaim?: string | null;
+}
+
+/** Une preuve telle qu'elle est rangée en base. */
+export interface StoredEvidence {
+  id: string;
+  field: string;
+  claim: string;
+  sourceUrl: string | null;
+  nature: 'observed' | 'reported' | 'inferred';
+  basis?: string | null;
+}
+
+/**
+ * Cette preuve peut-elle porter un message commercial ?
+ *
+ * Une raison sociale ne dit pas ce qu'une entreprise vend, et une adresse
+ * encore moins. Sur igus.fr le seul élément vérifié à 100 % était
+ * `identite:entite_juridique` = « IGUS SAS » : le courriel aurait annoncé
+ * « j'ai relevé ceci sur votre site : IGUS SAS ».
+ *
+ * La règle vivait en quatre exemplaires — audit, éligibilité, vue
+ * d'approbation, et le lot. Elle vit ici, et les quatre l'appellent.
+ */
+export function isCommercialEvidence(e: { field: string }): boolean {
+  return !e.field.startsWith('identite:') && !e.field.startsWith('contact');
+}
+
+/**
+ * Une preuve stockée, telle que le générateur doit la recevoir.
+ *
+ * L'interprétation est écrite dans `basis`, préfixée, au moment de
+ * l'enrichissement verbatim — et elle n'était relue nulle part. Le lot
+ * reconstruisait ses faits sans elle, le compositeur ne trouvait aucune
+ * observation lisible, et refusait chaque brouillon. La donnée était là,
+ * personne ne la lisait.
+ *
+ * Un seul lecteur, ici, pour tous les chemins : `readNormalizedClaim`. Un
+ * second analyseur finirait par diverger du premier, et ce serait celui qui
+ * écrit les messages.
+ */
+export function outreachFactFrom(e: StoredEvidence): OutreachFact {
+  const interpretation = readNormalizedClaim(e.basis);
+  return {
+    evidenceId: e.id,
+    claim: e.claim,
+    sourceUrl: e.sourceUrl ?? '',
+    nature: e.nature,
+    // Seul le pipeline verbatim relit la citation à sa source. Le champ le dit.
+    verbatim: e.field.startsWith('verbatim:'),
+    ...(interpretation === null ? {} : { normalizedClaim: interpretation }),
+  };
 }
 
 export interface OutreachContact {
@@ -74,6 +134,10 @@ export interface OutreachDraft {
   subject: string;
   /** L'adresse citée, répétée ici pour que la relecture l'ait sous les yeux. */
   sourceUsedForPersonalization: string;
+  /** L'extrait exact de la source sur lequel repose la phrase d'ouverture. */
+  evidenceExcerpt: string;
+  /** La phrase d'ouverture telle que le client la lira. Dérivée de l'extrait, jamais de l'interprétation. */
+  customerFacingObservation: string;
 }
 
 export type OutreachRefusal =
@@ -111,12 +175,35 @@ export function pickPersonalizationFact(facts: readonly OutreachFact[]): Outreac
   const signalDachat = (f: OutreachFact): number =>
     /recherch|cherch|recrut|devenir (?:distributeur|revendeur|partenaire)|rejoign/i
       .test(`${f.normalizedClaim ?? ''} ${f.claim}`) ? 1 : 0;
-  const lisible = (f: OutreachFact): number => ((f.normalizedClaim ?? '').trim() !== '' ? 1 : 0);
+  // L'interprétation sert ici, à classer. C'est son seul usage dans ce fichier.
+  const relu = (f: OutreachFact): number => (f.verbatim ? 1 : 0);
 
-  return [...usable].sort((a, b) =>
+  const classes = [...usable].sort((a, b) =>
     signalDachat(b) - signalDachat(a)
-    || lisible(b) - lisible(a)
-    || b.claim.length - a.claim.length)[0]!;
+    || relu(b) - relu(a)
+    || b.claim.length - a.claim.length);
+
+  /*
+   * Le meilleur candidat SÛR, pas le meilleur candidat.
+   *
+   * Le classement et le compositeur ne se parlaient pas. Sur asytec.fr, une
+   * ancienne reformulation — « Asytec s'adresse à des entreprises **cherch**ant
+   * un sous-traitant » — gagnait sur le signal d'achat alors qu'elle n'a jamais
+   * été relue à sa source ; le compositeur refusait ensuite, et huit citations
+   * parfaitement utilisables partaient avec le dossier.
+   *
+   * L'ordre ne change pas. On descend la liste jusqu'au premier fait dont une
+   * phrase client peut s'écrire à partir de ses mots exacts.
+   */
+  const sur = classes.find((f) => customerFacingObservation(f).outreachSafe);
+  if (sur) return sur;
+
+  /*
+   * Aucun n'est composable : on rend quand même le mieux classé, pour que le
+   * refus vienne du compositeur et garde son motif. Deux refus différents pour
+   * la même cause rendraient le journal illisible.
+   */
+  return classes[0]!;
 }
 
 /**
@@ -149,70 +236,192 @@ export function pageLabel(sourceUrl: string): string {
  * recopié se lit comme une machine.
  */
 /**
- * Les mots qu'on peut mettre en minuscule après « que ».
+ * Ce que le prospect a réellement écrit, et ce qu'on a le droit d'en dire.
  *
- * Un nom propre, lui, doit garder sa majuscule : forcer la minuscule donnait
- * « que harmony Béton est fabricant » et « que k2tec est spécialisé ». Seuls
- * les mots-outils s'abaissent sans dommage.
+ * Deux textes vivent dans un fait. `claim` est la phrase publiée, relue à sa
+ * source. `normalizedClaim` est ce que le modèle en a compris — utile pour
+ * classer, jamais pour parler au client. Sur asytec.fr la page dit que la
+ * soudure TIG « incarne l'apogée de la technique dans la production des capots
+ * de véhicules » ; le modèle en a tiré « ASYTEC produit des capots de
+ * véhicules ». La source ne le dit pas. Le message l'aurait affirmé.
+ *
+ * Ce qui part au client vient donc de `claim`, et de lui seul : la première
+ * phrase, contiguë, telle quelle, dans un habillage déterministe. Aucun modèle
+ * n'intervient ici, et aucun second modèle ne « vérifie » le premier : la
+ * sûreté est une propriété du texte, pas une opinion.
  */
-const ABAISSABLES = new Set([
-  'vous', 'votre', 'vos', 'nous', 'notre', 'nos', 'le', 'la', 'les', 'un', 'une',
-  'des', 'ce', 'cet', 'cette', 'il', 'elle', 'ils', 'elles', 'leur', 'leurs',
-  'depuis', 'chaque', 'plusieurs', 'tous', 'toute', 'toutes',
-]);
-
-/**
- * Les entrées en matière qui ne s'enchaînent pas après « que ».
- *
- * « À l'origine, K2TEC est… » devient « que a l'origine, K2TEC est… » — la
- * liaison est fausse. On les retire plutôt que de tordre la phrase.
- */
-const ADVERBIALES = /^(?:à l['’]origine|a l['’]origine|aujourd['’]hui|depuis \d{4}|désormais|actuellement|historiquement)\s*,\s*/i;
-
-/**
- * Ce que le fait établit, tourné pour s'insérer après « J'ai vu sur votre X ».
- *
- * Seule l'interprétation sert : c'est une phrase française, écrite pour être
- * lue. La citation exacte, elle, est souvent un fragment de catalogue —
- * « distribution de colis, consigne de matériels informatiques… » — qui ne
- * s'enchaîne après aucun connecteur. Relevé sur logiprox.com.
- *
- * Sans interprétation, cette fonction rend `null` : mieux vaut aucun brouillon
- * qu'une phrase bancale, qui se remarque plus qu'un silence.
- */
-export function observationPhrase(fact: { claim: string; normalizedClaim?: string | null }): string | null {
-  const brut = (fact.normalizedClaim ?? '').trim();
-  if (brut === '') return null;
-
-  const nettoye = brut
-    .replace(ADVERBIALES, '')
-    .replace(/^(?:l['’]entreprise|la société|la societe)\s+/i, '')
-    .replace(/\s*[.;]\s*$/, '')
-    .trim();
-  if (nettoye.length < 8) return null;
-
-  const premier = nettoye.split(/\s+/)[0] ?? '';
-  const abaisse = ABAISSABLES.has(premier.toLowerCase())
-    ? `${nettoye.charAt(0).toLowerCase()}${nettoye.slice(1)}`
-    : nettoye;
-  return `que ${abaisse}.`;
+export interface CustomerFacingObservation {
+  /** L'extrait exact, contigu, tel qu'il figure dans la source. */
+  excerpt: string;
+  /** La phrase prête à suivre « J'ai vu sur votre page X ». Vide si non sûre. */
+  observation: string;
+  /** Vrai seulement quand l'extrait est une phrase lisible, relue à sa source. */
+  outreachSafe: boolean;
+  /** Pourquoi ce fait ne peut pas parler au client. */
+  reason: string | null;
 }
 
+/** Les bornes d'un extrait citable : assez pour une phrase, pas un paragraphe. */
+const EXTRAIT_MIN_MOTS = 5;
+const EXTRAIT_MAX_MOTS = 30;
+
+/**
+ * Les mots qui signalent une proposition complète.
+ *
+ * Un titre de catalogue — « INJECTION PLASTIQUE SOUS-TRAITANCE MÉTAL »,
+ * « Distribution de colis, consigne de matériels informatiques » — n'en
+ * contient aucun. Liste explicite, testée : un pronom, une copule, ou un
+ * verbe CONJUGUÉ du discours commercial. Des formes entières, jamais des
+ * racines — « distribu… » attrapait le nom « distribution », et le fragment
+ * passait pour une phrase. Ce n'est pas une grammaire, c'est une porte.
+ */
+const MARQUE_DE_PROPOSITION = new RegExp(
+  '\\b(?:nous|vous|notre|nos|votre|vos|je|on|il|elle|ils|elles'
+  + '|est|sont|sommes|êtes|a|ont|avons|avez'
+  + '|propose|proposons|fabrique|fabriquons|recherche|recherchons|cherche|cherchons'
+  + '|dispose|disposons|assure|assurons|r[ée]alise|r[ée]alisons|con[çc]oit|concevons'
+  + '|d[ée]veloppe|d[ée]veloppons|accompagne|accompagnons|int[èe]gre|int[ée]grons'
+  + '|offre|offrons|livre|livrons|vend|vendons|distribue|distribuons|exporte|exportons'
+  + '|produisons|garantit|garantissons|ma[îi]trise|ma[îi]trisons|permet|permettent'
+  + '|r[ée]pond|r[ée]pondons|utilise|utilisons|travaille|travaillons|installe|installons'
+  + '|recrute|recrutons|incarne|d[ée]couvrez|retrouvez|contactez|devenez|rejoignez|souhaitez)\\b',
+  'i',
+);
+
+const compteMots = (t: string): number => t.trim().split(/\s+/).filter(Boolean).length;
+
+/** Espace avant virgule, doubles espaces : le nettoyage qui ne change aucun mot. */
+function normaliseEspaces(t: string): string {
+  return t.replace(/\s+/g, ' ').replace(/\s+([,;:!?.])/g, '$1').trim();
+}
+
+/** La première phrase, coupée à la ponctuation forte, sans point final ni guillemets. */
 function premierePhrase(t: string): string {
-  const phrases = t.trim().split(/(?<=[.!?])\s+/);
-  return (phrases[0] ?? t).slice(0, 180);
+  const phrases = normaliseEspaces(t).split(/(?<=[.!?…])\s+/);
+  return (phrases[0] ?? '')
+    .replace(/[.!?…\s]+$/, '')
+    .replace(/^[«"“\s]+|[»"”\s]+$/g, '')
+    .trim();
+}
+
+/**
+ * Un titre collé à son paragraphe.
+ *
+ * Relevé sur asytec.fr : « La Soudure TIG sur Inox La soudure TIG sur inox,
+ * alliée à… » — le titre de section et la première phrase, sans séparateur.
+ * Une phrase qui commence en répétant ses propres premiers mots n'en est pas
+ * une.
+ */
+function commenceEnSeRepetant(t: string): boolean {
+  const m = t.toLowerCase().replace(/[,;:]/g, '').split(/\s+/);
+  if (m.length < 6) return false;
+  const tete = m.slice(0, 3).join(' ');
+  return m.slice(1).join(' ').includes(tete);
+}
+
+function ratioMajuscules(t: string): number {
+  const lettres = t.replace(/[^\p{L}]/gu, '');
+  if (lettres.length === 0) return 0;
+  return lettres.replace(/[^\p{Lu}]/gu, '').length / lettres.length;
+}
+
+/**
+ * Les habillages autorisés : la source dit « nous », le message dit « vous ».
+ *
+ * Chaque motif exige le début exact de la phrase et ne touche qu'au verbe
+ * conjugué ; le complément passe tel quel. « Nous sommes à la recherche de
+ * distributeurs ! » devient « vous indiquez être à la recherche de
+ * distributeurs » — le sens porteur est dans leurs mots, pas dans les nôtres.
+ *
+ * Quatre tournures, pas une de plus. Au-delà on écrirait une grammaire, et une
+ * grammaire finit toujours par inventer. Tout le reste est cité entre
+ * guillemets.
+ */
+const HABILLAGES: ReadonlyArray<{ motif: RegExp; tournure: (reste: string) => string }> = [
+  { motif: /^nous sommes (à la recherche d(?:e |[’']).+)$/i, tournure: (r) => `vous indiquez être ${r}` },
+  { motif: /^nous recherchons (.+)$/i, tournure: (r) => `vous indiquez rechercher ${r}` },
+  { motif: /^nous cherchons (.+)$/i, tournure: (r) => `vous indiquez chercher ${r}` },
+  { motif: /^nous recrutons (.+)$/i, tournure: (r) => `vous indiquez recruter ${r}` },
+];
+
+/**
+ * « que » ou « qu’ », selon ce qui suit.
+ *
+ * « que ASYTEC produit… » : le générateur écrivait cela, et un lecteur
+ * français le voit à la première ligne. La règle est mécanique — voyelle ou h
+ * initial — et s'arrête là : le h aspiré n'est pas traité, il est rare dans
+ * les raisons sociales et le deviner coûterait un dictionnaire. La casse du
+ * mot suivant n'est jamais touchée.
+ */
+const VOYELLE_OU_H = /^[aàâäeéèêëiîïoôöuùûüyh]/i;
+
+export function elide(suite: string): string {
+  return VOYELLE_OU_H.test(suite) ? `qu’${suite}` : `que ${suite}`;
+}
+
+/**
+ * L'observation que le client lira, ou la raison de son absence.
+ *
+ * Cinq portes, toutes déterministes, toutes venues d'un cas réel : la citation
+ * doit avoir été relue à sa source ; l'extrait doit faire une phrase et non un
+ * titre ni un paragraphe ; il ne doit pas être en capitales ; il ne doit pas
+ * commencer par se répéter ; il doit contenir une proposition. Le premier refus
+ * l'emporte, et il est nommé.
+ */
+export function customerFacingObservation(
+  fact: { claim: string; verbatim?: boolean },
+): CustomerFacingObservation {
+  const excerpt = premierePhrase(fact.claim);
+  const refus = (reason: string): CustomerFacingObservation =>
+    ({ excerpt, observation: '', outreachSafe: false, reason });
+
+  if (!fact.verbatim) return refus('citation non relue à sa source : une reformulation, pas une preuve');
+  const n = compteMots(excerpt);
+  if (n < EXTRAIT_MIN_MOTS) return refus(`extrait trop court (${n} mots) : un titre, pas une phrase`);
+  if (n > EXTRAIT_MAX_MOTS) return refus(`extrait trop long (${n} mots) : un paragraphe, pas une phrase`);
+  if (ratioMajuscules(excerpt) >= 0.5) return refus('extrait en capitales : un titre de catalogue');
+  if (commenceEnSeRepetant(excerpt)) return refus('titre de section collé à son paragraphe');
+  if (!MARQUE_DE_PROPOSITION.test(excerpt)) return refus('aucune proposition complète : un fragment');
+
+  for (const h of HABILLAGES) {
+    const m = h.motif.exec(excerpt);
+    if (m) return { excerpt, observation: `${elide(h.tournure(m[1]!))}.`, outreachSafe: true, reason: null };
+  }
+  return { excerpt, observation: `${elide(`vous écrivez « ${excerpt} »`)}.`, outreachSafe: true, reason: null };
+}
+
+/** La phrase client, ou `null` quand le fait ne peut pas parler au client. */
+export function observationPhrase(fact: { claim: string; verbatim?: boolean }): string | null {
+  const o = customerFacingObservation(fact);
+  return o.outreachSafe ? o.observation : null;
+}
+
+/**
+ * L'entreprise dit-elle chercher quelqu'un ?
+ *
+ * Décidé sur leurs mots et sur leur adresse — « /devenir-distributeur » est
+ * une page qu'ils ont publiée pour recruter. Jamais sur l'interprétation.
+ */
+export function saysTheyAreLooking(excerpt: string, sourceUrl: string): boolean {
+  if (/recherch|cherch|recrut|rejoign|devenir (?:distributeur|revendeur|partenaire)/i.test(excerpt)) return true;
+  let chemin = '';
+  try { chemin = new URL(sourceUrl).pathname.toLowerCase(); } catch { chemin = sourceUrl.toLowerCase(); }
+  return /devenir|recrut|rejoign/.test(chemin);
 }
 
 /**
  * Le mot qui désigne ce qu'ils cherchent, tiré de ce qu'ils publient.
  *
- * Ne jamais promettre un type de cible que les faits ne soutiennent pas :
+ * Ne jamais promettre un type de cible que la source ne soutient pas :
  * annoncer des « distributeurs » à qui cherche des clients finaux est une
- * promesse creuse, et elle se voit à la première réponse.
+ * promesse creuse, et elle se voit à la première réponse. L'adresse de la page
+ * compte aussi : elle est publiée par eux.
  */
-export function targetWord(fact: { claim: string; normalizedClaim?: string | null }): string {
-  const t = `${fact.normalizedClaim ?? ''} ${fact.claim}`.toLowerCase();
-  if (/distributeur/.test(t)) return 'distributeurs';
+export function targetWord(source: { excerpt: string; sourceUrl: string }): string {
+  let chemin = '';
+  try { chemin = new URL(source.sourceUrl).pathname.toLowerCase(); } catch { chemin = source.sourceUrl.toLowerCase(); }
+  const t = `${source.excerpt} ${chemin}`.toLowerCase();
+  if (/distributeur|distribu/.test(t)) return 'distributeurs';
   if (/revendeur/.test(t)) return 'revendeurs';
   if (/intégrateur|integrateur/.test(t)) return 'intégrateurs';
   if (/partenaire/.test(t)) return 'partenaires';
@@ -223,42 +432,45 @@ export function targetWord(fact: { claim: string; normalizedClaim?: string | nul
 /**
  * La question finale, liée au contexte.
  *
- * Une seule, simple, et qui donne une raison de répondre. Jamais
- * « n'hésitez pas à me contacter », jamais la porte de sortie comme seul appel.
+ * Une seule, simple, et qui donne une raison de répondre. Elle ne présuppose
+ * rien que la source n'établisse : « vous cherchez surtout des distributeurs
+ * spécialisés… » n'est posée qu'à qui dit en chercher. Jamais « n'hésitez pas
+ * à me contacter », jamais la porte de sortie comme seul appel.
  */
 export function closingQuestion(
-  fact: { claim: string; normalizedClaim?: string | null },
+  excerpt: string,
   cible: string,
+  chercheDeja: boolean,
 ): string {
-  const t = `${fact.normalizedClaim ?? ''} ${fact.claim}`.toLowerCase();
+  const t = excerpt.toLowerCase();
   if (/export|international|étranger|etranger|monde|pays/.test(t)) {
     return 'Vous ciblez plutôt la France ou l’export en ce moment ?';
   }
-  if (/région|region|départment|departement|local|proximité/.test(t)) {
+  if (/région|region|département|departement|local|proximité/.test(t)) {
     return 'Il y a une zone que vous souhaitez développer en priorité ?';
   }
-  return `Vous cherchez surtout des ${cible} spécialisés ou plus généralistes ?`;
+  if (chercheDeja) return `Vous cherchez surtout des ${cible} spécialisés ou plus généralistes ?`;
+  return 'Est-ce le genre de recherche qui pourrait vous être utile en ce moment ?';
 }
 
 /**
- * L'objet : court, humain, tiré du contexte.
+ * L'objet : court, humain, tiré du contexte — et jamais d'une interprétation.
  *
- * Le suffixe « — étude de prospection B2B » a été retiré : il transformait
- * chaque objet en étiquette de campagne, et se reconnaissait d'une boîte à
- * l'autre.
+ * « Recherche de distributeurs » n'est écrit qu'à qui publie chercher des
+ * distributeurs. Le suffixe « — étude de prospection B2B » a été retiré : il
+ * transformait chaque objet en étiquette de campagne.
  */
 export function subjectLine(
   company: string,
-  fact: { claim: string; normalizedClaim?: string | null },
   cible: string,
+  chercheDeja: boolean,
 ): string {
-  const t = `${fact.normalizedClaim ?? ''} ${fact.claim}`.toLowerCase();
   const Cible = cible.charAt(0).toUpperCase() + cible.slice(1);
-  if (/recherch|cherch|recrut/.test(t)) return `Recherche de ${cible}`;
+  if (chercheDeja) return `Recherche de ${cible}`;
   const avecNom = `${Cible} pour ${company}`;
   // 45 et non 60 : « Clients potentiels pour Fabricant Distributeur Automatique »
   // tient en 56 caracteres et ne se lit pas comme un objet ecrit par quelqu'un.
-  return avecNom.length <= 45 ? avecNom : `Recherche de ${cible}`;
+  return avecNom.length <= 45 ? avecNom : Cible;
 }
 
 export function buildOutreachDraft(input: {
@@ -329,26 +541,26 @@ export function buildOutreachDraft(input: {
   const freeCount = input.offer.freePreviewCount ?? 3;
 
   /*
-   * L'observation, ecrite comme une phrase et non comme une citation collee.
+   * L'observation, dans leurs mots.
    *
-   * L'interpretation du fait s'insere dans « J'ai vu sur votre page X que… ».
-   * A defaut, on reprend la citation, mais raccourcie a sa premiere phrase :
-   * un paragraphe entier recopie se lit comme une machine.
+   * Tout ce que le client lira sur lui-même vient de l'extrait exact de la
+   * source — l'objet, la cible, la question finale compris. L'interprétation
+   * du modèle n'entre pas ici. Si aucun fait ne peut être cité tel quel, il
+   * n'y a pas de brouillon : un dossier ne se sauve pas avec une phrase que
+   * la source ne soutient pas.
    */
-  const observation = observationPhrase(fact);
-  if (observation === null) {
+  const cf = customerFacingObservation(fact);
+  if (!cf.outreachSafe) {
     return {
       draft: null,
       refusal: 'NO_SOURCED_FACT',
-      reason:
-        'aucun fait ne porte d’interprétation lisible : coller une citation brute donnerait '
-        + 'une phrase bancale, qui se remarque davantage qu’un silence.',
+      reason: `aucun fait ne peut être cité au client tel qu’il est publié : ${cf.reason}`,
     };
   }
+  const observation = cf.observation;
   const label = pageLabel(fact.sourceUrl);
-  const cible = targetWord(fact);
-  const chercheDeja = /recherch|cherch|recrut|devenir (?:distributeur|revendeur|partenaire)/i
-    .test(`${fact.normalizedClaim ?? ''} ${fact.claim}`);
+  const chercheDeja = saysTheyAreLooking(cf.excerpt, fact.sourceUrl);
+  const cible = targetWord({ excerpt: cf.excerpt, sourceUrl: fact.sourceUrl });
 
   const quoiJeFais = chercheDeja
     ? `Je travaille justement sur ce type de recherche : j'identifie des entreprises `
@@ -369,7 +581,7 @@ export function buildOutreachDraft(input: {
     '',
     apercu,
     '',
-    closingQuestion(fact, cible),
+    closingQuestion(cf.excerpt, cible, chercheDeja),
   ].join(SAUT);
 
   const signature = sender ? `${SAUT}${SAUT}Bien à vous,${SAUT}${sender}` : '';
@@ -377,9 +589,9 @@ export function buildOutreachDraft(input: {
 
   // La version courte : la même observation, la même question, sans le milieu.
   const messageShort = [greeting, '', `J'ai vu sur votre ${label} ${observation}`, '',
-    apercu, '', closingQuestion(fact, cible)].join(SAUT) + signature;
+    apercu, '', closingQuestion(cf.excerpt, cible, chercheDeja)].join(SAUT) + signature;
 
-  const subject = subjectLine(input.company, fact, cible);
+  const subject = subjectLine(input.company, cible, chercheDeja);
 
   return {
     draft: {
@@ -392,6 +604,8 @@ export function buildOutreachDraft(input: {
       messageEmail,
       subject,
       sourceUsedForPersonalization: fact.sourceUrl,
+      evidenceExcerpt: cf.excerpt,
+      customerFacingObservation: observation,
     },
     refusal: null,
     reason: 'personnalisation appuyée sur un fait constaté et sourcé.',
@@ -411,16 +625,15 @@ export function personalizationIsGrounded(draft: OutreachDraft): boolean {
   if (!/^https?:\/\//i.test(fait.sourceUrl)) return false;
 
   /*
-   * Le message porte desormais l'interpretation, pas la citation brute.
-   *
-   * Coller la phrase exacte donnait « j'ai releve ceci, publie sur votre
-   * site : » suivi d'un paragraphe entier. L'ancrage se verifie donc sur ce que
-   * le message contient reellement -- l'observation composee a partir du fait --
-   * et la citation exacte reste stockee, visible dans Approvals.
+   * Trois ancrages, dans l'ordre : le fait peut parler au client ; l'extrait
+   * est bien un morceau contigu de la citation relue ; et les deux messages
+   * contiennent la phrase composée à partir de cet extrait. Une phrase qui
+   * tiendrait de l'interprétation échouerait au deuxième.
    */
-  const observation = observationPhrase(fait);
-  if (observation === null) return false;
-  const noyau = observation.replace(/^que\s+/i, '').replace(/\.$/, '').trim();
+  const cf = customerFacingObservation(fait);
+  if (!cf.outreachSafe) return false;
+  if (!normaliseEspaces(fait.claim).includes(cf.excerpt)) return false;
+  const noyau = cf.observation.replace(/^qu(?:e\s+|’)/i, '').replace(/\.$/, '').trim();
   if (noyau.length < 8) return false;
   return draft.messageShort.includes(noyau) && draft.messageEmail.includes(noyau);
 }

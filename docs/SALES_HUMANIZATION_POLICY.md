@@ -82,6 +82,49 @@ Non :
 > Je réalise des études de prospection B2B et je souhaiterais vous présenter
 > mes services…
 
+### 3 bis. L'observation vient de leurs mots, jamais de l'interprétation
+
+Un fait porte deux textes : la **citation exacte**, relue à sa source, et
+l'**interprétation** que le modèle en a faite. La seconde sert à classer, à
+noter, à comprendre. Elle ne sert **jamais** à formuler ce que le client lira
+sur lui-même.
+
+Le cas qui a fixé la règle, sur asytec.fr :
+
+> Source : « La soudure TIG sur inox […] incarne l'apogée de la technique dans
+> la production des capots de véhicules. »
+>
+> Interprétation : « ASYTEC produit des capots de véhicules par soudure TIG. »
+
+La source ne dit pas qu'ASYTEC fabrique ces capots. Le message l'aurait
+affirmé dès la première ligne, à quelqu'un qui sait ce qu'il fabrique.
+
+Ce que le client lit sur lui-même vient donc de la citation, et d'elle seule :
+la première phrase, contiguë, telle quelle, dans un habillage déterministe.
+
+Deux formes, pas davantage :
+
+> Source : « Nous sommes à la recherche de distributeurs ! »
+> Message : *J'ai vu sur votre page contact que vous indiquez être à la
+> recherche de distributeurs.*
+
+> Source : « ASYTEC dispose de son propre atelier de moulage pour l'injection
+> plastique. »
+> Message : *J'ai vu sur votre site que vous écrivez « ASYTEC dispose de son
+> propre atelier de moulage pour l'injection plastique ».*
+
+La même règle tient l'objet et la question finale : « Recherche de
+distributeurs » ne s'écrit qu'à qui publie chercher des distributeurs, et
+« vous cherchez surtout des distributeurs spécialisés… » ne se demande qu'à
+qui le dit. Un CTA peut poser une question commerciale raisonnable ; il ne
+présuppose rien que la source n'établisse.
+
+Une citation qui n'a pas été relue à sa source, un titre de catalogue, un
+fragment sans verbe, un paragraphe : aucun ne parle au client. Sans fait
+citable, **pas de brouillon** — un dossier ne se sauve pas avec une phrase que
+la source ne soutient pas. Aucun modèle ne vérifie ici le travail d'un autre :
+la sûreté est une propriété du texte, déterministe et testée.
+
 ## 4. Un ou deux faits, pas neuf
 
 Choisir les faits les plus **utiles commercialement**, pas les plus nombreux.
@@ -133,11 +176,22 @@ appel.
 
 ## 9. Longueur
 
-| | mots |
-|---|---|
-| premier contact | 70 – 140 |
-| relance | ≈ 25 – 90, **sans minimum rigide** |
-| réponse à un prospect | le plus court possible tout en répondant vraiment |
+**La longueur dépend du canal.** Un courriel froid arrive sans contexte : il
+doit en poser un. Un formulaire de contact est rempli par quelqu'un qui est
+déjà sur le site, sait qui il est et ce qu'il vend — la mise en situation qu'un
+courriel exige y devient du remplissage.
+
+| | courriel | formulaire |
+|---|---|---|
+| premier contact | 70 – 140 mots | **aucun plancher**, même plafond |
+| relance | ≈ 25 – 90, **sans minimum rigide** | idem |
+| réponse à un prospect | le plus court possible tout en répondant vraiment | idem |
+
+Le plancher tombe pour le formulaire, et lui seul. Tout le reste — formules de
+gabarit, vocabulaire interne, ouverture centrée sur eux, question utile, URL
+brutes, spécificité — s'applique identiquement aux deux canaux. Un message de
+formulaire de 46 mots peut être excellent ; un message de formulaire vague
+reste mauvais.
 
 Une relance courte est acceptable, et souvent meilleure. **Ne jamais ajouter du
 texte dans le seul but d'atteindre un nombre de mots** : un message allongé pour

@@ -211,12 +211,12 @@ describe('le score d’acquisition', () => {
 describe('l’approche ne se personnalise que sur un fait réel', () => {
   const fact = (over: Partial<OutreachFact> = {}): OutreachFact => ({
     evidenceId: 'sev_1',
-    claim:
-      'Le site indique rechercher des distributeurs pour accompagner le développement export.',
-    // Le message porte l'interprétation ; la citation exacte reste la preuve.
+    claim: 'Nous recherchons des distributeurs pour accompagner notre développement export.',
+    // L'interprétation classe ; la citation exacte, relue, est la seule à parler au client.
     normalizedClaim: 'Atelier Mécanique Durand recherche des distributeurs à l’export',
     sourceUrl: 'https://atelier-durand.fr/partenaires',
     nature: 'observed',
+    verbatim: true,
     ...over,
   });
 
@@ -259,15 +259,17 @@ describe('l’approche ne se personnalise que sur un fait réel', () => {
   test('le message porte l’observation, ancrée sur le fait', () => {
     /*
      * Le message portait la citation exacte, collée après « j'ai relevé ceci,
-     * publié sur votre site : » — une forme mécanique qui se reconnaît d'une
-     * boîte à l'autre. Il porte désormais l'interprétation, et
-     * `personalizationIsGrounded` vérifie que cette observation vient bien du
-     * fait retenu. La citation exacte reste la preuve, stockée et visible dans
-     * Approvals.
+     * publié sur votre site : » — une forme mécanique. Puis il a porté
+     * l'interprétation du modèle, et sur asytec.fr celle-ci affirmait ce que la
+     * source ne disait pas. Il porte désormais leurs mots, dans un habillage
+     * déterministe : « nous recherchons » devient « vous indiquez rechercher ».
+     * `personalizationIsGrounded` vérifie que l'extrait est bien dans le fait.
      */
     const outcome = draftWith([fact()]);
     assert.equal(personalizationIsGrounded(outcome.draft!), true);
-    assert.match(outcome.draft!.messageEmail, /recherche des distributeurs à l’export/);
+    assert.match(outcome.draft!.messageEmail, /vous indiquez rechercher des distributeurs pour accompagner notre développement export/);
+    // L'interprétation — « à l'export » — n'y est pas : la source ne le dit pas ainsi.
+    assert.doesNotMatch(outcome.draft!.messageEmail, /à l’export/);
     assert.doesNotMatch(outcome.draft!.messageEmail, /j'ai relevé ceci/i);
   });
 

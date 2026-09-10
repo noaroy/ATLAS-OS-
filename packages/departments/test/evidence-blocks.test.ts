@@ -7,7 +7,7 @@ import {
 } from '../src/evidence-blocks.ts';
 import { verifyClaimAgainstSource } from '../src/claim-verification.ts';
 import {
-  buildBlockCatalogue, resolveSelections, subjectFor,
+  buildBlockCatalogue, resolveSelections,
 } from '../src/verbatim-selection.ts';
 
 /**
@@ -362,52 +362,5 @@ describe('le lot et la reprise posent la même question', () => {
     assert.equal(evidence.length, 0);
     assert.equal(rejected.length, 1);
     assert.match(rejected[0]!, /inexistant/);
-  });
-});
-
-// ─── L'OBJET ────────────────────────────────────────────────────────────────
-
-describe('tout brouillon EMAIL porte un objet, sans appel de modèle', () => {
-  const fait = (claim: string): SourcedEvidence => ({
-    normalizedClaim: claim,
-    evidenceQuote: 'Un passage réel de la page qui fait bien quarante caractères.',
-    sourceUrl: 'https://harmony-beton.com/',
-    sourcePageTitle: 'Harmony Béton',
-    evidenceType: 'COMMERCIAL_FACT',
-    blockId: 1,
-  });
-
-  test('l’objet reprend l’activité vérifiée', () => {
-    const s = subjectFor('Harmony Béton', [fait('Distribution de béton décoratif')]);
-    // Le suffixe « — étude de prospection B2B » a été retiré : il transformait
-    // chaque objet en étiquette de campagne.
-    assert.equal(s, 'Distribution de béton décoratif');
-  });
-
-  test('le nom de l’entreprise n’est pas répété dans l’objet', () => {
-    const s = subjectFor('Harmony Béton', [fait('Harmony Béton fabrique du béton ciré')]);
-    assert.doesNotMatch(s, /Harmony Béton fabrique/);
-    assert.match(s, /^Fabrique du béton ciré$/);
-  });
-
-  test('sans fait exploitable, le repli nomme l’entreprise sans rien promettre', () => {
-    assert.equal(subjectFor('Harmony Béton', []), 'Développement commercial — Harmony Béton');
-  });
-
-  test('un objet est toujours produit, jamais vide', () => {
-    for (const faits of [[], [fait('x')], [fait('Une activité industrielle décrite')]]) {
-      assert.ok(subjectFor('Untel', faits).trim().length > 0);
-    }
-  });
-
-  test('ni emoji, ni fausse urgence', () => {
-    const s = subjectFor('Harmony Béton', [fait('Distribution de béton décoratif')]);
-    assert.doesNotMatch(s, /\p{Extended_Pictographic}/u);
-    assert.doesNotMatch(s, /URGENT|DERNIER CHANCE|!!/i);
-  });
-
-  test('l’objet reste court', () => {
-    const long = 'Une description extrêmement longue de l’activité de cette entreprise qui dépasse largement ce qu’une ligne d’objet peut porter sans être tronquée';
-    assert.ok(subjectFor('Untel', [fait(long)]).length <= 78);
   });
 });

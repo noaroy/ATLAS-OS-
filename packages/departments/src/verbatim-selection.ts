@@ -149,49 +149,6 @@ export function resolveSelections(
 }
 
 /**
- * L'objet du message, composé sans appeler de modèle.
- *
- * Trois brouillons complets sont restés bloqués faute d'une ligne de sujet, et
- * payer un appel pour écrire six mots serait absurde. L'objet se déduit donc de
- * ce qui est déjà vérifié : l'activité relevée sur le site, à défaut le nom
- * commercial.
- *
- * Sobre par construction : pas d'appât, pas d'emoji, aucune urgence inventée.
- * Le sujet annonce ce que le message contient, et rien de plus.
- */
-export function subjectFor(company: string, facts: readonly SourcedEvidence[]): string {
-  /*
-   * Plus de suffixe generique.
-   *
-   * « — etude de prospection B2B » transformait chaque objet en etiquette de
-   * campagne, reconnaissable d'une boite a l'autre. L'objet doit se lire comme
-   * ecrit pour ce destinataire-la.
-   */
-  const SUFFIXE = '';
-  const MAX = 60;
-
-  /** Le fait le plus court qui reste lisible : un sujet n'est pas un paragraphe. */
-  const candidat = facts
-    .map((f) => f.normalizedClaim.trim())
-    .filter((t) => t.length >= 12)
-    .map((t) => t
-      // « L'entreprise X fabrique… » devient « fabrique… » : le nom est déjà
-      // connu du destinataire, et le répéter mange la place utile.
-      .replace(new RegExp(`^${company.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\s+`, 'i'), '')
-      .replace(/^(?:l['’]entreprise|la société|la societe)\s+/i, '')
-      .replace(/\s*[.;]\s*$/, ''))
-    .filter((t) => t.length >= 12 && t.length <= MAX - SUFFIXE.length)
-    .sort((a, b) => a.length - b.length)[0];
-
-  if (candidat) {
-    const t = candidat.charAt(0).toUpperCase() + candidat.slice(1);
-    return `${t}${SUFFIXE}`;
-  }
-  // Le repli nomme l'entreprise plutôt que de promettre quoi que ce soit.
-  return `Développement commercial — ${company}`.slice(0, MAX);
-}
-
-/**
  * Le préfixe sous lequel l'interprétation est rangée dans `basis`.
  *
  * Il existait en deux orthographes — « interpretation : » dans le lot,

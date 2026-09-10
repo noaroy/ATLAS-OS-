@@ -5,7 +5,8 @@ import {
   type StoredEvidence, type OutreachContact,
 } from '../src/outreach.ts';
 import { checkHumanization } from '../src/humanization.ts';
-import { classifyActionChannel, isVerifiedFormUrl } from '../src/action-channel.ts';
+import { classifyActionChannel } from '../src/action-channel.ts';
+import { resolveContacts } from '../src/contact-resolver.ts';
 import { INTERPRETATION_PREFIX } from '../src/verbatim-selection.ts';
 
 /**
@@ -157,16 +158,46 @@ describe('ASYTEC — le modèle affirmait ce que la page ne dit pas', () => {
     assert.notEqual(verdict.channel, 'EMAIL');
   });
 
-  test('la racine du site n’est pas un formulaire observé : aucun canal écrit vérifié', () => {
-    assert.equal(isVerifiedFormUrl('https://asytec.fr/'), false);
-    assert.equal(isVerifiedFormUrl('https://asytec.fr'), false);
-    assert.equal(isVerifiedFormUrl('https://asytec.fr/contact/'), true);
-    assert.equal(isVerifiedFormUrl('https://www.k2tec.com/fr/contact/'), true);
+  test('le formulaire d’ASYTEC est réel : vu en page d’accueil, pas déduit de l’adresse', () => {
+    /*
+     * La page d'accueil d'asytec.fr porte deux formulaires : la recherche du
+     * site, et un formulaire Salesforce Web-to-Lead avec un champ message.
+     * `contact_page = https://asytec.fr/` n'est donc pas un repli sur la racine :
+     * c'est la page où le formulaire a été vu. Une règle « racine ≠ formulaire »
+     * avait été écrite ici — elle contredisait la preuve, et elle est partie.
+     *
+     * Structure figée d'après la page relue le 10 septembre 2026.
+     */
+    const accueil = `<html><body>
+      <form role="search" action="https://asytec.fr/"><input type="search" name="s"></form>
+      <form action="https://webto.salesforce.com/servlet/servlet.WebToLead?encoding=UTF-8" method="POST">
+        <input name="company"><input name="first_name">
+        <textarea name="00N…"></textarea>
+        <input type="submit" value="Envoyer">
+      </form>
+    </body></html>`;
+    const r = resolveContacts({ officialDomain: 'asytec.fr', pages: [{ url: 'https://asytec.fr/', html: accueil }] });
+    assert.ok(r.contactFormUrl, 'un formulaire est relevé');
+    assert.equal(r.contactFormUrl.value, 'https://asytec.fr/');
+    assert.equal(r.contactFormUrl.observed, true);
+    // La racine n'est pas une page de contact : la confiance le dit, sans nier le formulaire.
+    assert.equal(r.contactFormUrl.confidence, 'MEDIUM');
+    assert.equal(r.method, 'FORM');
 
     const verdict = classifyActionChannel({
-      email: null, phone: null, formUrl: 'https://asytec.fr/', recordedMethod: 'FORM', observed: true,
+      email: null, phone: null, formUrl: r.contactFormUrl.value, recordedMethod: r.method, observed: true,
     });
-    assert.equal(verdict.channel, 'UNAVAILABLE');
-    assert.equal(verdict.target, null);
+    assert.equal(verdict.channel, 'FORM');
+    assert.equal(verdict.target, 'https://asytec.fr/');
+  });
+
+  test('une page sans formulaire de contact n’en consigne aucun, quelle que soit son adresse', () => {
+    // La preuve est le formulaire lui-même. Un champ de recherche n'en est pas un,
+    // et /contact sans formulaire non plus.
+    const sansForm = `<html><body><form action="/"><input type="search" name="s"></form><p>Écrivez-nous.</p></body></html>`;
+    for (const url of ['https://asytec.fr/', 'https://asytec.fr/contact/', 'https://asytec.fr/mentions-legales/']) {
+      const r = resolveContacts({ officialDomain: 'asytec.fr', pages: [{ url, html: sansForm }] });
+      assert.equal(r.contactFormUrl, null, url);
+    }
   });
 });

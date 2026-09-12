@@ -1485,4 +1485,728 @@ ALTER TABLE sales_conversation_events ADD COLUMN external_message_id TEXT;
 ALTER TABLE sales_conversation_events ADD COLUMN external_thread_id TEXT;
 `,
   },
+  {
+    version: 26,
+    name: 'autonomous-sales-loop',
+    sql: `
+-- ─── La machine a etats de la boucle commerciale ──────────────────────────
+--
+-- Une entreprise traverse la boucle : decouverte, qualification, redaction,
+-- approbation, envoi, attente, reponse. Chaque passage est consigne, jamais
+-- ecrase : savoir qu'un prospect est aujourd'hui WAITING_REPLY ne dit pas s'il
+-- y est arrive apres une approbation humaine ou apres une relance, et c'est
+-- precisement ce qu'il faut pouvoir relire quand un envoi se passe mal.
+CREATE TABLE sales_loop_transitions (
+  id           TEXT PRIMARY KEY,
+  domain       TEXT NOT NULL,
+  from_state   TEXT,
+  to_state     TEXT NOT NULL,
+  reason       TEXT,
+  -- Qui a provoque la transition : un humain nomme, ou le nom d'une regle.
+  actor        TEXT NOT NULL,
+  run_id       TEXT,
+  occurred_at  TEXT NOT NULL
+);
+CREATE INDEX idx_loop_transitions_domain ON sales_loop_transitions(domain, occurred_at);
+CREATE INDEX idx_loop_transitions_state ON sales_loop_transitions(to_state);
+
+CREATE TRIGGER sales_loop_transitions_no_update
+BEFORE UPDATE ON sales_loop_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'une transition passee ne se reecrit pas.');
+END;
+
+CREATE TRIGGER sales_loop_transitions_no_delete
+BEFORE DELETE ON sales_loop_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'effacer une transition effacerait la raison d''un envoi.');
+END;
+
+-- ─── La reservation d'un envoi ────────────────────────────────────────────
+--
+-- Le double envoi ne se previent pas en verifiant avant d'ecrire : entre la
+-- verification et l'ecriture, un retry concurrent passe. La place est donc
+-- reservee AVANT d'appeler le fournisseur, et c'est la cle primaire qui
+-- refuse la seconde tentative — une contrainte que le code appelant ne peut
+-- pas oublier de respecter.
+--
+-- Consequence assumee : si le processus meurt entre la reservation et
+-- l'envoi, le message reste bloque. C'est le bon sens de la panne — un
+-- message non parti se renvoie sur decision humaine, un message parti deux
+-- fois ne se rattrape pas.
+CREATE TABLE outbound_sends (
+  idempotency_key TEXT PRIMARY KEY,
+  domain          TEXT NOT NULL,
+  conversation_id TEXT REFERENCES sales_conversations(id),
+  recipient       TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  -- L'empreinte du corps : deux relances distinctes doivent produire deux
+  -- cles, un retry du meme message doit produire la meme.
+  body_hash       TEXT NOT NULL,
+  purpose         TEXT NOT NULL,
+  claimed_at      TEXT NOT NULL,
+  claimed_by      TEXT NOT NULL
+);
+CREATE INDEX idx_outbound_sends_domain ON outbound_sends(domain);
+
+CREATE TRIGGER outbound_sends_no_update
+BEFORE UPDATE ON outbound_sends
+BEGIN
+  SELECT RAISE(ABORT, 'une reservation d''envoi ne se modifie pas.');
+END;
+
+CREATE TRIGGER outbound_sends_no_delete
+BEFORE DELETE ON outbound_sends
+BEGIN
+  SELECT RAISE(ABORT, 'liberer une reservation rouvrirait la porte au double envoi.');
+END;
+
+-- Ce qu'il est advenu de la reservation. Separe de la reservation elle-meme
+-- parce que la table du dessus est immuable : le resultat arrive apres.
+CREATE TABLE outbound_send_events (
+  id                  TEXT PRIMARY KEY,
+  idempotency_key     TEXT NOT NULL REFERENCES outbound_sends(idempotency_key),
+  -- SENT · FAILED
+  phase               TEXT NOT NULL,
+  external_message_id TEXT,
+  external_thread_id  TEXT,
+  error               TEXT,
+  occurred_at         TEXT NOT NULL
+);
+
+-- La garantie qui compte, tenue par le moteur et non par l'appelant : une
+-- reservation ne peut aboutir qu'une fois. Un second SENT est refuse meme si
+-- deux processus l'ecrivent en meme temps.
+CREATE UNIQUE INDEX idx_outbound_sent_once
+  ON outbound_send_events(idempotency_key) WHERE phase = 'SENT';
+CREATE INDEX idx_outbound_send_events_phase ON outbound_send_events(phase);
+
+CREATE TRIGGER outbound_send_events_no_update
+BEFORE UPDATE ON outbound_send_events
+BEGIN
+  SELECT RAISE(ABORT, 'le resultat d''un envoi est un fait : il ne se corrige pas.');
+END;
+
+CREATE TRIGGER outbound_send_events_no_delete
+BEFORE DELETE ON outbound_send_events
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un envoi reussi autoriserait a le refaire.');
+END;
+
+-- ─── Les brouillons soumis a approbation ──────────────────────────────────
+--
+-- Un brouillon n'est pas un message : il attend une decision. Le conserver
+-- permet de montrer a l'humain ce qu'il approuve exactement, et de verifier
+-- apres coup que ce qui est parti est bien ce qui avait ete approuve.
+CREATE TABLE outreach_drafts (
+  id              TEXT PRIMARY KEY,
+  domain          TEXT NOT NULL,
+  company_name    TEXT NOT NULL,
+  recipient       TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  body            TEXT NOT NULL,
+  body_hash       TEXT NOT NULL,
+  purpose         TEXT NOT NULL,
+  conversion_score REAL,
+  rationale       TEXT,
+  -- Les faits cites, en JSON : citation + URL. Un brouillon sans source ne
+  -- peut pas etre relu.
+  sources         TEXT NOT NULL,
+  -- READY_FOR_APPROVAL · APPROVED_TO_SEND · REJECTED · SENT
+  state           TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  created_by      TEXT NOT NULL
+);
+CREATE INDEX idx_outreach_drafts_state ON outreach_drafts(state);
+CREATE INDEX idx_outreach_drafts_domain ON outreach_drafts(domain);
+
+-- Un brouillon approuve puis modifie serait un message jamais relu par
+-- personne. L'etat evolue par ajout d'une decision, pas par retouche.
+CREATE TABLE outreach_draft_decisions (
+  id          TEXT PRIMARY KEY,
+  draft_id    TEXT NOT NULL REFERENCES outreach_drafts(id),
+  decision    TEXT NOT NULL,
+  decided_by  TEXT NOT NULL,
+  note        TEXT,
+  decided_at  TEXT NOT NULL
+);
+CREATE INDEX idx_draft_decisions_draft ON outreach_draft_decisions(draft_id);
+
+CREATE TRIGGER outreach_drafts_no_delete
+BEFORE DELETE ON outreach_drafts
+BEGIN
+  SELECT RAISE(ABORT, 'un brouillon soumis reste consultable.');
+END;
+
+CREATE TRIGGER outreach_draft_decisions_no_update
+BEFORE UPDATE ON outreach_draft_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'une decision d''approbation ne se reecrit pas.');
+END;
+
+CREATE TRIGGER outreach_draft_decisions_no_delete
+BEFORE DELETE ON outreach_draft_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'effacer une approbation effacerait qui a autorise l''envoi.');
+END;
+`,
+  },
+  {
+    version: 27,
+    name: 'durable-task-queue',
+    sql: `
+-- --- La file de travail durable -------------------------------------------
+--
+-- Le coeur du fonctionnement permanent. Une tache y survit au processus qui
+-- l'execute : c'est la difference entre un programme qui travaille et un
+-- programme qu'il faut surveiller.
+--
+-- La table est mutable, contrairement a la plupart des tables d'ATLAS. C'est
+-- assume : l'etat courant d'une tache doit se lire en une ligne, sans rejouer
+-- son histoire. L'histoire, elle, vit dans task_transitions, append-only.
+CREATE TABLE tasks (
+  task_id           TEXT PRIMARY KEY,
+  task_type         TEXT NOT NULL,
+  -- CRITICAL_CLIENT . CLIENT_REPLY . SALES . ENGINEERING . BACKGROUND . MAINTENANCE
+  department        TEXT NOT NULL,
+  -- DETERMINISTIC . OPENAI . CLAUDE . HUMAN
+  worker_type       TEXT NOT NULL,
+  priority          INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL,
+  payload_json      TEXT NOT NULL DEFAULT '{}',
+  result_json       TEXT,
+
+  created_at        TEXT NOT NULL,
+  -- Le moment a partir duquel la tache peut etre prise. Porte a la fois le
+  -- differe, la reprise apres quota et le backoff : trois besoins, un champ.
+  available_at      TEXT NOT NULL,
+  started_at        TEXT,
+  finished_at       TEXT,
+
+  attempt_count     INTEGER NOT NULL DEFAULT 0,
+  max_attempts      INTEGER NOT NULL DEFAULT 3,
+
+  -- Le bail. Un worker qui meurt cesse de le renouveler, et la tache redevient
+  -- prenable sans que personne n'ait eu a le declarer.
+  lease_owner       TEXT,
+  lease_until       TEXT,
+  last_heartbeat_at TEXT,
+
+  parent_task_id    TEXT REFERENCES tasks(task_id),
+  correlation_id    TEXT,
+
+  -- Deux taches de meme cle ne peuvent pas coexister : c'est ce qui empeche un
+  -- planificateur de creer deux fois la meme verification horaire.
+  idempotency_key   TEXT UNIQUE,
+
+  estimated_cost    REAL,
+  actual_cost       REAL,
+
+  error_code        TEXT,
+  error_message     TEXT,
+
+  metadata_json     TEXT NOT NULL DEFAULT '{}'
+);
+
+-- L'index qui porte la selection du scheduler. Sans lui, chaque tour de boucle
+-- relit la table entiere -- et cette boucle tourne pendant des semaines.
+CREATE INDEX idx_tasks_claimable ON tasks(status, available_at, priority DESC);
+CREATE INDEX idx_tasks_lease ON tasks(status, lease_until);
+CREATE INDEX idx_tasks_correlation ON tasks(correlation_id);
+CREATE INDEX idx_tasks_type ON tasks(task_type, status);
+
+-- --- L'histoire d'une tache -----------------------------------------------
+--
+-- Savoir qu'une tache a echoue ne dit pas si elle a echoue trois fois pour la
+-- meme raison ou une fois pour trois raisons. La seconde lecture est celle qui
+-- permet de corriger quelque chose.
+CREATE TABLE task_transitions (
+  id           TEXT PRIMARY KEY,
+  task_id      TEXT NOT NULL REFERENCES tasks(task_id),
+  from_status  TEXT,
+  to_status    TEXT NOT NULL,
+  reason       TEXT,
+  actor        TEXT NOT NULL,
+  attempt      INTEGER,
+  occurred_at  TEXT NOT NULL
+);
+CREATE INDEX idx_task_transitions_task ON task_transitions(task_id, occurred_at);
+
+CREATE TRIGGER task_transitions_no_update
+BEFORE UPDATE ON task_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'une transition de tache ne se reecrit pas.');
+END;
+
+CREATE TRIGGER task_transitions_no_delete
+BEFORE DELETE ON task_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'effacer une transition effacerait la raison dun echec.');
+END;
+
+-- --- Dependances ----------------------------------------------------------
+--
+-- Volontairement minimal : une tache attend qu'une autre soit DONE. Pas de
+-- moteur de workflow -- l'ordre entre deux taches se dit en une ligne, et tout
+-- ce qui demande davantage merite d'etre ecrit comme une tache de plus.
+CREATE TABLE task_dependencies (
+  task_id             TEXT NOT NULL REFERENCES tasks(task_id),
+  depends_on_task_id  TEXT NOT NULL REFERENCES tasks(task_id),
+  created_at          TEXT NOT NULL,
+  PRIMARY KEY (task_id, depends_on_task_id)
+);
+CREATE INDEX idx_task_deps_parent ON task_dependencies(depends_on_task_id);
+
+-- --- La sante des fournisseurs --------------------------------------------
+--
+-- Append-only, comme tout ce qui sert a decider. Un fournisseur qui passe
+-- indisponible puis disponible trois fois dans la journee raconte quelque
+-- chose qu'un simple champ « etat courant » effacerait.
+CREATE TABLE provider_health_events (
+  id            TEXT PRIMARY KEY,
+  provider      TEXT NOT NULL,
+  -- AVAILABLE . RATE_LIMITED . QUOTA_EXHAUSTED . BUDGET_EXHAUSTED
+  -- AUTH_ERROR . DEGRADED . UNKNOWN
+  state         TEXT NOT NULL,
+  reason        TEXT,
+  -- Quand retenter. Vient de Retry-After quand le fournisseur l'a donne, d'un
+  -- backoff borne sinon. Jamais d'une heure de reset supposee.
+  retry_at      TEXT,
+  -- D'ou vient retry_at : RETRY_AFTER . RATE_LIMIT_HEADER . PROVIDER_METADATA
+  -- . BACKOFF. Sans cela on ne sait pas si l'echeance est connue ou devinee.
+  retry_source  TEXT,
+  observed_at   TEXT NOT NULL
+);
+CREATE INDEX idx_provider_health_provider ON provider_health_events(provider, observed_at);
+
+CREATE TRIGGER provider_health_no_update
+BEFORE UPDATE ON provider_health_events
+BEGIN
+  SELECT RAISE(ABORT, 'un releve de sante est un fait date : il ne se corrige pas.');
+END;
+
+CREATE TRIGGER provider_health_no_delete
+BEFORE DELETE ON provider_health_events
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un releve effacerait la trace dune panne.');
+END;
+
+-- --- Les operations externes, reservees avant d'etre faites ----------------
+--
+-- Generalisation de ce qui protegeait deja l'envoi commercial. Le principe ne
+-- change pas : la place est prise AVANT l'appel externe, et c'est la cle
+-- primaire qui refuse la seconde tentative. Verifier avant d'ecrire laisse
+-- passer un retry concurrent ; deux INSERT sur la meme cle, non.
+--
+-- Consequence assumee : un plantage entre la reservation et la confirmation
+-- laisse l'operation bloquee. C'est le bon sens de la panne -- une operation
+-- non faite se refait sur decision, une operation faite deux fois ne se
+-- rattrape pas.
+CREATE TABLE external_operations (
+  idempotency_key TEXT PRIMARY KEY,
+  -- EMAIL_SEND . PAYMENT . EXTERNAL_CREATE . EXTERNAL_UPDATE . NOTIFICATION
+  kind            TEXT NOT NULL,
+  task_id         TEXT REFERENCES tasks(task_id),
+  target          TEXT,
+  summary         TEXT,
+  claimed_at      TEXT NOT NULL,
+  claimed_by      TEXT NOT NULL
+);
+CREATE INDEX idx_external_operations_kind ON external_operations(kind);
+
+CREATE TRIGGER external_operations_no_update
+BEFORE UPDATE ON external_operations
+BEGIN
+  SELECT RAISE(ABORT, 'une reservation doperation externe ne se modifie pas.');
+END;
+
+CREATE TRIGGER external_operations_no_delete
+BEFORE DELETE ON external_operations
+BEGIN
+  SELECT RAISE(ABORT, 'liberer une reservation rouvrirait la porte au doublon.');
+END;
+
+CREATE TABLE external_operation_events (
+  id              TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL REFERENCES external_operations(idempotency_key),
+  -- CONFIRMED . FAILED
+  phase           TEXT NOT NULL,
+  external_ref    TEXT,
+  error           TEXT,
+  occurred_at     TEXT NOT NULL
+);
+
+-- La garantie tenue par le moteur et non par l'appelant : une reservation ne
+-- peut aboutir qu'une fois, meme si deux processus l'ecrivent simultanement.
+CREATE UNIQUE INDEX idx_external_confirmed_once
+  ON external_operation_events(idempotency_key) WHERE phase = 'CONFIRMED';
+
+CREATE TRIGGER external_operation_events_no_update
+BEFORE UPDATE ON external_operation_events
+BEGIN
+  SELECT RAISE(ABORT, 'le resultat dune operation externe est un fait.');
+END;
+
+CREATE TRIGGER external_operation_events_no_delete
+BEFORE DELETE ON external_operation_events
+BEGIN
+  SELECT RAISE(ABORT, 'effacer une operation reussie autoriserait a la refaire.');
+END;
+
+-- --- Le journal du daemon -------------------------------------------------
+CREATE TABLE daemon_runs (
+  id          TEXT PRIMARY KEY,
+  host        TEXT NOT NULL,
+  pid         INTEGER NOT NULL,
+  started_at  TEXT NOT NULL,
+  stopped_at  TEXT,
+  stop_reason TEXT
+);
+CREATE INDEX idx_daemon_runs_started ON daemon_runs(started_at);
+`,
+  },
+  {
+    version: 28,
+    name: 'dual-ai-workers',
+    sql: `
+-- --- Les chaines de travail IA --------------------------------------------
+--
+-- Une revue peut demander une correction, qui peut demander une revue. C'est
+-- utile deux fois et ruineux la troisieme : sans borne, deux modeles se
+-- renvoient la balle jusqu'a epuisement du budget, et personne ne le voit
+-- avant la facture.
+--
+-- La racine et la profondeur sont portees par la tache elle-meme : compter les
+-- ancetres a chaque creation couterait une recursion, et la borne doit etre
+-- verifiable en une lecture.
+ALTER TABLE tasks ADD COLUMN chain_id TEXT;
+ALTER TABLE tasks ADD COLUMN chain_depth INTEGER NOT NULL DEFAULT 0;
+-- L'empreinte d'une intention. Deux taches de meme empreinte dans une meme
+-- chaine sont la meme demande reformulee : la seconde ne se cree pas.
+ALTER TABLE tasks ADD COLUMN fingerprint TEXT;
+CREATE INDEX idx_tasks_chain ON tasks(chain_id, chain_depth);
+CREATE INDEX idx_tasks_fingerprint ON tasks(fingerprint);
+
+-- --- Ce que chaque appel de modele a reellement coute ---------------------
+--
+-- Append-only. Le cout est la seule chose qu'un systeme autonome depense sans
+-- qu'on le lui redemande : le compteur doit etre un fait date, pas une valeur
+-- courante qu'une correction pourrait effacer.
+--
+-- Le prix peut etre inconnu alors que les jetons sont connus. Les deux colonnes
+-- sont donc distinctes, et cost_usd reste NULL plutot que zero -- additionner
+-- des zeros et appeler cela « cout connu » serait plus faux que de dire N/A.
+CREATE TABLE ai_calls (
+  id                TEXT PRIMARY KEY,
+  task_id           TEXT REFERENCES tasks(task_id),
+  chain_id          TEXT,
+  provider          TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  capability        TEXT,
+  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd          REAL,
+  -- KNOWN . UNKNOWN_PRICE . SIMULATED : d'ou vient le cout, ou pourquoi il
+  -- manque. Un cout sans provenance ne se verifie pas.
+  cost_basis        TEXT NOT NULL,
+  duration_ms       INTEGER,
+  outcome           TEXT NOT NULL,
+  error_code        TEXT,
+  occurred_at       TEXT NOT NULL
+);
+CREATE INDEX idx_ai_calls_occurred ON ai_calls(occurred_at);
+CREATE INDEX idx_ai_calls_provider ON ai_calls(provider, occurred_at);
+CREATE INDEX idx_ai_calls_chain ON ai_calls(chain_id);
+
+CREATE TRIGGER ai_calls_no_update
+BEFORE UPDATE ON ai_calls
+BEGIN
+  SELECT RAISE(ABORT, 'un appel facture est un fait : il ne se corrige pas.');
+END;
+
+CREATE TRIGGER ai_calls_no_delete
+BEFORE DELETE ON ai_calls
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un appel effacerait une depense reelle.');
+END;
+
+-- --- Le verrou d'ecriture sur le depot ------------------------------------
+--
+-- Deux agents qui modifient les memes fichiers en parallele produisent un etat
+-- que ni l'un ni l'autre n'a voulu, et que les tests ne decrivent plus. Le
+-- verrou est pose par cle primaire : la seconde prise echoue, elle ne se
+-- negocie pas.
+--
+-- Il porte un bail, comme les taches. Un agent qui meurt en tenant le verrou
+-- ne doit pas bloquer le depot indefiniment.
+CREATE TABLE repo_locks (
+  lock_key    TEXT PRIMARY KEY,
+  task_id     TEXT REFERENCES tasks(task_id),
+  owner       TEXT NOT NULL,
+  mode        TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  lease_until TEXT NOT NULL
+);
+CREATE INDEX idx_repo_locks_lease ON repo_locks(lease_until);
+`,
+  },
+  {
+    version: 29,
+    name: 'engineering-workspaces',
+    sql: `
+-- --- L'espace de travail d'une tache d'ingenierie -------------------------
+--
+-- Une tache qui modifie du code ne travaille jamais dans le depot principal.
+-- Elle recoit un worktree git a elle, cree depuis un commit connu, et c'est la
+-- qu'elle ecrit. Le depot principal ne bouge qu'apres une decision explicite.
+--
+-- La separation n'est pas de la prudence decorative : le travail non commite
+-- d'une personne et celui d'un agent ne se distinguent plus une fois melanges,
+-- et aucune commande git ne sait les demeler apres coup.
+--
+-- La colonne base_commit est la piece maitresse. Sans lui, on ne peut pas savoir si le
+-- depot a bouge entre la creation du workspace et l'application du diff -- et
+-- appliquer un patch sur une base differente produit soit un conflit, soit
+-- pire, une application partielle qui compile.
+CREATE TABLE engineering_workspaces (
+  workspace_id  TEXT PRIMARY KEY,
+  task_id       TEXT NOT NULL REFERENCES tasks(task_id),
+  base_commit   TEXT NOT NULL,
+  branch        TEXT,
+  path          TEXT NOT NULL,
+  -- CREATED . IN_USE . READY_FOR_REVIEW . APPLIED . ABANDONED . CLEANED
+  state         TEXT NOT NULL,
+  -- L'empreinte du diff au moment de la revue. Applique plus tard, un diff qui
+  -- ne correspond plus a cette empreinte n'est plus celui qui a ete relu.
+  diff_hash     TEXT,
+  files_changed INTEGER NOT NULL DEFAULT 0,
+  diff_lines    INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  cleaned_at    TEXT
+);
+CREATE INDEX idx_workspaces_task ON engineering_workspaces(task_id);
+CREATE INDEX idx_workspaces_state ON engineering_workspaces(state);
+
+-- Une tache n'a qu'un seul workspace mutable. Deux taches qui partageraient un
+-- espace d'ecriture produiraient un diff que ni l'une ni l'autre n'a voulu.
+CREATE UNIQUE INDEX idx_workspace_one_per_task
+  ON engineering_workspaces(task_id) WHERE state IN ('CREATED', 'IN_USE', 'READY_FOR_REVIEW');
+
+-- --- Ce que la tache a produit --------------------------------------------
+--
+-- Le plan, le diff, le rapport de tests, la revue. Conserves a part et
+-- references par le resultat de tache : envoyer un diff entier au modele
+-- suivant coute des jetons pour du contexte dont il n'a le plus souvent besoin
+-- que par fragments.
+CREATE TABLE engineering_artifacts (
+  artifact_id  TEXT PRIMARY KEY,
+  task_id      TEXT NOT NULL REFERENCES tasks(task_id),
+  workspace_id TEXT REFERENCES engineering_workspaces(workspace_id),
+  -- PLAN . DIFF . TEST_REPORT . BUILD_REPORT . FINAL_REVIEW . SECURITY_REPORT
+  kind         TEXT NOT NULL,
+  content      TEXT NOT NULL,
+  bytes        INTEGER NOT NULL,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_artifacts_task ON engineering_artifacts(task_id, kind);
+
+CREATE TRIGGER engineering_artifacts_no_update
+BEFORE UPDATE ON engineering_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'un artefact est un fait date : il ne se corrige pas.');
+END;
+
+CREATE TRIGGER engineering_artifacts_no_delete
+BEFORE DELETE ON engineering_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un artefact effacerait ce qui a ete relu.');
+END;
+`,
+  },
+  {
+    version: 30,
+    name: 'mail-sync-checkpoint',
+    sql: `
+-- --- Jusqu'ou la boite a ete lue -----------------------------------------
+--
+-- Le journal d'import dit quels messages ont ete vus. Il ne dit pas jusqu'ou
+-- on a lu, et la nuance a coute une garantie entiere : la synchronisation
+-- demandait les cinquante messages les plus recents, sans curseur, si bien
+-- qu'une reponse de prospect arrivee en cinquante-et-unieme position n'etait
+-- jamais lue -- et ne l'aurait jamais ete, puisque le passage suivant reprenait
+-- lui aussi les cinquante plus recents. Rien ne manquait nulle part : le
+-- message n'avait simplement jamais existe pour ATLAS.
+--
+-- Une ligne par boite et par fournisseur. last_received_at est l'horodatage
+-- du message le plus recent REELLEMENT traite -- pas celui du plus recent vu.
+-- La distinction est ce qui rend la reprise sure : un plantage en cours de
+-- pagination laisse le curseur ou il etait, la fenetre est relue, et le journal
+-- d'import ecarte les doublons.
+CREATE TABLE mail_sync_checkpoints (
+  provider          TEXT NOT NULL,
+  mailbox           TEXT NOT NULL,
+  -- Horodatage du message le plus recent dont le traitement est termine.
+  last_received_at  TEXT NOT NULL,
+  -- Quand la synchronisation s'est achevee, pour distinguer « rien de neuf »
+  -- de « plus personne ne synchronise ».
+  last_synced_at    TEXT NOT NULL,
+  messages_seen     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider, mailbox)
+);
+`,
+  },
+  {
+    version: 31,
+    name: 'outbound-send-abandonments',
+    sql: `
+-- --- L'abandon d'une reservation morte -----------------------------------
+--
+-- Une reservation d'envoi se prend avant l'appel reseau : si le processus meurt
+-- entre les deux, la place reste prise et personne ne renvoie le message. C'est
+-- voulu -- un doute sur un envoi doit bloquer, jamais se resoudre tout seul.
+--
+-- Restait un cas sans issue : une reservation prise et jamais suivie d'un
+-- envoi. C'est arrive pour de bon -- une simulation reservait la place avant de
+-- verifier qu'elle etait une simulation. Quatre relances approuvees se sont
+-- retrouvees impossibles a envoyer, sans qu'aucun message ne soit jamais parti.
+-- La table etant append-only, rien ne permettait de refermer ces reservations.
+--
+-- L'abandon est donc consigne, jamais efface. La reservation d'origine reste en
+-- place et lisible ; une ligne ici dit qui a decide de la refermer, quand, et
+-- pourquoi. Ce qui rend l'operation sure n'est pas ce mecanisme mais l'index
+-- unique partiel sur les evenements SENT : la base ne peut pas contenir deux
+-- envois pour une meme cle, qu'on abandonne ou non.
+CREATE TABLE outbound_send_abandonments (
+  idempotency_key TEXT PRIMARY KEY
+    REFERENCES outbound_sends(idempotency_key),
+  actor           TEXT NOT NULL,
+  reason          TEXT NOT NULL,
+  abandoned_at    TEXT NOT NULL
+);
+
+CREATE TRIGGER outbound_send_abandonments_no_update
+BEFORE UPDATE ON outbound_send_abandonments
+BEGIN
+  SELECT RAISE(ABORT, 'un abandon consigne ne se reecrit pas.');
+END;
+
+CREATE TRIGGER outbound_send_abandonments_no_delete
+BEFORE DELETE ON outbound_send_abandonments
+BEGIN
+  SELECT RAISE(ABORT, 'effacer un abandon effacerait la trace de la decision.');
+END;
+`,
+  },
+  {
+    version: 32,
+    name: 'sales-prospect-outreach-subject',
+    sql: `
+-- --- L'objet du message, la ou vit le message ----------------------------
+--
+-- Un brouillon de lot portait son corps et rien d'autre. La ligne d'objet
+-- n'existait nulle part : la vue d'approbation la rendait nulle faute de
+-- colonne, et trois messages par ailleurs complets ne pouvaient pas partir --
+-- un courriel sans sujet arrive comme un envoi automatique.
+--
+-- L'objet est ecrit ici, aupres du corps qu'il annonce. Le stocker ailleurs --
+-- dans le fichier de lot passe au script d'envoi, par exemple -- laisserait
+-- deux textes approuves ensemble vivre separement, et rien ne garantirait
+-- ensuite que l'objet relu est celui qui a ete valide.
+ALTER TABLE sales_prospects ADD COLUMN message_subject TEXT;
+`,
+  },
+  {
+    version: 33,
+    name: 'client-mission-candidates',
+    sql: `
+-- --- Un candidat de mission client, suivi un par un ------------------------
+--
+-- Le pipeline client n'avait pas de memoire du travail en cours : les
+-- entreprises, preuves et opportunites etaient ecrites, mais rien ne disait
+-- ou en etait chaque candidat. Une mission interrompue au soixantieme
+-- repartait de zero, repayait les analyses, et un rapport ne pouvait
+-- rattacher que les opportunites d'une seule mission.
+--
+-- Cette table est le journal de bord d'une mission client (run_id = la
+-- mission). Chaque candidat y entre a la decouverte, avance etape par etape,
+-- et y reste avec son etat final -- retenu, a revoir, ecarte avec sa raison
+-- et sa preuve, ou echoue avec son motif. Un lot reprend la ou le precedent
+-- s'est arrete en lisant cette table, et le rapport final la lit en entier.
+CREATE TABLE IF NOT EXISTS client_candidates (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL,
+  domain          TEXT NOT NULL,
+  url             TEXT NOT NULL,
+  name            TEXT,
+  batch           INTEGER NOT NULL,
+  brief_version   INTEGER NOT NULL DEFAULT 1,
+  stage           TEXT NOT NULL,
+  category        TEXT,
+  reason          TEXT,
+  evidence_quote  TEXT,
+  evidence_url    TEXT,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  company_id      TEXT,
+  opportunity_id  TEXT,
+  cost_usd        REAL NOT NULL DEFAULT 0,
+  detail          TEXT,
+  discovered_at   TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  UNIQUE (run_id, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_client_candidates_run_stage ON client_candidates(run_id, stage);
+`,
+  },
+  {
+    version: 34,
+    name: 'client-mission-cache',
+    sql: `
+-- --- Ce qui a deja ete lu ou juge, pour ne pas le relire ni le repayer -----
+--
+-- Le premier lot suedois reel a fait 265 requetes pour 69 pages ; une reprise
+-- relisait toutes les pages d'un candidat en echec, et une seconde mission sur
+-- le meme marche repayait chaque qualification. Deux memoires datees :
+--
+--   page_cache          une page par adresse, HTML compresse ou echec qui l'a
+--                       remplacee (un 404 d'hier est un 404 d'aujourd'hui) ;
+--   qualification_cache la reponse du modele a (societe, brief, passages) --
+--                       la meme question sur les memes passages n'est pas
+--                       reposee ; un brief modifie change la cle.
+--
+-- Ce sont des copies, jamais des verites : au-dela de leur duree de vie elles
+-- sont ignorees, et un --no-cache les contourne toutes.
+CREATE TABLE IF NOT EXISTS page_cache (
+  url         TEXT PRIMARY KEY,
+  domain      TEXT NOT NULL,
+  ok          INTEGER NOT NULL,
+  status      INTEGER,
+  kind        TEXT,
+  html_gz     BLOB,
+  fetched_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_page_cache_domain ON page_cache(domain);
+CREATE TABLE IF NOT EXISTS qualification_cache (
+  key           TEXT PRIMARY KEY,
+  domain        TEXT NOT NULL,
+  brief_hash    TEXT NOT NULL,
+  content_hash  TEXT NOT NULL,
+  model         TEXT NOT NULL,
+  output        TEXT NOT NULL,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_qualification_cache_domain ON qualification_cache(domain);
+`,
+  },
+  {
+    version: 35,
+    name: 'client-cache-final-url',
+    sql: `
+-- L'adresse apres redirections, quand elle differe de celle demandee : une
+-- page rangee sous /kontakt mais lue a /kontakt/ doit citer la seconde.
+ALTER TABLE page_cache ADD COLUMN final_url TEXT;
+`,
+  },
 ];

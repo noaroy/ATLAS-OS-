@@ -333,6 +333,231 @@ export class LlmCallRepository {
       .get(missionId) as { present: number } | undefined;
     return row !== undefined;
   }
+
+  /**
+   * Ce qui a été dépensé depuis une date, toutes missions confondues.
+   *
+   * `totals()` répond par mission, ce qui ne dit rien du total d'une journée.
+   * L'écart s'est vu : le tableau de bord affichait « Coût IA : N/A » alors que
+   * 6,82 $ avaient réellement été dépensés — il lisait `ai_calls`, alimenté par
+   * les workers, tandis que le pipeline de prospection écrit ici. Deux registres,
+   * une seule vérité à afficher.
+   *
+   * Un appel sans tarif est compté à part, jamais comme gratuit : c'est la même
+   * règle que partout ailleurs, et elle vaut aussi pour l'affichage.
+   */
+  usageSince(iso: string): {
+    calls: number; inputTokens: number; outputTokens: number;
+    knownCostUsd: number; unknownCostCalls: number;
+  } {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*)                                        AS calls,
+                COALESCE(SUM(input_tokens), 0)                  AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)                 AS output_tokens,
+                COALESCE(SUM(cost_usd), 0)                      AS known_cost,
+                SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown_calls
+           FROM llm_calls
+          WHERE created_at >= ?`,
+      )
+      .get(iso) as Record<string, number> | undefined;
+
+    return {
+      calls: Number(row?.calls ?? 0),
+      inputTokens: Number(row?.input_tokens ?? 0),
+      outputTokens: Number(row?.output_tokens ?? 0),
+      knownCostUsd: Number(row?.known_cost ?? 0),
+      unknownCostCalls: Number(row?.unknown_calls ?? 0),
+    };
+  }
+
+  /**
+   * La depense ventilee selon un axe, depuis une date.
+   *
+   * Les axes sont enumeres plutot que passes en texte libre : le nom de colonne
+   * entre dans le SQL, et une chaine venue d'ailleurs y entrerait aussi.
+   */
+  breakdownSince(
+    iso: string,
+    axis: 'provider' | 'model' | 'agent' | 'mission' | 'purpose',
+  ): CostSlice[] {
+    const column = {
+      provider: 'provider', model: 'model', agent: 'agent_key',
+      mission: 'mission_id', purpose: 'purpose',
+    }[axis];
+
+    const rows = this.db
+      .prepare(
+        `SELECT ${column}                                       AS label,
+                COUNT(*)                                        AS calls,
+                COALESCE(SUM(input_tokens), 0)                  AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)                 AS output_tokens,
+                COALESCE(SUM(cost_usd), 0)                      AS known_cost,
+                SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown_calls,
+                MAX(created_at)                                 AS last_at
+           FROM llm_calls
+          WHERE created_at >= ?
+          GROUP BY ${column}
+          ORDER BY known_cost DESC, calls DESC`,
+      )
+      .all(iso) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      label: (row.label as string | null) ?? 'inconnu',
+      calls: Number(row.calls),
+      inputTokens: Number(row.input_tokens),
+      outputTokens: Number(row.output_tokens),
+      // Zero appel n'est pas zero dollar : c'est une absence de mesure.
+      knownCostUsd: Number(row.known_cost),
+      unknownCostCalls: Number(row.unknown_calls ?? 0),
+      lastAt: (row.last_at as string | null) ?? null,
+    }));
+  }
+
+  /**
+   * Les missions ou plusieurs modeles distincts sont reellement intervenus.
+   *
+   * « Reellement » porte tout le poids : la chaine multi-modele ne se declare
+   * pas, elle se constate dans les appels facturés. Une mission qui n'a appele
+   * qu'un fournisseur n'apparait pas ici, meme si la configuration en autorise
+   * deux.
+   */
+  multiModelMissions(limit = 20): MultiModelMission[] {
+    /**
+     * Deux identifiants ne font pas deux modeles.
+     *
+     * `claude-haiku-4-5-20251001` et `claude-haiku-4-5` designent le meme
+     * modele : le suffixe est une date de version. Comptes comme distincts, ils
+     * faisaient apparaitre neuf missions « multi-modele » dont aucune n'avait
+     * fait intervenir deux modeles. La famille est donc l'identifiant prive de
+     * son suffixe date, et c'est elle qui tranche.
+     */
+    const family = (model: string): string => model.replace(/-\d{8}$/, '');
+
+    const groups = this.db
+      .prepare(
+        `SELECT mission_id, provider, model, agent_key, purpose,
+                COUNT(*)                                        AS calls,
+                COALESCE(SUM(cost_usd), 0)                      AS known_cost,
+                SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown_calls,
+                SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)         AS failures,
+                MIN(created_at)                                 AS first_at,
+                MAX(created_at)                                 AS last_at
+           FROM llm_calls
+          WHERE mission_id IS NOT NULL
+            -- Un appel simule n'a rien coute et n'a interroge personne : le
+            -- compter ferait passer une repetition pour une chaine reelle.
+            AND provider <> 'simulation'
+          GROUP BY mission_id, provider, model, agent_key, purpose
+          ORDER BY first_at ASC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+
+    const byMission = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of groups) {
+      const id = row.mission_id as string;
+      const list = byMission.get(id) ?? [];
+      list.push(row);
+      byMission.set(id, list);
+    }
+
+    const missions: MultiModelMission[] = [];
+    for (const [missionId, rows] of byMission) {
+      const families = new Set(rows.map((r) => family(r.model as string)));
+      const providers = new Set(rows.map((r) => r.provider as string));
+      // La barre : deux familles de modele distinctes, ou deux fournisseurs.
+      if (families.size < 2 && providers.size < 2) continue;
+
+      const steps: MultiModelStep[] = rows.map((step) => ({
+        provider: step.provider as string,
+        model: step.model as string,
+        agentKey: (step.agent_key as string | null) ?? null,
+        purpose: (step.purpose as string | null) ?? null,
+        calls: Number(step.calls),
+        knownCostUsd: Number(step.known_cost),
+        unknownCostCalls: Number(step.unknown_calls ?? 0),
+        failures: Number(step.failures ?? 0),
+        firstAt: step.first_at as string,
+        lastAt: step.last_at as string,
+      }));
+
+      missions.push({
+        missionId,
+        providers: providers.size,
+        models: families.size,
+        startedAt: steps.reduce((a, s) => (a <= s.firstAt ? a : s.firstAt), steps[0]!.firstAt),
+        lastAt: steps.reduce((a, s) => (a >= s.lastAt ? a : s.lastAt), steps[0]!.lastAt),
+        steps,
+      });
+    }
+
+    return missions
+      .sort((a, b) => (a.lastAt > b.lastAt ? -1 : 1))
+      .slice(0, limit);
+  }
+
+  /** La depense jour par jour : une tendance se lit, un instantane se devine. */
+  dailySince(iso: string): DailyUsage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT substr(created_at, 1, 10)                        AS day,
+                COUNT(*)                                        AS calls,
+                COALESCE(SUM(cost_usd), 0)                      AS known_cost,
+                SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown_calls
+           FROM llm_calls
+          WHERE created_at >= ?
+          GROUP BY day
+          ORDER BY day ASC`,
+      )
+      .all(iso) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      day: row.day as string,
+      calls: Number(row.calls),
+      knownCostUsd: Number(row.known_cost),
+      unknownCostCalls: Number(row.unknown_calls ?? 0),
+    }));
+  }
+}
+
+/** Une tranche de depense, quel que soit l'axe qui l'a decoupee. */
+export interface CostSlice {
+  label: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  knownCostUsd: number;
+  unknownCostCalls: number;
+  lastAt: string | null;
+}
+
+export interface MultiModelStep {
+  provider: string;
+  model: string;
+  agentKey: string | null;
+  purpose: string | null;
+  calls: number;
+  knownCostUsd: number;
+  unknownCostCalls: number;
+  failures: number;
+  firstAt: string;
+  lastAt: string;
+}
+
+export interface MultiModelMission {
+  missionId: string;
+  providers: number;
+  models: number;
+  startedAt: string;
+  lastAt: string;
+  steps: MultiModelStep[];
+}
+
+export interface DailyUsage {
+  day: string;
+  calls: number;
+  knownCostUsd: number;
+  unknownCostCalls: number;
 }
 
 const round6 = (n: number): number => Math.round(n * 1_000_000) / 1_000_000;

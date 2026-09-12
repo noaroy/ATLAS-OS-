@@ -15,8 +15,14 @@
  * mette en forme sans avoir à interpréter de la prose.
  */
 
+import { loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createLogger } from '@atlas/core';
 import { SearxngSearchProvider } from '@atlas/intelligence';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const QUERY = process.env.PROBE_QUERY ?? 'Verpackungsmaschinen Deutschland';
 const BASE_URL = process.env.SEARXNG_BASE_URL ?? 'http://searxng:8080';

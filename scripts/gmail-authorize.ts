@@ -26,9 +26,52 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { createInterface } from 'node:readline/promises';
 import { loadConfig } from '../packages/core/src/index.ts';
 import { GMAIL_READONLY_SCOPE } from '../packages/intelligence/src/mail/gmail.ts';
+import { GMAIL_SEND_SCOPE } from '../packages/intelligence/src/mail/outbound.ts';
+
+/**
+ * Les seules portées qu'ATLAS accepte de détenir.
+ *
+ * Lire pour rattacher les réponses, envoyer pour répondre après approbation
+ * humaine. Rien d'autre : ni modification d'étiquette, ni suppression, ni accès
+ * complet à la boîte.
+ */
+const ACCEPTED_SCOPES = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE];
+import {
+  buildGmailAuthorizeUrl, loopbackRedirectUri,
+} from '../packages/intelligence/src/mail/oauth-url.ts';
+
+/**
+ * Ouvrir une URL dans le navigateur, sans passer par un shell.
+ *
+ * C'est ici que se trouvait la panne. `cmd /c start "" <url>` remet l'URL à
+ * `cmd.exe`, qui traite `&` comme un séparateur de commandes : le navigateur ne
+ * recevait que le fragment jusqu'au premier `&` — `client_id` seul — tandis que
+ * `redirect_uri`, `response_type` et `scope` étaient exécutés comme autant de
+ * commandes inconnues. Google signalait alors le premier paramètre requis
+ * manquant, `response_type`, qui figurait pourtant dans l'URL émise.
+ *
+ * `rundll32 url.dll,FileProtocolHandler` est un exécutable appelé directement :
+ * l'argument lui parvient tel quel, sans qu'aucun interpréteur ne le relise. Le
+ * même raisonnement vaut pour `open` et `xdg-open`, déjà appelés sans shell.
+ */
+function openInBrowser(url: string): void {
+  const [command, args]: [string, string[]] =
+    process.platform === 'win32'
+      ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
+      : process.platform === 'darwin'
+        ? ['open', [url]]
+        : ['xdg-open', [url]];
+  try {
+    // `shell: false` est le défaut, et doit le rester : c'est la seule chose qui
+    // sépare cette fonction du défaut qu'elle répare.
+    spawn(command, args, { detached: true, stdio: 'ignore', shell: false }).unref();
+  } catch {
+    // Le lien affiché plus haut suffit : l'ouverture est un confort, pas le flux.
+  }
+}
 
 const ENV_FILE = '.env.local';
-const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const PROFILE_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/profile';
 
@@ -36,8 +79,9 @@ loadConfig(process.cwd());
 
 const c = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[32m', red: '\x1b[31m', amber: '\x1b[33m' };
 
-console.log(`\n  ${c.bold}AUTORISATION GMAIL — LECTURE SEULE${c.reset}`);
-console.log(`  portée demandée : ${GMAIL_READONLY_SCOPE}\n`);
+console.log(`\n  ${c.bold}AUTORISATION GMAIL — LECTURE ET ENVOI${c.reset}`);
+for (const portee of ACCEPTED_SCOPES) console.log(`  portée demandée : ${portee}`);
+console.log();
 
 const clientId = process.env.GMAIL_CLIENT_ID?.trim();
 const clientSecret = process.env.GMAIL_CLIENT_SECRET?.trim();
@@ -69,7 +113,16 @@ const state = randomBytes(16).toString('hex');
 const verifier = randomBytes(32).toString('base64url');
 const challenge = createHash('sha256').update(verifier).digest('base64url');
 
-const received = await new Promise<{ code: string }>((resolve, reject) => {
+/**
+ * Le code d'autorisation ET l'adresse de retour qui l'a produit.
+ *
+ * Google exige que le `redirect_uri` de l'echange soit strictement identique a
+ * celui de la demande. Les faire voyager ensemble rend cette egalite
+ * structurelle : il n'existe pas de chemin ou l'un change sans l'autre. La
+ * version precedente deposait l'adresse sur `globalThis` et la relisait avec un
+ * `!` — cela fonctionnait, mais rien ne l'imposait.
+ */
+const received = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (url.pathname !== '/callback') {
@@ -91,42 +144,44 @@ const received = await new Promise<{ code: string }>((resolve, reject) => {
     if (error) reject(new Error(`consentement refusé : ${error}`));
     else if (returned !== state) reject(new Error('état de session invalide — tentative rejetée'));
     else if (!code) reject(new Error('aucun code reçu'));
-    else resolve({ code });
+    else resolve({ code, redirectUri: agreedRedirectUri });
   });
+
+  // Renseignee des que la boucle locale connait son port, relue a la
+  // resolution : la demande et l'echange lisent la meme variable.
+  let agreedRedirectUri = '';
 
   server.listen(0, '127.0.0.1', () => {
     const port = (server.address() as { port: number }).port;
-    const redirectUri = `http://127.0.0.1:${port}/callback`;
-    const authorize = new URL(AUTH_URL);
-    authorize.search = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      // La seule portée demandée. Le reste du script vérifie ce qui est rendu.
-      scope: GMAIL_READONLY_SCOPE,
-      access_type: 'offline',
-      // Force l'écran de consentement, donc l'émission d'un refresh token.
-      prompt: 'consent',
-      state,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-    }).toString();
+    const redirectUri = loopbackRedirectUri(port);
+    agreedRedirectUri = redirectUri;
 
-    (globalThis as { __redirectUri?: string }).__redirectUri = redirectUri;
+    // Construite ET vérifiée avant toute ouverture. Une URL incomplète envoyée
+    // au navigateur coûte un aller-retour vers une page d'erreur Google dont le
+    // message désigne le mauvais coupable — c'est exactement ce qui s'est passé.
+    let authorizeUrl: string;
+    try {
+      authorizeUrl = buildGmailAuthorizeUrl({
+        clientId,
+        redirectUri,
+        // Lecture et envoi, rien d'autre. Le reste du script vérifie ce que
+        // Google a réellement accordé, qui n'est pas toujours ce qu'on demande.
+        scopes: ACCEPTED_SCOPES,
+        state,
+        codeChallenge: challenge,
+      });
+    } catch (err) {
+      server.close();
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
 
     console.log(`  Ouverture du navigateur sur les pages de Google…`);
     console.log(`  ${c.dim}Connectez-vous vous-même : ATLAS ne voit ni ne saisit votre mot de passe.${c.reset}\n`);
     console.log(`  Si rien ne s'ouvre, collez ceci dans votre navigateur :\n`);
-    console.log(`  ${authorize.toString()}\n`);
+    console.log(`  ${authorizeUrl}\n`);
 
-    const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', authorize.toString()]]
-      : process.platform === 'darwin' ? ['open', [authorize.toString()]]
-      : ['xdg-open', [authorize.toString()]];
-    try {
-      spawn(opener[0] as string, opener[1] as string[], { detached: true, stdio: 'ignore' }).unref();
-    } catch {
-      // Le lien affiché ci-dessus suffit.
-    }
+    openInBrowser(authorizeUrl);
   });
 
   setTimeout(() => {
@@ -136,7 +191,7 @@ const received = await new Promise<{ code: string }>((resolve, reject) => {
 });
 
 // ── Échange du code ─────────────────────────────────────────────────────────
-const redirectUri = (globalThis as { __redirectUri?: string }).__redirectUri!;
+const redirectUri = received.redirectUri;
 const tokenResponse = await fetch(TOKEN_URL, {
   method: 'POST',
   headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -161,20 +216,35 @@ const token = (await tokenResponse.json()) as {
 };
 
 // ── Vérification de la portée réellement accordée ───────────────────────────
+//
+// La liste blanche compte deux entrées, et pas une de plus. `gmail.send` permet
+// d'expédier un message ; elle ne permet ni de lire un brouillon d'autrui, ni de
+// modifier une étiquette, ni de supprimer quoi que ce soit. `gmail.modify` et
+// `mail.google.com` restent refusées : elles donneraient sur la boîte entière un
+// pouvoir qu'aucune fonction d'ATLAS ne demande.
+//
+// Le refus porte sur ce que Google a *réellement accordé*, pas sur ce qui a été
+// demandé. Google reconduit parfois un consentement plus large donné auparavant
+// au même client, et un jeton trop puissant obtenu par inadvertance reste un
+// jeton trop puissant.
 const granted = (token.scope ?? '').split(/\s+/).filter(Boolean);
 console.log(`  portée accordée : ${granted.join(', ') || '(aucune)'}`);
 
-const extra = granted.filter((scope) => scope !== GMAIL_READONLY_SCOPE);
+const extra = granted.filter((scope) => !ACCEPTED_SCOPES.includes(scope));
 if (extra.length > 0 || granted.length === 0) {
   console.error(`\n  ${c.red}CONNEXION REFUSÉE${c.reset}`);
   console.error(`  Google a accordé : ${granted.join(', ') || 'rien'}`);
-  console.error(`  ATLAS n'accepte que : ${GMAIL_READONLY_SCOPE}\n`);
-  console.error('  Un jeton capable d’écrire ne doit pas exister sur cette machine.');
+  console.error(`  En trop          : ${extra.join(', ') || '(aucune portée accordée)'}`);
+  console.error(`  ATLAS n'accepte que : ${ACCEPTED_SCOPES.join(', ')}\n`);
+  console.error('  Un jeton qui peut lire les brouillons, étiqueter ou supprimer');
+  console.error('  ne doit pas exister sur cette machine.');
   console.error('  Révoquez l’accès sur https://myaccount.google.com/permissions,');
-  console.error('  puis recommencez en ne cochant que la lecture.\n');
+  console.error('  puis recommencez en ne cochant que la lecture et l’envoi.\n');
   console.error('  Rien n’a été écrit.\n');
   process.exit(1);
 }
+
+const peutEnvoyer = granted.includes(GMAIL_SEND_SCOPE);
 
 if (!token.refresh_token) {
   console.error(`\n  ${c.red}Aucun jeton de rafraîchissement rendu.${c.reset}`);
@@ -196,7 +266,10 @@ try {
 }
 
 console.log(`  boîte           : ${mailbox}`);
-console.log(`  ${c.green}portée conforme — lecture seule.${c.reset}\n`);
+console.log(
+  `  ${c.green}portée conforme${c.reset} — lecture`
+  + `${peutEnvoyer ? ' et envoi (soumis à approbation humaine)' : ' seule'}.\n`,
+);
 
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const answer = (await rl.question(`  Écrire le jeton dans ${ENV_FILE} ? [o/N] `)).trim().toLowerCase();

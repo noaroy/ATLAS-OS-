@@ -18,6 +18,31 @@ import { LlmCallRepository } from './repositories/llm-calls.ts';
 import { OrderRepository } from './repositories/orders.ts';
 import { SalesRepository } from './repositories/sales.ts';
 import { ConversationRepository } from './repositories/conversations.ts';
+
+export {
+  SalesLoopRepository,
+  sendKey,
+  bodyHashOf,
+  type LoopTransition,
+  type SendClaim,
+  type OutreachDraftRow,
+} from './repositories/loop.ts';
+import { SalesLoopRepository } from './repositories/loop.ts';
+import { ClientCandidateRepository } from './repositories/client-candidates.ts';
+export {
+  ClientCacheRepository, PAGE_CACHE_TTL_MS, QUALIFICATION_CACHE_TTL_MS, sha256,
+  type CachedPage, type CachedQualification,
+} from './repositories/client-cache.ts';
+import { ClientCacheRepository } from './repositories/client-cache.ts';
+export {
+  ClientCandidateRepository,
+  CLIENT_CANDIDATE_STAGES,
+  TERMINAL_CANDIDATE_STAGES,
+  MAX_CANDIDATE_ATTEMPTS,
+  type ClientCandidate,
+  type ClientCandidateStage,
+} from './repositories/client-candidates.ts';
+import { TaskRepository } from './repositories/tasks.ts';
 import { ToolCallRepository } from './repositories/tool-calls.ts';
 import { DecisionRepository } from './repositories/decisions.ts';
 
@@ -65,6 +90,10 @@ export interface Repositories {
   orders: OrderRepository;
   sales: SalesRepository;
   conversations: ConversationRepository;
+  salesLoop: SalesLoopRepository;
+  clientCandidates: ClientCandidateRepository;
+  clientCache: ClientCacheRepository;
+  tasks: TaskRepository;
   toolCalls: ToolCallRepository;
   decisions: DecisionRepository;
   close(): void;
@@ -107,6 +136,10 @@ export function createRepositories(databaseFile: string, logger: Logger): Reposi
     orders: new OrderRepository(db),
     sales: new SalesRepository(db),
     conversations: new ConversationRepository(db),
+    salesLoop: new SalesLoopRepository(db),
+    clientCandidates: new ClientCandidateRepository(db),
+    clientCache: new ClientCacheRepository(db),
+    tasks: new TaskRepository(db),
     toolCalls: new ToolCallRepository(db),
     decisions: new DecisionRepository(db),
     close() {
@@ -141,3 +174,11 @@ export type {
   ProspectState,
   ProspectTier,
 } from './repositories/sales.ts';
+
+export {
+  TaskRepository,
+  type TaskRow,
+  type CreateTaskInput,
+  type ClaimResult,
+} from './repositories/tasks.ts';
+

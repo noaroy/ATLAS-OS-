@@ -230,6 +230,76 @@ const envSchema = z.object({
   ATLAS_EVOLUTION_AUTONOMY: z.enum(['observe', 'propose', 'apply-low-risk']).default('propose'),
 
   ATLAS_HEARTBEAT_MS: intish(30_000, 1_000, 600_000),
+
+  // ─── La boucle commerciale autonome ───────────────────────────────────
+  // Le verrou d'approbation est le seul reglage dont la valeur par defaut
+  // engage quelqu'un : il vaut `true`, et le passer a `false` autorise ATLAS
+  // a ecrire a des inconnus sans relecture. Il reste donc un choix explicite.
+  ATLAS_SALES_HUMAN_APPROVAL: boolish(true),
+  ATLAS_SALES_MIN_CONVERSION_SCORE: intish(60, 0, 100),
+  ATLAS_SALES_MAX_NEW_OUTREACH_PER_DAY: intish(10, 0, 200),
+  ATLAS_SALES_MAX_BUDGET_USD: floatish(0.1, 0, 5),
+  ATLAS_SALES_WALL_CLOCK_MS: intish(1_800_000, 60_000, 14_400_000),
+  ATLAS_SALES_MAX_DOMAINS_PER_RUN: intish(40, 1, 500),
+  ATLAS_SALES_MAX_PAGES_PER_DOMAIN: intish(8, 1, 40),
+  // Les prospects deja retenus en PRIORITY meritent d'etre lus plus loin : ce
+  // sont les seuls dont un brouillon peut sortir, et le seul motif de blocage
+  // observe est le manque de faits sources. La profondeur ne vaut que pour eux
+  // — l'elargir a tous multiplierait les requetes sans changer une decision.
+  ATLAS_SALES_MAX_PAGES_PER_PRIORITY_DOMAIN: intish(15, 1, 60),
+  ATLAS_SALES_CONCURRENCY: intish(4, 1, 16),
+  // Trois jours ouvres au minimum, et le plancher est aussi tenu par
+  // `evaluateFollowUp` : une relance a vingt-quatre heures ne lit pas comme une
+  // relance. Un delai plus long reste libre.
+  ATLAS_SALES_FOLLOW_UP_AFTER_DAYS: intish(3, 3, 60),
+  // Le nom qui signe les messages. Vide, le gabarit s'arrete sur la formule de
+  // politesse — un courriel non signe se remarque, mais inventer un nom serait
+  // pire.
+  ATLAS_SALES_SENDER_NAME: z.string().default('Noa Roy'),
+
+  // --- Les workers IA ---------------------------------------------------
+  // `live` est le seul reglage dont la valeur par defaut engage de l'argent.
+  // Il vaut `false` : tant qu'il n'est pas leve explicitement, aucun appel
+  // payant ne part, et les demonstrations tournent sur des fournisseurs figes.
+  ATLAS_AI_LIVE: boolish(false),
+  ATLAS_OPENAI_MODEL: z.string().default('gpt-5'),
+  ATLAS_OPENAI_REVIEW_MODEL: z.string().default(''),
+  ATLAS_ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  ATLAS_ANTHROPIC_ENGINEERING_MODEL: z.string().default(''),
+  ATLAS_OPENAI_API_KEY: z.string().default(''),
+  ATLAS_OPENAI_TASK_TIMEOUT_MS: intish(120_000, 5_000, 900_000),
+  ATLAS_CLAUDE_TASK_TIMEOUT_MS: intish(600_000, 5_000, 3_600_000),
+  ATLAS_MAX_AI_CHAIN_DEPTH: intish(4, 1, 20),
+  ATLAS_MAX_AI_TASKS_PER_CHAIN: intish(12, 1, 200),
+  ATLAS_MAX_CHAIN_COST_USD: floatish(1, 0, 100),
+  ATLAS_MAX_CHAIN_RUNTIME_MINUTES: intish(60, 1, 1440),
+  ATLAS_AI_DAILY_BUDGET_USD: floatish(0, 0, 1000),
+  ATLAS_AI_MONTHLY_BUDGET_USD: floatish(0, 0, 10000),
+  ATLAS_MAX_TASK_COST_USD: floatish(0, 0, 100),
+
+  // --- L'ingenierie reelle ----------------------------------------------
+  // Des garde-fous de taille, parce qu'une mission simple ne doit pas pouvoir
+  // reecrire la moitie du depot. Aucun n'est illimite par defaut.
+  ATLAS_MAX_FILES_CHANGED_PER_TASK: intish(15, 1, 500),
+  ATLAS_MAX_DIFF_LINES_PER_TASK: intish(800, 10, 50_000),
+  ATLAS_MAX_ENGINEERING_ITERATIONS: intish(3, 1, 20),
+  ATLAS_ENGINEERING_WORKSPACE_ROOT: z.string().default(''),
+  // La suppression de fichier est refusee par defaut, et s'autorise tache par
+  // tache : c'est la seule operation d'edition qu'on ne peut pas relire dans un
+  // diff aussi facilement qu'on la subit.
+  ATLAS_ALLOW_FILE_DELETE: boolish(false),
+  /**
+   * Ce que vaut un plafond de cout quand le prix est inconnu.
+   *
+   * `BLOCK` arrete la chaine plutot que de la laisser courir sur un tarif
+   * qu'on ne sait pas calculer. C'est la valeur par defaut : un plafond aveugle
+   * n'est pas un plafond.
+   */
+  ATLAS_UNKNOWN_COST_POLICY: z.enum(['BLOCK', 'ALLOW']).default('BLOCK'),
+  // Le binaire Claude Code. Resolu dans le PATH par defaut ; son absence est
+  // une situation normale, rapportee comme telle plutot que comme un echec.
+  ATLAS_CLAUDE_CODE_BIN: z.string().default('claude'),
+  ATLAS_CLAUDE_CODE_TIMEOUT_MS: intish(900_000, 30_000, 7_200_000),
   ATLAS_LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   ATLAS_LOG_PRETTY: boolish(true),
 });
@@ -287,20 +357,98 @@ export interface AtlasConfig {
   search: SearchConfig;
   n8n: { enabled: boolean; baseUrl: string; apiKey: string; webhookSecret: string };
   evolution: { enabled: boolean; autonomy: 'observe' | 'propose' | 'apply-low-risk' };
+  /**
+   * La boucle commerciale : ce qu'elle cherche, ce qu'elle depense, et ce
+   * qu'elle n'a pas le droit de faire seule.
+   */
+  sales: {
+    /** Tant qu'il est vrai, aucun message ne part sans decision humaine. */
+    humanApprovalRequired: boolean;
+    minConversionScore: number;
+    maxNewOutreachPerDay: number;
+    maxBudgetUsd: number;
+    wallClockMs: number;
+    maxDomainsPerRun: number;
+    maxPagesPerDomain: number;
+    /** Profondeur reservee aux PRIORITY, seuls candidats a un brouillon. */
+    maxPagesPerPriorityDomain: number;
+    concurrency: number;
+    followUpAfterDays: number;
+    /** Le nom qui signe les messages sortants. Vide = aucune signature. */
+    senderName: string;
+  };
+  /**
+   * Les workers de modele, et les bornes qui les empechent de s'emballer.
+   *
+   * `live` separe deux mondes : a faux, les fournisseurs sont figes et rien
+   * n'est facture ; a vrai, chaque tache depense. La valeur par defaut est
+   * fausse, et le passage a vrai est une decision.
+   */
+  ai: {
+    live: boolean;
+    openaiModel: string;
+    openaiReviewModel: string;
+    anthropicModel: string;
+    anthropicEngineeringModel: string;
+    openaiTimeoutMs: number;
+    claudeTimeoutMs: number;
+    maxChainDepth: number;
+    maxTasksPerChain: number;
+    maxChainCostUsd: number;
+    maxChainRuntimeMinutes: number;
+    /**
+     * Les plafonds de depense.
+     *
+     * Zero ne signifie plus « illimite » : le mode l'exprime explicitement, et
+     * la valeur ne sert que lorsque le mode vaut CONFIGURED. Confondre les deux
+     * faisait lire « aucune limite » la ou l'on avait ecrit « zero ».
+     */
+    dailyBudgetUsd: number;
+    monthlyBudgetUsd: number;
+    maxTaskCostUsd: number;
+    dailyBudgetMode: 'UNLIMITED' | 'CONFIGURED' | 'DISABLED';
+    monthlyBudgetMode: 'UNLIMITED' | 'CONFIGURED' | 'DISABLED';
+    /** Ce qu'on fait d'une chaine dont le cout n'est pas calculable. */
+    unknownCostPolicy: 'BLOCK' | 'ALLOW';
+  };
+  /** L'ingenierie reelle : ce qu'une tache a le droit de changer. */
+  engineering: {
+    maxFilesChanged: number;
+    maxDiffLines: number;
+    maxIterations: number;
+    workspaceRoot: string;
+    allowFileDelete: boolean;
+    /** Le binaire Claude Code, et le temps qu'on lui laisse. */
+    claudeCodeBin: string;
+    claudeCodeTimeoutMs: number;
+  };
   runtime: { heartbeatMs: number };
   log: { level: 'debug' | 'info' | 'warn' | 'error'; pretty: boolean };
 }
 
 /**
- * Minimal .env reader — avoids a dependency for a 20-line job.
+ * La seule facon de charger l'environnement d'ATLAS.
  *
- * `.env.local` is read first and wins over `.env`, following the usual
- * convention: secrets obtained by a local bootstrap — an OAuth refresh token,
- * for instance — belong in a file that is never shared, never committed, and
- * never merged. Keeping them out of `.env` means the shared file can stay
- * readable without anyone having to remember what must be stripped from it.
+ * Trois sources, dans cet ordre de priorite :
+ *
+ *   1. `process.env` — l'environnement reel gagne toujours. Une variable posee
+ *      sur la ligne de commande ou par le service systeme doit pouvoir passer
+ *      devant un fichier, sans quoi on ne peut plus rien surcharger.
+ *   2. `.env.local` — les secrets obtenus par un amorcage local, comme un jeton
+ *      de rafraichissement OAuth. Jamais partage, jamais commite, jamais fusionne.
+ *   3. `.env` — la configuration partagee, qui peut rester lisible parce que rien
+ *      de secret n'a besoin d'y figurer.
+ *
+ * Exportee, et non plus privee, parce que l'oubli etait silencieux. Dix-sept
+ * scripts ne chargeaient rien du tout : `sales:inbox-sync` voyait Gmail
+ * « non configure » a la seconde ou `gmail:check` lisait dix mille messages dans
+ * la vraie boite. Aucune erreur, aucun avertissement — deux processus, deux
+ * environnements, et le meme disque.
+ *
+ * Idempotente : la relire ne change rien, puisque tout ce qui est deja dans
+ * `process.env` est laisse en place.
  */
-function loadDotEnv(cwd: string): void {
+export function loadAtlasEnv(cwd: string = process.cwd()): void {
   for (const name of ['.env.local', '.env']) loadEnvFile(join(cwd, name));
 }
 
@@ -327,7 +475,7 @@ function loadEnvFile(file: string): void {
 }
 
 export function loadConfig(cwd = process.cwd()): AtlasConfig {
-  loadDotEnv(cwd);
+  loadAtlasEnv(cwd);
 
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
@@ -438,6 +586,52 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       webhookSecret: e.ATLAS_N8N_WEBHOOK_SECRET,
     },
     evolution: { enabled: e.ATLAS_EVOLUTION_ENABLED, autonomy: e.ATLAS_EVOLUTION_AUTONOMY },
+    sales: {
+      humanApprovalRequired: e.ATLAS_SALES_HUMAN_APPROVAL,
+      minConversionScore: e.ATLAS_SALES_MIN_CONVERSION_SCORE,
+      maxNewOutreachPerDay: e.ATLAS_SALES_MAX_NEW_OUTREACH_PER_DAY,
+      maxBudgetUsd: e.ATLAS_SALES_MAX_BUDGET_USD,
+      wallClockMs: e.ATLAS_SALES_WALL_CLOCK_MS,
+      maxDomainsPerRun: e.ATLAS_SALES_MAX_DOMAINS_PER_RUN,
+      maxPagesPerDomain: e.ATLAS_SALES_MAX_PAGES_PER_DOMAIN,
+      maxPagesPerPriorityDomain: Math.max(
+        e.ATLAS_SALES_MAX_PAGES_PER_DOMAIN,
+        e.ATLAS_SALES_MAX_PAGES_PER_PRIORITY_DOMAIN,
+      ),
+      concurrency: e.ATLAS_SALES_CONCURRENCY,
+      followUpAfterDays: e.ATLAS_SALES_FOLLOW_UP_AFTER_DAYS,
+      senderName: e.ATLAS_SALES_SENDER_NAME.trim(),
+    },
+    ai: {
+      live: e.ATLAS_AI_LIVE,
+      openaiModel: e.ATLAS_OPENAI_MODEL,
+      openaiReviewModel: e.ATLAS_OPENAI_REVIEW_MODEL || e.ATLAS_OPENAI_MODEL,
+      anthropicModel: e.ATLAS_ANTHROPIC_MODEL,
+      anthropicEngineeringModel: e.ATLAS_ANTHROPIC_ENGINEERING_MODEL || e.ATLAS_ANTHROPIC_MODEL,
+      openaiTimeoutMs: e.ATLAS_OPENAI_TASK_TIMEOUT_MS,
+      claudeTimeoutMs: e.ATLAS_CLAUDE_TASK_TIMEOUT_MS,
+      maxChainDepth: e.ATLAS_MAX_AI_CHAIN_DEPTH,
+      maxTasksPerChain: e.ATLAS_MAX_AI_TASKS_PER_CHAIN,
+      maxChainCostUsd: e.ATLAS_MAX_CHAIN_COST_USD,
+      maxChainRuntimeMinutes: e.ATLAS_MAX_CHAIN_RUNTIME_MINUTES,
+      dailyBudgetUsd: e.ATLAS_AI_DAILY_BUDGET_USD,
+      monthlyBudgetUsd: e.ATLAS_AI_MONTHLY_BUDGET_USD,
+      maxTaskCostUsd: e.ATLAS_MAX_TASK_COST_USD,
+      // Un plafond a zero est une absence de plafond declaree, pas un plafond
+      // nul : le mode le dit, la valeur ne sert que s'il vaut CONFIGURED.
+      dailyBudgetMode: e.ATLAS_AI_DAILY_BUDGET_USD > 0 ? 'CONFIGURED' : 'UNLIMITED',
+      monthlyBudgetMode: e.ATLAS_AI_MONTHLY_BUDGET_USD > 0 ? 'CONFIGURED' : 'UNLIMITED',
+      unknownCostPolicy: e.ATLAS_UNKNOWN_COST_POLICY,
+    },
+    engineering: {
+      maxFilesChanged: e.ATLAS_MAX_FILES_CHANGED_PER_TASK,
+      maxDiffLines: e.ATLAS_MAX_DIFF_LINES_PER_TASK,
+      maxIterations: e.ATLAS_MAX_ENGINEERING_ITERATIONS,
+      workspaceRoot: e.ATLAS_ENGINEERING_WORKSPACE_ROOT,
+      allowFileDelete: e.ATLAS_ALLOW_FILE_DELETE,
+      claudeCodeBin: e.ATLAS_CLAUDE_CODE_BIN,
+      claudeCodeTimeoutMs: e.ATLAS_CLAUDE_CODE_TIMEOUT_MS,
+    },
     runtime: { heartbeatMs: e.ATLAS_HEARTBEAT_MS },
     log: { level: e.ATLAS_LOG_LEVEL, pretty: e.ATLAS_LOG_PRETTY },
   };

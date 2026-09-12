@@ -1,3 +1,4 @@
+import { directionOf } from './message-direction.ts';
 /**
  * Lire une réponse sans lui prêter d'intention.
  *
@@ -17,6 +18,11 @@
  * Le doute a son propre verdict, `NEEDS_REVIEW`. Une classification qui ne
  * sait pas doit pouvoir le dire, sans quoi elle range dans la première case
  * venue et la boîte devient un inventaire de suppositions.
+ *
+ * Le ton des messages sortants de ce chemin suit
+ * `docs/SALES_HUMANIZATION_POLICY.md` -- source de verite unique. Les regles
+ * verifiables sont appliquees par `checkHumanization` ; ce fichier ne les
+ * recopie pas.
  */
 
 export type InboundKind = 'EMAIL_REPLY' | 'AUTO_REPLY' | 'BOUNCE' | 'FORM_REPLY' | 'MANUAL_NOTE';
@@ -49,6 +55,38 @@ export interface ClassificationResult {
 const BOUNCE_SENDERS = [
   'mailer-daemon', 'mailerdaemon', 'postmaster', 'no-reply@', 'noreply@',
   'bounce', 'bounces@',
+];
+
+/**
+ * L'accusé de réception : une machine qui confirme, pas une personne qui répond.
+ *
+ * Famille distincte de l'absence du bureau, et elle manquait. Un formulaire de
+ * contact renvoie un message qui dit « Bonjour », fait deux cents mots, recopie
+ * votre demande — et franchissait donc le seuil de la réponse humaine. Groupe
+ * DIS figurait ainsi au tableau des décisions à prendre pour un courrier
+ * intitulé « Confirmation de réception de votre demande ».
+ *
+ * Ces formules-ci sont décisives à elles seules dans un sujet : aucune personne
+ * n'intitule sa réponse « accusé de réception ».
+ */
+const ACKNOWLEDGMENT_SUBJECT_MARKERS = [
+  'confirmation de reception', 'accuse de reception', 'accusé de réception',
+  'demande bien recue', 'votre demande a bien ete',
+  'we received your', 'your request has been received', 'thanks for contacting',
+  'merci de nous avoir contacte', 'nous avons bien recu votre demande',
+];
+
+/**
+ * Dans un corps, la même formule est moins sûre : une vraie réponse peut
+ * commencer par accuser réception avant de dire quelque chose. Il en faut donc
+ * deux, dont une qui annonce explicitement qu'on recontactera plus tard — c'est
+ * ce report qui distingue l'accusé de la réponse.
+ */
+const ACKNOWLEDGMENT_BODY_MARKERS = [
+  'nous avons bien recu votre demande', 'votre demande envoyee depuis notre site',
+  'depuis notre site internet', 'reviendra vers vous', 'reviendrons vers vous',
+  'dans les meilleurs delais', 'ne pas repondre a ce message',
+  'ceci est un message automatique', 'voici le message que vous',
 ];
 
 const BOUNCE_MARKERS = [
@@ -111,7 +149,11 @@ const norm = (text: string): string =>
  * ne donne rien : une date inventée ferait relancer au mauvais moment, ce qui
  * est pire que ne pas savoir.
  */
-export function extractReturnDate(text: string, referenceYear: number): string | null {
+export function extractReturnDate(
+  text: string,
+  referenceYear: number,
+  referenceDay = `${referenceYear}-01-01`,
+): string | null {
   const t = norm(text);
 
   const numeric = /(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?/.exec(t);
@@ -127,23 +169,25 @@ export function extractReturnDate(text: string, referenceYear: number): string |
   let day: number | null = null;
   let month: number | null = null;
   let year = referenceYear;
+  let explicitYear = false;
 
   if (written) {
     day = Number(written[1]);
     month = MOIS[written[2]!] ?? null;
     const trailing = new RegExp(`${written[0]}\\s+(\\d{4})`).exec(t);
-    if (trailing) year = Number(trailing[1]);
+    if (trailing) { year = Number(trailing[1]); explicitYear = true; }
   } else if (writtenEn) {
     month = MOIS[writtenEn[1]!] ?? null;
     day = Number(writtenEn[2]);
     const trailing = new RegExp(`${writtenEn[0]}(?:st|nd|rd|th)?,?\\s+(\\d{4})`).exec(t);
-    if (trailing) year = Number(trailing[1]);
+    if (trailing) { year = Number(trailing[1]); explicitYear = true; }
   } else if (numeric) {
     day = Number(numeric[1]);
     month = Number(numeric[2]);
     if (numeric[3]) {
       const raw = Number(numeric[3]);
       year = raw < 100 ? 2000 + raw : raw;
+      explicitYear = true;
     }
   }
 
@@ -154,6 +198,20 @@ export function extractReturnDate(text: string, referenceYear: number): string |
   // Une date impossible (31 février) ne devient pas une relance.
   const parsed = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.getUTCDate() !== day) return null;
+
+  /**
+   * Un retour ne s'annonce jamais dans le passé.
+   *
+   * « De retour le 5 janvier », écrit un 20 décembre, donnait le 5 janvier de
+   * l'année en cours — une date déjà passée. La relance était alors jugée due
+   * immédiatement, en pleines vacances de la personne. Sans année explicite, un
+   * jour antérieur à l'envoi désigne donc l'année suivante.
+   */
+  if (!explicitYear && iso < referenceDay) {
+    const suivant = `${year + 1}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const verifie = new Date(`${suivant}T00:00:00Z`);
+    return Number.isNaN(verifie.getTime()) || verifie.getUTCDate() !== day ? null : suivant;
+  }
   return iso;
 }
 
@@ -207,22 +265,31 @@ export function classifyInbound(input: {
   const autoMarker = AUTO_REPLY_MARKERS.find((m) => haystack.includes(m));
   if (autoMarker) signals.push(`mention « ${autoMarker} »`);
 
-  if (input.kind === 'AUTO_REPLY' || autoMarker) {
+  // L'accusé de réception : décisif dans un sujet, à deux marqueurs dans un corps.
+  const ackSubject = ACKNOWLEDGMENT_SUBJECT_MARKERS.find((m) => subject.includes(norm(m)));
+  const ackBody = ACKNOWLEDGMENT_BODY_MARKERS.filter((m) => haystack.includes(m));
+  const ack = ackSubject ?? (ackBody.length >= 2 ? ackBody[0] : undefined);
+  if (ackSubject) signals.push(`sujet d'accusé de réception « ${ackSubject} »`);
+  else if (ack) signals.push(`accusé de réception : ${ackBody.slice(0, 2).join(', ')}`);
+
+  if (input.kind === 'AUTO_REPLY' || autoMarker || ack) {
     // La date n'est cherchée qu'autour de la formule de retour : un « 550 »
     // ou un numéro de téléphone dans la signature ne doit pas devenir une date.
     const windowStart = Math.max(0, haystack.indexOf(autoMarker ?? 'de retour le'));
     const window = haystack.slice(windowStart, windowStart + 160);
-    const returnDate = extractReturnDate(window, year);
+    const returnDate = extractReturnDate(window, year, (input.receivedAt ?? new Date().toISOString()).slice(0, 10));
     if (returnDate) signals.push(`retour annoncé le ${returnDate}`);
 
     return {
       classification: 'AUTO_REPLY',
-      confidence: input.kind === 'AUTO_REPLY' ? 1 : autoMarker ? 0.9 : 0.6,
+      confidence: input.kind === 'AUTO_REPLY' ? 1 : autoMarker ? 0.9 : ackSubject ? 0.9 : 0.75,
       signals: signals.length > 0 ? signals : ['déclarée comme réponse automatique'],
       returnDate,
       reason: returnDate
         ? `Absence annoncée jusqu’au ${returnDate}. Personne n’a lu le message ; ce n’est pas une réponse.`
-        : 'Réponse automatique sans date de retour. Personne n’a lu le message.',
+        : ack
+          ? 'Accusé de réception : une machine confirme avoir reçu, personne n’a encore lu.'
+          : 'Réponse automatique sans date de retour. Personne n’a lu le message.',
     };
   }
 
@@ -402,5 +469,175 @@ export function deriveConversationState(
     reason: last.classification === 'NEEDS_REVIEW'
       ? 'Message reçu, non classé par les règles.'
       : 'Historique sans verdict clair.',
+  };
+}
+
+// --- Le refus de recevoir --------------------------------------------------
+
+/**
+ * Le désabonnement, reconnu tout de suite.
+ *
+ * C'est la seule catégorie de réponse qui n'appelle aucune interprétation :
+ * quelqu'un demande à ne plus rien recevoir, et la seule réaction acceptable
+ * est de ne plus rien envoyer. Le traiter comme une réponse ordinaire — à lire,
+ * à classer, à relancer plus tard — reviendrait à ignorer la demande le temps
+ * qu'un humain la voie.
+ *
+ * La détection est délibérément large et le geste qu'elle déclenche est
+ * irréversible dans le bon sens : `DO_NOT_CONTACT` retire l'entreprise de toute
+ * découverte future. Un faux positif coûte un prospect ; un faux négatif coûte
+ * un message non désiré à quelqu'un qui a dit non.
+ */
+const OPT_OUT_MARKERS = [
+  'desabonn', 'desinscri', 'ne plus recevoir', 'ne plus me contacter',
+  'ne plus nous contacter', 'retirez-moi', 'retirez moi', 'supprimez mon adresse',
+  'supprimer mon adresse', 'plus de sollicitation', 'arretez de nous ecrire',
+  'arretez de m ecrire', 'pas interesse', 'pas interessee', 'non merci',
+  'unsubscribe', 'remove me', 'opt out', 'opt-out', 'do not contact',
+  'stop mail', 'stop email', 'take me off',
+];
+
+export interface OptOutVerdict {
+  optedOut: boolean;
+  /** Le marqueur trouvé, pour qu'un humain puisse contester la décision. */
+  marker: string | null;
+  reason: string;
+}
+
+export function detectOptOut(input: { subject?: string | null; body?: string | null }): OptOutVerdict {
+  const haystack = `${input.subject ?? ''} ${input.body ?? ''}`
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+
+  // « STOP » seul est un désabonnement ; « stop » au milieu d'une phrase ne
+  // l'est pas. La casse et l'isolement font la différence.
+  const bareStop = /(^|[\s>])STOP([\s.!]|$)/.test(`${input.subject ?? ''} ${input.body ?? ''}`);
+  if (bareStop) {
+    return { optedOut: true, marker: 'STOP', reason: 'STOP isolé : demande de désabonnement' };
+  }
+
+  const marker = OPT_OUT_MARKERS.find((m) => haystack.includes(m));
+  return marker
+    ? { optedOut: true, marker, reason: `demande explicite : « ${marker} »` }
+    : { optedOut: false, marker: null, reason: 'aucune demande de désabonnement' };
+}
+
+
+/**
+ * L'histoire d'une conversation, distincte de son état courant.
+ *
+ * La nuance a produit une métrique fausse : le taux de réponse se déduisait du
+ * seul état courant `REPLIED`, si bien qu'ACRN — qui avait bel et bien répondu
+ * deux fois, et à qui nous avions ensuite envoyé l'aperçu — cessait de compter
+ * comme ayant répondu. Le tableau annonçait 0 % sur treize entreprises alors
+ * qu'une avait engagé une vraie conversation.
+ *
+ * Un état courant dit ce qu'il faut faire maintenant. Une histoire dit ce qui
+ * s'est passé, et rien ne l'efface : une entreprise qui a répondu une fois reste
+ * une entreprise qui a répondu, quoi qu'on fasse ensuite.
+ *
+ * La classification est recalculée à la lecture plutôt que relue en base — même
+ * raison que pour la dérivation d'état : les règles changent, et un verdict figé
+ * garderait le jugement d'une règle depuis corrigée. C'est ainsi qu'un accusé de
+ * réception de formulaire, classé `REPLIED` par une règle trop faible, cesse de
+ * compter dès que la règle s'affine, sans qu'on ait à réécrire l'historique.
+ */
+export interface ReplyHistory {
+  /** Une personne extérieure a écrit, au moins une fois. */
+  everHumanReplied: boolean;
+  lastHumanReplyAt: string | null;
+  lastAutoReplyAt: string | null;
+  humanReplies: number;
+  autoReplies: number;
+}
+
+export function replyHistory(
+  events: readonly {
+    kind: string;
+    source: string;
+    sender: string | null;
+    rawSubject: string | null;
+    bodyExcerpt: string | null;
+    classification: string;
+    occurredAt: string;
+    humanReviewed?: boolean;
+    declaredStatus?: string | null;
+  }[],
+  mailbox: string,
+): ReplyHistory {
+  let lastHumanReplyAt: string | null = null;
+  let lastAutoReplyAt: string | null = null;
+  let humanReplies = 0;
+  let autoReplies = 0;
+
+  for (const event of events) {
+    // Les corrections d'audit ne sont pas des messages : elles portent un état,
+    // pas un contenu. Les compter reviendrait à inventer une réponse.
+    if (event.kind === 'CORRECTION') continue;
+
+    const venuDeGmail = event.source.startsWith('gmail');
+
+    // Un message importé de Gmail n'entre dans l'histoire que s'il vient de
+    // l'extérieur. Une note du fondateur, elle, est un constat humain délibéré :
+    // elle n'a pas d'expéditeur et ne doit pas être écartée pour autant.
+    if (venuDeGmail
+      && directionOf({ from: event.sender ?? '', mailbox }).direction === 'OUTBOUND') {
+      continue;
+    }
+
+    /**
+     * Un jugement humain prime sur la règle, ici comme ailleurs.
+     *
+     * `deriveConversationState` le pose noir sur blanc — « il a lu ce que la
+     * règle n'a que reconnu » — et cette fonction le contredisait : elle
+     * reclassait tout message venu de Gmail, y compris ceux qu'une personne
+     * avait explicitement tranchés. Une réponse courte mais bien réelle,
+     * confirmée à la main, cessait de compter.
+     */
+    if (event.humanReviewed && event.declaredStatus) {
+      if (event.declaredStatus === 'REPLIED') {
+        humanReplies += 1;
+        if (!lastHumanReplyAt || event.occurredAt > lastHumanReplyAt) {
+          lastHumanReplyAt = event.occurredAt;
+        }
+      } else if (event.declaredStatus === 'AUTO_REPLY') {
+        autoReplies += 1;
+        if (!lastAutoReplyAt || event.occurredAt > lastAutoReplyAt) {
+          lastAutoReplyAt = event.occurredAt;
+        }
+      }
+      continue;
+    }
+
+    const classification = venuDeGmail
+      ? classifyInbound({
+        kind: 'EMAIL_REPLY',
+        subject: event.rawSubject,
+        sender: event.sender,
+        body: event.bodyExcerpt,
+        receivedAt: event.occurredAt,
+      }).classification
+      : event.classification;
+
+    if (classification === 'REPLIED') {
+      humanReplies += 1;
+      if (!lastHumanReplyAt || event.occurredAt > lastHumanReplyAt) {
+        lastHumanReplyAt = event.occurredAt;
+      }
+    } else if (classification === 'AUTO_REPLY') {
+      autoReplies += 1;
+      if (!lastAutoReplyAt || event.occurredAt > lastAutoReplyAt) {
+        lastAutoReplyAt = event.occurredAt;
+      }
+    }
+  }
+
+  return {
+    everHumanReplied: humanReplies > 0,
+    lastHumanReplyAt,
+    lastAutoReplyAt,
+    humanReplies,
+    autoReplies,
   };
 }

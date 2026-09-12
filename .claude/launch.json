@@ -4,13 +4,28 @@
     {
       "name": "dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:sim"],
+      "runtimeArgs": [
+        "run",
+        "dev:sim"
+      ],
       "port": 5173
     },
     {
       "name": "dev-live",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "atlas",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:atlas"
+      ],
       "port": 5173
     }
   ]

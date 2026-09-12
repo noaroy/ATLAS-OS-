@@ -6,6 +6,7 @@ import type { LlmProvider } from './types.ts';
 export * from './types.ts';
 export * from './budget.ts';
 export * from './pricing.ts';
+export * from './pricing-config.ts';
 export * from './model-policy.ts';
 export * from './json-schema.ts';
 export { AnthropicProvider } from './anthropic-provider.ts';
@@ -80,3 +81,25 @@ export function createLlmProvider(config: AtlasConfig, logger: Logger): LlmProvi
   });
   return new SimulationProvider(logger);
 }
+
+export {
+  classifyAiError,
+  extractJson,
+  type AiProvider,
+  type AiProviderName,
+  type AiProviderStatus,
+  type AiCapability,
+  type AiRequest,
+  type AiResponse,
+  type AiUsage,
+  type AiErrorKind,
+  type AiErrorVerdict,
+} from './ai-provider.ts';
+
+export {
+  FixtureAiProvider,
+  OpenAiProvider,
+  AnthropicAiProvider,
+  type FixtureReply,
+} from './ai-providers-impl.ts';
+

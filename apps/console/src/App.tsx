@@ -5,6 +5,7 @@ import { Shell } from './components/Shell.tsx';
 import { LoginView } from './views/Login.tsx';
 import { VillageView } from './views/Village.tsx';
 import { DashboardView } from './views/Dashboard.tsx';
+import { AtlasView } from './views/Atlas.tsx';
 import { MissionsView } from './views/Missions.tsx';
 import { DepartmentsView } from './views/Departments.tsx';
 import { MissionDetailView } from './views/MissionDetail.tsx';
@@ -14,6 +15,17 @@ import { AutomationView } from './views/Automation.tsx';
 import { EvolutionView } from './views/Evolution.tsx';
 import { LogsView } from './views/Logs.tsx';
 import { SettingsView } from './views/Settings.tsx';
+import { WarRoomView } from './views/WarRoom.tsx';
+import { ProspectingView } from './views/Prospecting.tsx';
+import {
+  AgentsView as OpsAgentsView, OrganizationView, SystemHealthView,
+} from './views/Operations.tsx';
+import { AiFabricView, CostsView } from './views/Fabric.tsx';
+import {
+  CompaniesView, CompanyDetailView, InboxView, ApprovalsView,
+} from './views/Pipeline.tsx';
+import { SearchFabricScreen, MultiModelView } from './views/Search.tsx';
+import { OutreachScreen, FollowUpsScreen, AnalyticsScreen } from './views/Outreach.tsx';
 
 /**
  * Application shell and routing.
@@ -55,7 +67,10 @@ export default function App() {
       <Route path="/village" element={<VillageView />} />
 
       <Route element={<Shell />}>
-        <Route path="/" element={<DashboardView />} />
+        {/* L'ecran d'accueil : ce qui s'est passe, ce qui attend une decision.
+            L'ancien tableau de bord reste accessible pour le detail operationnel. */}
+        <Route path="/" element={<AtlasView />} />
+        <Route path="/dashboard" element={<DashboardView />} />
         <Route path="/missions" element={<MissionsView />} />
         <Route path="/missions/:id" element={<MissionDetailView />} />
         <Route path="/departments" element={<DepartmentsView />} />
@@ -65,6 +80,25 @@ export default function App() {
         <Route path="/evolution" element={<EvolutionView />} />
         <Route path="/logs" element={<LogsView />} />
         <Route path="/settings" element={<SettingsView />} />
+
+        {/* Le centre de commande : une vue par question qu'on se pose le matin.
+            Chacune lit les depots existants, aucune ne stocke ni ne decide. */}
+        <Route path="/cc/war-room" element={<WarRoomView />} />
+        <Route path="/cc/prospecting" element={<ProspectingView />} />
+        <Route path="/cc/companies" element={<CompaniesView />} />
+        <Route path="/cc/companies/:domain" element={<CompanyDetailView />} />
+        <Route path="/cc/inbox" element={<InboxView />} />
+        <Route path="/cc/approvals" element={<ApprovalsView />} />
+        <Route path="/cc/agents" element={<OpsAgentsView />} />
+        <Route path="/cc/organization" element={<OrganizationView />} />
+        <Route path="/cc/ai-fabric" element={<AiFabricView />} />
+        <Route path="/cc/costs" element={<CostsView />} />
+        <Route path="/cc/system" element={<SystemHealthView />} />
+        <Route path="/cc/outreach" element={<OutreachScreen />} />
+        <Route path="/cc/follow-ups" element={<FollowUpsScreen />} />
+        <Route path="/cc/search-fabric" element={<SearchFabricScreen />} />
+        <Route path="/cc/multi-model" element={<MultiModelView />} />
+        <Route path="/cc/analytics" element={<AnalyticsScreen />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

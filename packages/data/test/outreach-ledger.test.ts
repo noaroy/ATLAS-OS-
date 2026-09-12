@@ -270,3 +270,73 @@ describe('synchroniser des envois faits à la main', () => {
     assert.ok(domains.every((d) => d.domain === d.domain.toLowerCase()));
   });
 });
+
+describe('une entité juridique n’est pas un nom commercial', () => {
+  /**
+   * La règle, décidée par le propriétaire le 27/08/2026.
+   *
+   * Les mentions légales de groupe-ledoux.com nomment LEDOUX FINANCE — le
+   * holding. L'entreprise trouvée, dont on cite les faits, s'appelle Cyberméca.
+   * La preuve légale corrobore que le domaine appartient à une société
+   * identifiée ; elle ne dit pas à qui on écrit.
+   *
+   * Écraser le nom commercial produirait un courriel citant un fait sur une
+   * marque tout en s'adressant à sa maison mère : exact sur le papier,
+   * incompréhensible pour le destinataire.
+   */
+  // Un domaine par test : `discover` deduplique par domaine, et deux tests
+  // partageant le meme prospect se transmettaient la confiance de l'autre.
+  let n = 0;
+  const seed = (repos: Repositories) => {
+    n += 1;
+    const { prospect } = repos.sales.discover({
+      batchId: 'IDENT-001',
+      companyName: 'Cyberméca',
+      domain: `groupe-ledoux-${n}.invalid`,
+      discoveredAt: '2026-08-26T00:00:00.000Z',
+      identityConfidence: 0.55,
+      identitySources: ['titre du résultat'],
+    });
+    return prospect;
+  };
+
+  test('la confirmation relève la confiance sans toucher au nom', () => {
+    const prospect = seed(repos);
+    const verdict = repos.sales.confirmIdentity(prospect.id, {
+      legalName: 'LEDOUX FINANCE',
+      confidence: 0.9,
+      source: 'mentions legales (https://www.groupe-ledoux.com/mentions-legales/)',
+    });
+
+    assert.equal(verdict.applied, true);
+    const apres = repos.sales.get(prospect.id)!;
+    assert.equal(apres.companyName, 'Cyberméca', 'le nom commercial ne bouge pas');
+    assert.equal(apres.identityConfidence, 0.9, 'la confiance, elle, monte');
+    // Le nom légal reste lisible et vérifiable, dans les sources.
+    assert.ok(apres.identitySources?.some((s) => s.includes('LEDOUX FINANCE')));
+    assert.ok(apres.identitySources?.includes('titre du résultat'), 'la source d’origine survit');
+  });
+
+  test('une confirmation ne peut pas faire baisser la confiance', () => {
+    const prospect = seed(repos);
+    repos.sales.confirmIdentity(prospect.id, {
+      legalName: 'LEDOUX FINANCE', confidence: 0.9, source: 'mentions legales',
+    });
+    const seconde = repos.sales.confirmIdentity(prospect.id, {
+      legalName: 'AUTRE CHOSE', confidence: 0.6, source: 'source plus faible',
+    });
+    assert.equal(seconde.applied, false);
+    assert.equal(repos.sales.get(prospect.id)!.identityConfidence, 0.9);
+  });
+
+  test('une dénomination vide ne confirme rien', () => {
+    const prospect = seed(repos);
+    assert.equal(
+      repos.sales.confirmIdentity(prospect.id, {
+        legalName: '  ', confidence: 0.95, source: 'x',
+      }).applied,
+      false,
+    );
+    assert.equal(repos.sales.get(prospect.id)!.identityConfidence, 0.55);
+  });
+});

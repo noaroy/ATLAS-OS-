@@ -9,24 +9,76 @@
  * colour would make the interface harder to read, not richer.
  */
 @theme {
-  --color-void: #06080f;
-  --color-abyss: #0a0e1a;
-  --color-deep: #0f1523;
-  --color-surface: #141b2d;
-  --color-raised: #1b2438;
-  --color-border: #263149;
-  --color-border-bright: #35435f;
+  /* ─── Rôles sémantiques : une seule source de vérité ──────────────────
+   *
+   * Deux jeux de tokens coexistaient — `--color-*` pour le shell, `--cc-*`
+   * pour le centre de commande — et couvraient les mêmes rôles avec des
+   * valeurs différentes : accent #38bdf8 contre #4a7fbf, IA #a78bfa contre
+   * #6d5f96, texte tertiaire #626c7c contre #5c6673. Un composant rendu dans
+   * les deux contextes ne pouvait pas être cohérent, et le cyan du shell
+   * n'était pas un choix : c'était un token oublié.
+   *
+   * Ce bloc porte désormais toutes les valeurs. `--cc-*` n'en sont plus que
+   * des alias, et le shell ne peut plus dériver.
+   */
 
-  --color-ink: #eef2fb;
-  --color-muted: #93a2c0;
-  --color-faint: #5f6f90;
+  /* Fonds, du plus profond au plus haut. */
+  --color-void: #070a0f;
+  --color-abyss: #0a0d12;
+  --color-panel: #0d1015;
+  --color-panel-raised: #12161c;
+  --color-deep: #0e1116;
+  --color-surface: #12151c;
+  --color-raised: #171b23;
 
-  --color-atlas: #38bdf8;
-  --color-atlas-deep: #0284c7;
-  --color-ember: #fbbf24;
-  --color-vital: #34d399;
-  --color-alert: #fb7185;
-  --color-arcane: #a78bfa;
+  /* Traits. Un seul pixel, deux intensités. */
+  --color-border: #1b1f27;
+  --color-border-strong: #2b323d;
+  --color-border-bright: #2b323d;
+
+  /*
+   * Texte, trois niveaux.
+   *
+   * `faint` valait #5c6673 : 3,27:1 sur un panneau, très en dessous du seuil
+   * AA de 4,5:1 — et c'est la couleur des libellés de carte, des en-têtes de
+   * tableau et des états vides, c'est-à-dire de tout ce qui nomme les chiffres.
+   * Relevé à 4,80:1 sur le fond le plus clair où il apparaît.
+   */
+  --color-ink: #e2e7ee;
+  --color-muted: #9aa4b2;
+  --color-faint: #7a8493;
+
+  /*
+   * Couleurs de sens. Elles ne décorent jamais : chacune répond à une question.
+   *
+   *   accent / running  quelque chose tourne en ce moment
+   *   healthy           ce composant va bien
+   *   warning           quelqu'un doit regarder
+   *   error             c'est bloqué
+   *   ai                un modèle est intervenu
+   */
+  --color-accent: #4a7fbf;
+  --color-running: #4a7fbf;
+  --color-healthy: #3fb950;
+  --color-warning: #d29922;
+  --color-error: #f85149;
+  --color-ai: #6d5f96;
+
+  /*
+   * Alias hérités, conservés parce que le JSX les nomme encore. Ils pointent
+   * sur les rôles ci-dessus : leur valeur ne peut plus diverger.
+   *
+   * `--color-warn` est cité six fois dans le JSX et n'était défini nulle part :
+   * ces éléments s'affichaient sans couleur. L'alias les répare.
+   */
+  --color-atlas: var(--color-accent);
+  --color-atlas-deep: #2f5b8f;
+  --color-vital: var(--color-healthy);
+  --color-ember: var(--color-warning);
+  --color-warn: var(--color-warning);
+  --color-alert: var(--color-error);
+  --color-arcane: var(--color-ai);
+
 
   --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
   --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -68,7 +120,7 @@
   }
   ::-webkit-scrollbar-thumb {
     background: var(--color-border);
-    border-radius: 99px;
+    border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
     background: var(--color-border-bright);
@@ -95,14 +147,14 @@
   .panel {
     background: color-mix(in oklab, var(--color-surface) 88%, transparent);
     border: 1px solid var(--color-border);
-    border-radius: 0.875rem;
+    border-radius: 6px;
     backdrop-filter: blur(12px);
   }
 
   .panel-raised {
     background: var(--color-raised);
     border: 1px solid var(--color-border-bright);
-    border-radius: 0.75rem;
+    border-radius: 6px;
   }
 
   .chip {
@@ -110,7 +162,7 @@
     align-items: center;
     gap: 0.35rem;
     padding: 0.15rem 0.55rem;
-    border-radius: 99px;
+    border-radius: 4px;
     font-size: 0.7rem;
     font-weight: 600;
     letter-spacing: 0.02em;
@@ -124,7 +176,7 @@
     justify-content: center;
     gap: 0.4rem;
     padding: 0.5rem 0.9rem;
-    border-radius: 0.6rem;
+    border-radius: 4px;
     font-size: 0.83rem;
     font-weight: 600;
     border: 1px solid var(--color-border-bright);
@@ -145,20 +197,25 @@
     cursor: not-allowed;
   }
 
+  /*
+   * Le bouton primaire portait un degrade cyan qui n'existait nulle part
+   * ailleurs. L'accent unifie est un aplat d'acier : la meme couleur que
+   * « quelque chose tourne », donc la meme lecture partout.
+   */
   .btn-primary {
-    background: linear-gradient(135deg, var(--color-atlas-deep), var(--color-atlas));
-    border-color: transparent;
-    color: #04121e;
+    background: color-mix(in oklab, var(--color-accent) 22%, transparent);
+    border-color: color-mix(in oklab, var(--color-accent) 55%, transparent);
+    color: #cfe0f5;
   }
   .btn-primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, var(--color-atlas), #7dd3fc);
-    border-color: transparent;
+    background: color-mix(in oklab, var(--color-accent) 34%, transparent);
+    border-color: var(--color-accent);
   }
 
   .input {
     width: 100%;
     padding: 0.55rem 0.75rem;
-    border-radius: 0.6rem;
+    border-radius: 4px;
     background: var(--color-deep);
     border: 1px solid var(--color-border);
     color: var(--color-ink);
@@ -192,17 +249,7 @@
 }
 
 @layer utilities {
-  .scanline {
-    background-image: repeating-linear-gradient(
-      0deg,
-      transparent 0 3px,
-      color-mix(in oklab, var(--color-atlas) 4%, transparent) 3px 4px
-    );
-  }
 
-  .glow-atlas {
-    box-shadow: 0 0 28px -8px color-mix(in oklab, var(--color-atlas) 60%, transparent);
-  }
 
   .animate-pulse-soft {
     animation: pulse-soft 2.4s ease-in-out infinite;
@@ -219,4 +266,196 @@
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
   }
+}
+
+/* --- L'écran ATLAS ------------------------------------------------------- */
+/*
+ * Une hiérarchie visuelle qui suit l'ordre de lecture : ce qui attend une
+ * décision est plus visible que les totaux, parce qu'un tableau de bord qui
+ * commence par des chiffres fait lire les chiffres et oublier la décision.
+ */
+.atlas-view { display: flex; flex-direction: column; gap: 1.25rem; }
+.atlas-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.atlas-header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.04em; }
+.atlas-status {
+  padding: 0.35rem 0.8rem; border-radius: 4px; font-size: 0.75rem;
+  font-weight: 600; letter-spacing: 0.06em; white-space: nowrap;
+}
+.atlas-status--online { background: rgba(46, 160, 67, 0.16); color: #3fb950; }
+.atlas-status--degraded { background: rgba(210, 153, 34, 0.16); color: #d29922; }
+.atlas-status--action { background: rgba(248, 81, 73, 0.16); color: #f85149; }
+
+.needs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.needs-item {
+  padding: 0.85rem 1rem; border-radius: 6px;
+  border-left: 3px solid var(--border, #30363d);
+  background: rgba(255, 255, 255, 0.02);
+}
+.needs-item--client_reply { border-left-color: #3fb950; }
+.needs-item--outreach, .needs-item--engineering, .needs-item--follow_up { border-left-color: #d29922; }
+.needs-item--system { border-left-color: #f85149; }
+.needs-kind {
+  font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+  opacity: 0.65;
+}
+.needs-what { margin: 0.3rem 0 0.5rem; font-weight: 600; }
+.needs-detail { display: grid; grid-template-columns: 7rem 1fr; gap: 0.15rem 0.75rem; margin: 0 0 0.6rem; font-size: 0.85rem; }
+.needs-detail dt { opacity: 0.55; }
+.needs-detail dd { margin: 0; }
+.needs-action {
+  display: inline-block; padding: 0.3rem 0.6rem; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06); font-size: 0.82rem;
+}
+
+.pipeline { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.pipeline li {
+  flex: 1 1 8rem; padding: 0.7rem 0.9rem; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03); display: flex; flex-direction: column; gap: 0.25rem;
+}
+.pipeline-label { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.6; }
+.pipeline-value { font-size: 1.35rem; font-weight: 600; }
+
+.agents-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.agents-table th { text-align: left; font-weight: 500; opacity: 0.55; padding: 0.35rem 0.5rem; }
+.agents-table td { padding: 0.45rem 0.5rem; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.agent-state { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; }
+.agent-state--au_travail { background: rgba(46, 160, 67, 0.16); color: #3fb950; }
+.agent-state--en_pause, .agent-state--attend_vous { background: rgba(210, 153, 34, 0.16); color: #d29922; }
+.agent-state--au_repos { background: rgba(255, 255, 255, 0.06); opacity: 0.7; }
+
+.system-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.system-list li { display: flex; align-items: center; gap: 0.6rem; font-size: 0.88rem; }
+.system-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex: none; }
+.system-dot--ok { background: #3fb950; }
+.system-dot--attention { background: #d29922; }
+.system-dot--absent { background: #f85149; }
+
+.link-button {
+  background: none; border: none; padding: 0; color: inherit;
+  text-decoration: underline; cursor: pointer; font-size: 0.85rem; opacity: 0.75;
+}
+.advanced { margin-top: 0.75rem; font-size: 0.85rem; opacity: 0.85; }
+.advanced h4 { margin: 0.75rem 0 0.25rem; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+.advanced ul { margin: 0; padding-left: 1.1rem; }
+.small { font-size: 0.8rem; }
+
+.agent-state--working { background: rgba(46, 160, 67, 0.16); color: #3fb950; }
+.agent-state--available { background: rgba(255, 255, 255, 0.06); opacity: 0.8; }
+/* Non installé se voit : une tâche qui l'attend ne partira jamais seule. */
+.agent-state--unavailable { background: rgba(248, 81, 73, 0.16); color: #f85149; }
+
+/*
+ * Le rembourrage de la zone principale, la ou il sert encore.
+ *
+ * Les ecrans du centre de commande gerent le leur : `.cc-body` est dense a
+ * dessein, et un rembourrage exterieur en plus rognait cent pixels de chaque
+ * cote sans rien apporter. Les ecrans historiques, eux, comptent dessus.
+ *
+ * `:has()` tranche sur le contenu reel plutot que sur une classe posee a la
+ * main sur chaque route : une route ajoutee demain herite du bon comportement
+ * sans qu'on y pense.
+ */
+main:not(:has(> .cc)) {
+  padding: 1.25rem 1.5rem;
+}
+
+/* ─── Écran de connexion ────────────────────────────────────────────────────
+ *
+ * Aligné sur le graphite du centre de commande.
+ *
+ * Tout est porté par `.login-screen`, et rien n'est modifié en dehors. Les
+ * classes partagées — `.panel`, `.input`, `.btn-primary` — servent aussi les
+ * écrans historiques : les retoucher globalement pour un seul écran changerait
+ * silencieusement tous les autres.
+ *
+ * Le dégradé cyan et le voile violet disparaissent. Ils n'étaient pas
+ * seulement voyants : l'écran qui précède immédiatement le centre de commande
+ * annonçait une autre interface que celle qui s'ouvre derrière.
+ */
+.login-screen {
+  background: var(--color-void);
+}
+
+.login-screen .login-mark {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 auto 1rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-bright);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.login-screen .login-panel {
+  background: #0d1015;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 1.25rem;
+}
+
+.login-screen .login-label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.63rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  font-weight: 500;
+}
+
+/* Le champ est plus sombre que le panneau : il se creuse au lieu de saillir. */
+.login-screen .login-input {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: 4px;
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  color: var(--color-ink);
+  font-size: 0.85rem;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+/*
+ * Le focus se voit sans éclairer l'écran : un liseré acier et un halo d'un
+ * pixel. Un anneau épais sur un fond presque noir attire l'œil hors du champ
+ * qu'il désigne.
+ */
+.login-screen .login-input:focus {
+  outline: none;
+  border-color: #4a7fbf;
+  box-shadow: 0 0 0 1px rgb(74 127 191 / 0.25);
+}
+.login-screen .login-input::placeholder { color: var(--color-faint); }
+
+/* Bleu acier sombre : une action, pas une enseigne. */
+.login-screen .login-submit {
+  width: 100%;
+  padding: 0.5rem 0.9rem;
+  border-radius: 4px;
+  border: 1px solid rgb(74 127 191 / 0.55);
+  background: rgb(47 91 143 / 0.22);
+  color: #cfe0f5;
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.login-screen .login-submit:hover:not(:disabled) {
+  background: rgb(47 91 143 / 0.34);
+  border-color: #4a7fbf;
+}
+.login-screen .login-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Une erreur d'identifiants est un fait, pas une alarme : rouge sobre. */
+.login-screen .login-error {
+  border: 1px solid rgb(248 81 73 / 0.32);
+  background: rgb(248 81 73 / 0.07);
+  border-radius: 4px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.75rem;
+  color: #f0827c;
 }

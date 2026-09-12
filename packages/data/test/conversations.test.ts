@@ -166,8 +166,14 @@ describe('ce module n’envoie rien', () => {
     assert.deepEqual(
       methods.filter((m) => m !== 'constructor').sort(),
       [
+        // `advanceSyncCheckpoint` et `syncCheckpoint` notent jusqu'où la boîte
+        // a été lue. Elles ne touchent qu'un horodatage : aucune ne peut faire
+        // partir quoi que ce soit, et c'est pour le vérifier que cette liste
+        // est exhaustive.
+        'advanceSyncCheckpoint',
         'all', 'alreadyImported', 'byDomain', 'eventsFor', 'knownMessageIds',
         'knownThreadIds', 'ledgerFollowUpFor', 'logImport', 'open', 'recordInboundEvent',
+        'syncCheckpoint',
       ],
     );
   });

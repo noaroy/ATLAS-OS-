@@ -3,16 +3,37 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAtlas } from '../store.ts';
 import { relativeTime } from './ui.tsx';
 
+/**
+ * La navigation, dans l'ordre où l'on se pose les questions le matin.
+ *
+ * Le commercial d'abord — c'est ce qui rapporte —, puis les opérations, puis la
+ * machinerie. Les écrans historiques restent accessibles plus bas : les retirer
+ * casserait des habitudes pour un gain d'esthétique.
+ */
 const NAV = [
-  { to: '/', label: 'Vue d’ensemble', glyph: '◈', end: true },
+  { to: '/', label: 'ATLAS', glyph: '◈', end: true },
+
+  { to: '/cc/war-room', label: 'War Room', glyph: '◆' },
+  { to: '/cc/prospecting', label: 'Prospecting', glyph: '⟳' },
+  { to: '/cc/companies', label: 'Companies', glyph: '▤' },
+  { to: '/cc/outreach', label: 'Outreach', glyph: '↗' },
+  { to: '/cc/inbox', label: 'Inbox', glyph: '✉' },
+  { to: '/cc/follow-ups', label: 'Follow-ups', glyph: '↺' },
+  { to: '/cc/approvals', label: 'Approvals', glyph: '⚑' },
+
+  { to: '/cc/agents', label: 'Agents', glyph: '◇' },
+  { to: '/cc/organization', label: 'Organization', glyph: '▫' },
+  { to: '/cc/ai-fabric', label: 'AI Fabric', glyph: '◉' },
+  { to: '/cc/multi-model', label: 'Multi-model', glyph: '⑂' },
+  { to: '/cc/search-fabric', label: 'Search Fabric', glyph: '⌕' },
+  { to: '/cc/costs', label: 'Costs', glyph: '$' },
+  { to: '/cc/analytics', label: 'Analytics', glyph: '≡' },
+  { to: '/cc/system', label: 'System', glyph: '⬢' },
+
   { to: '/missions', label: 'Missions', glyph: '▶' },
-  { to: '/departments', label: 'Départements', glyph: '◫' },
-  { to: '/agents', label: 'Agents', glyph: '◇' },
-  { to: '/memory', label: 'Mémoire', glyph: '❖' },
-  { to: '/automation', label: 'Automatisation', glyph: '⬢' },
-  { to: '/evolution', label: 'Évolution', glyph: '◉' },
-  { to: '/logs', label: 'Activité', glyph: '≡' },
-  { to: '/settings', label: 'Réglages', glyph: '⚙' },
+  { to: '/logs', label: 'Activité', glyph: '☷' },
+  { to: '/dashboard', label: 'Détail', glyph: '▦' },
+  { to: '/settings', label: 'Settings', glyph: '⚙' },
 ];
 
 /**
@@ -58,34 +79,37 @@ export function Shell() {
   return (
     <div className="flex h-full bg-[--color-void]">
       {/* ── Rail ─────────────────────────────────────────────────────────── */}
-      <aside className="flex w-[15.5rem] shrink-0 flex-col border-r border-[--color-border] bg-[--color-abyss]">
-        <div className="flex items-center gap-2.5 px-5 py-5">
-          <div className="grid size-9 place-items-center rounded-lg bg-gradient-to-br from-sky-600 to-cyan-400 text-[#04121e] shadow-lg">
-            <span className="text-lg font-bold">A</span>
+      <aside className="flex w-[13.5rem] shrink-0 flex-col border-r border-[--color-border] bg-[--color-abyss]">
+        <div className="flex items-center gap-2.5 px-4 py-3">
+          <div className="grid size-7 place-items-center rounded border border-[--color-border-bright] bg-[--color-surface] text-[--color-muted]">
+            <span className="text-sm font-semibold">A</span>
           </div>
           <div>
             <div className="font-display text-sm font-semibold tracking-tight">ATLAS OS</div>
-            <div className="text-[0.65rem] uppercase tracking-[0.18em] text-[--color-faint]">
+            <div className="text-[0.6875rem] uppercase tracking-[0.18em] text-[--color-faint]">
               v{version} · {mode}
             </div>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-0.5 px-3">
+        <nav className="flex-1 space-y-px overflow-y-auto px-2 py-1">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                // L'etat actif se marque par un liseret et le texte, pas par
+                // un aplat : quinze entrees dont une pleine attire l'oeil sur
+                // le fond au lieu du libelle.
+                `flex items-center gap-2.5 rounded-sm border-l-2 px-2.5 py-1.5 text-[0.8rem] transition-colors ${
                   isActive
-                    ? 'bg-[--color-raised] font-medium text-[--color-ink]'
-                    : 'text-[--color-muted] hover:bg-[--color-surface] hover:text-[--color-ink]'
+                    ? 'border-l-[--color-atlas] bg-[--color-surface]/60 font-medium text-[--color-ink]'
+                    : 'border-l-transparent text-[--color-muted] hover:bg-[--color-surface]/40 hover:text-[--color-ink]'
                 }`
               }
             >
-              <span className="w-4 text-center text-[--color-faint]" aria-hidden>
+              <span className="w-3.5 text-center text-[0.7rem] text-[--color-faint]" aria-hidden>
                 {item.glyph}
               </span>
               {item.label}
@@ -93,25 +117,23 @@ export function Shell() {
           ))}
         </nav>
 
-        <div className="p-3">
+        <div className="p-2">
           <button
             type="button"
             onClick={() => navigate('/village')}
-            className="group relative w-full overflow-hidden rounded-xl border border-[--color-border-bright] bg-gradient-to-br from-[#0e1b2e] to-[#101a2c] px-4 py-3.5 text-left transition-all hover:border-sky-500/50 glow-atlas"
+            className="group flex w-full items-center gap-2 rounded-sm border border-[--color-border] bg-[--color-surface]/50 px-2.5 py-2 text-left transition-colors hover:border-[--color-border-bright] hover:text-[--color-ink]"
           >
-            <div className="font-display text-sm font-semibold text-[--color-ink]">Village ATLAS</div>
-            <div className="mt-0.5 text-xs text-[--color-muted]">Entrer dans la vue immersive</div>
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-sky-400 transition-transform group-hover:translate-x-0.5">
-              →
-            </span>
+            <span className="text-[0.7rem] text-[--color-faint]" aria-hidden>◈</span>
+            <span className="text-[0.8rem] text-[--color-muted] group-hover:text-[--color-ink]">Village ATLAS</span>
+            <span className="ml-auto text-[--color-faint] transition-transform group-hover:translate-x-0.5">→</span>
           </button>
         </div>
 
-        <div className="border-t border-[--color-border] px-4 py-3">
+        <div className="border-t border-[--color-border] px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-xs font-medium text-[--color-ink]">{user?.name}</div>
-              <div className="truncate text-[0.68rem] text-[--color-faint]">{user?.role}</div>
+              <div className="truncate text-[0.6875rem] text-[--color-faint]">{user?.role}</div>
             </div>
             <button
               type="button"
@@ -126,8 +148,8 @@ export function Shell() {
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 border-b border-[--color-border] bg-[--color-abyss]/80 px-6 py-3 backdrop-blur">
-          <div className="flex items-center gap-4 text-xs">
+        <header className="flex h-9 items-center justify-between gap-4 border-b border-[--color-border] bg-[--color-abyss] px-4">
+          <div className="flex items-center gap-3 text-[0.72rem]">
             <span className="flex items-center gap-1.5">
               <span
                 className={`size-2 rounded-full ${
@@ -183,12 +205,12 @@ export function Shell() {
             <button
               type="button"
               onClick={() => setAlertesOpen((open) => !open)}
-              className="relative rounded-lg border border-[--color-border] bg-[--color-surface] px-3 py-1.5 text-xs text-[--color-muted] hover:text-[--color-ink]"
+              className="relative rounded-sm border border-[--color-border] bg-[--color-surface]/60 px-2 py-0.5 text-[0.72rem] text-[--color-muted] hover:text-[--color-ink]"
               aria-expanded={alertsOpen}
             >
               Alertes
               {alerts.length > 0 && (
-                <span className="ml-2 rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[0.65rem] font-semibold text-rose-300">
+                <span className="ml-2 rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-rose-300">
                   {alerts.length}
                 </span>
               )}
@@ -220,7 +242,7 @@ export function Shell() {
                             <div className="mt-0.5 line-clamp-3 text-xs text-[--color-muted]">
                               {alert.detail}
                             </div>
-                            <div className="mt-1 text-[0.68rem] text-[--color-faint]">
+                            <div className="mt-1 text-[0.6875rem] text-[--color-faint]">
                               {alert.source} · {relativeTime(alert.createdAt)}
                             </div>
                           </div>
@@ -241,7 +263,7 @@ export function Shell() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-6 py-6">
+        <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>

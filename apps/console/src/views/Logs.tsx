@@ -112,13 +112,13 @@ export function LogsView() {
           <ul className="divide-y divide-[--color-border]">
             {events.map((event) => (
               <li key={event.id} className="flex items-start gap-3 px-4 py-2.5 hover:bg-[--color-surface]">
-                <span className="w-20 shrink-0 pt-0.5 text-[0.68rem] text-[--color-faint]">
+                <span className="w-20 shrink-0 pt-0.5 text-[0.6875rem] text-[--color-faint]">
                   {new Date(event.createdAt).toLocaleTimeString()}
                 </span>
                 <SeverityChip severity={event.severity} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-[--color-ink]">{event.message}</div>
-                  <div className="mt-0.5 flex flex-wrap gap-2 text-[0.68rem] text-[--color-faint]">
+                  <div className="mt-0.5 flex flex-wrap gap-2 text-[0.6875rem] text-[--color-faint]">
                     <span className="font-mono">{event.type}</span>
                     <span>· {event.source}</span>
                     {event.agentKey && <span>· {event.agentKey}</span>}

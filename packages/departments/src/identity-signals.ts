@@ -111,6 +111,9 @@ function plausible(nom: string): boolean {
 const NON_NOMS = [
   'accueil', 'home', 'contact', 'mentions legales', 'a propos', 'about',
   'bienvenue', 'welcome', 'index', 'page', 'menu', 'panier',
+  // « © Copyright | All rights reserved » : le mot lui-même n'est le nom de personne.
+  'copyright', 'all rights reserved', 'tous droits reserves', 'alla rattigheter forbehallna',
+  'start', 'startsida', 'hem', 'kontakt', 'om oss', 'valkommen', 'startseite', 'impressum',
 ];
 
 function retenirNom(brut: string): string | null {
@@ -127,6 +130,8 @@ function retenirNom(brut: string): string | null {
    * fois, il l'aurait emporte.
    */
   if (/^[0-9\s.\-–]+$/.test(n)) return null;
+  // « Copyright 2024 », « All rights reserved. » : une mention de droits, pas un nom.
+  if (/^(?:copyright|all rights|tous droits|alla rattigheter)/i.test(n.normalize('NFKD').replace(/[̀-ͯ]/g, ''))) return null;
   return n;
 }
 
@@ -190,8 +195,19 @@ export function collectIdentitySignals(
      * concordait avec aucun autre signal, et la corroboration echouait sur une
      * page qui la portait pourtant.
      */
+    /*
+     * Scripts, styles et commentaires d'abord : sur pronovaab.se, la licence
+     * d'une bibliothèque CSS embarquée — « Copyright (c) 2015 Daniel Eden » —
+     * a fait d'un développeur américain la raison sociale d'une société de
+     * Halmstad. Le pied de page se lit dans le texte visible, jamais dans le
+     * code.
+     */
     const lignes = decodeEntities(
-      html.replace(/<\/(?:p|div|li|h[1-6]|section|footer|span|td|tr)>/gi, SAUT_DE_LIGNE)
+      html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/<\/(?:p|div|li|h[1-6]|section|footer|span|td|tr)>/gi, SAUT_DE_LIGNE)
         .replace(/<br\s*\/?>/gi, SAUT_DE_LIGNE)
         .replace(/<[^>]+>/g, ' '),
     ).replace(/[^\S\n]+/g, ' ');

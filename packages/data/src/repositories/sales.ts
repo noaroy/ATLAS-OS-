@@ -103,6 +103,7 @@ export interface SalesProspect {
   personalizationFactId: string | null;
   messageShort: string | null;
   messageEmail: string | null;
+  messageSubject: string | null;
   outreachSourceUrl: string | null;
   reviewer: string | null;
   approvedAt: string | null;
@@ -161,6 +162,7 @@ interface Row {
   personalization_fact_id: string | null;
   message_short: string | null;
   message_email: string | null;
+  message_subject: string | null;
   outreach_source_url: string | null;
   reviewer: string | null;
   approved_at: string | null;
@@ -207,6 +209,7 @@ const toProspect = (row: Row): SalesProspect => ({
   personalizationFactId: row.personalization_fact_id,
   messageShort: row.message_short,
   messageEmail: row.message_email,
+  messageSubject: row.message_subject,
   outreachSourceUrl: row.outreach_source_url,
   reviewer: row.reviewer,
   approvedAt: row.approved_at,
@@ -286,6 +289,7 @@ export class SalesRepository {
       personalization_fact_id: null,
       message_short: null,
       message_email: null,
+      message_subject: null,
       outreach_source_url: null,
       reviewer: null,
       approved_at: null,
@@ -447,11 +451,244 @@ export class SalesRepository {
   }
 
   /**
+   * Établir le pays sur une preuve, jamais sur une supposition.
+   *
+   * Le pays valait « France » pour tout le monde : le lot le recopiait depuis
+   * la régionalisation de sa propre requête. Un fabricant chinois et une
+   * société canadienne sont entrés ainsi, et le profil ICP — France, Belgique,
+   * Suisse — ne les a pas écartés.
+   *
+   * La source est obligatoire pour la même raison qu'ailleurs : sans elle, la
+   * colonne redeviendrait ce qu'elle était, une intention déguisée en mesure.
+   * Un pays qu'aucune page ne publie reste `null`, et `null` se lit
+   * « à vérifier » — jamais « France ».
+   */
+  setCountry(
+    prospectId: string,
+    preuve: { country: string; basis: string; sourceUrl: string },
+  ): SalesProspect {
+    if (!preuve.country.trim()) {
+      throw invalidState('Un pays vide ne s’enregistre pas : l’absence se note null.');
+    }
+    if (!preuve.sourceUrl.trim()) {
+      throw invalidState(
+        'Un pays sans source est une supposition. ' +
+          'C’est exactement ce que cette colonne contenait avant.',
+      );
+    }
+    const actuel = this.require(prospectId);
+    const sources = [
+      ...(actuel.identitySources ?? []),
+      `pays « ${preuve.country} » etabli par ${preuve.basis} (${preuve.sourceUrl})`,
+    ];
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET country = ?, identity_sources = ?, updated_at = ?
+           WHERE id = ?`,
+      )
+      .run(preuve.country.trim(), JSON.stringify(sources), nowIso(), prospectId);
+    return this.require(prospectId);
+  }
+
+  /**
+   * Effacer un pays qu'aucune source ne soutient.
+   *
+   * `setCountry` refuse d'écrire un pays non prouvé — c'est sa raison d'être.
+   * Mais il fallait aussi pouvoir retirer ceux qui avaient été écrits avant que
+   * la preuve soit exigée : Getinge portait « France » parce que la requête
+   * était régionalisée en FR, et rien ne permettait de revenir en arrière.
+   *
+   * Effacer n'est pas écrire : on retire une affirmation sans en poser une
+   * autre. Le champ redevient `null`, c'est-à-dire « à vérifier ».
+   */
+  clearUnprovenCountry(prospectId: string, reason: string): SalesProspect {
+    const actuel = this.require(prospectId);
+    if (actuel.country === null) return actuel;
+    const sources = [
+      ...(actuel.identitySources ?? []),
+      `pays « ${actuel.country} » retire : ${reason}`,
+    ];
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET country = NULL, identity_sources = ?, updated_at = ?
+           WHERE id = ?`,
+      )
+      .run(JSON.stringify(sources), nowIso(), prospectId);
+    return this.require(prospectId);
+  }
+
+  /**
+   * Corriger le nom commercial quand la découverte a retenu un titre de page.
+   *
+   * Le nom vient du titre du résultat de recherche, et ce titre est écrit pour
+   * le référencement, pas pour désigner une entreprise. « Magasin de sécurité
+   * près de Bordeaux » est un bon titre et un mauvais nom : le message
+   * d'approche l'emploie tel quel, et arrive en s'adressant à une phrase.
+   *
+   * La correction exige une source. Sans elle, ce serait une invention polie —
+   * exactement ce que l'extraction d'identité passe son temps à empêcher. Le
+   * nom d'origine est conservé dans les sources : une correction qui efface ce
+   * qu'elle corrige ne peut plus être relue.
+   *
+   * Ce n'est pas `confirmIdentity`, qui ne renomme jamais et n'élève que la
+   * confiance : là, l'entité juridique sert de preuve et le nom commercial
+   * reste celui que le destinataire reconnaît. Ici, c'est le nom commercial
+   * lui-même qui était faux.
+   */
+  correctCommercialName(
+    prospectId: string,
+    correction: { name: string; source: string },
+  ): SalesProspect {
+    const nom = correction.name.trim();
+    if (nom.length < 2) {
+      throw invalidState('Un nom commercial vide ne corrige rien.');
+    }
+    if (!correction.source.trim()) {
+      throw invalidState(
+        'Une correction de nom sans source est une invention. ' +
+          'La page qui porte le nom doit être citée.',
+      );
+    }
+    const actuel = this.require(prospectId);
+    if (actuel.companyName === nom) return actuel;
+
+    const sources = [
+      ...(actuel.identitySources ?? []),
+      `nom commercial « ${nom} » releve sur ${correction.source} ` +
+        `(remplace « ${actuel.companyName} », titre de page)`,
+    ];
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET company_name = ?, identity_sources = ?, updated_at = ?
+           WHERE id = ?`,
+      )
+      .run(nom, JSON.stringify(sources), nowIso(), prospectId);
+    return this.require(prospectId);
+  }
+
+  /**
+   * Corriger un brouillon déjà écrit : son objet, son corps, rien d'autre.
+   *
+   * `setOutreach` compose un brouillon et exige pour cela la preuve qui le
+   * fonde. Ce n'est pas ce qui se passe ici : le texte existe, il a été relu,
+   * et seule sa forme change — une ligne d'objet qui manquait, une devise
+   * écrite « EUR » au lieu de « € ».
+   *
+   * La garde est donc l'inverse de celle de `setOutreach` : au lieu d'exiger
+   * une preuve nouvelle, cette méthode refuse d'agir si le brouillon n'existe
+   * pas encore. Elle révise, elle ne crée pas — sans quoi elle offrirait un
+   * chemin pour écrire un message sans la preuve qui le justifie.
+   */
+  reviseOutreachText(
+    prospectId: string,
+    revision: { subject?: string; messageEmail?: string },
+  ): SalesProspect {
+    const actuel = this.require(prospectId);
+    if (!actuel.personalizationFactId || !actuel.messageEmail) {
+      throw invalidState(
+        'Ce prospect n’a pas de brouillon à corriger. ' +
+          'Cette méthode révise un texte existant ; elle n’en compose aucun.',
+      );
+    }
+    this.db
+      .prepare(
+        `UPDATE sales_prospects SET message_subject = ?, message_email = ?, updated_at = ?
+           WHERE id = ?`,
+      )
+      .run(
+        revision.subject ?? actuel.messageSubject,
+        revision.messageEmail ?? actuel.messageEmail,
+        nowIso(),
+        prospectId,
+      );
+    return this.require(prospectId);
+  }
+
+  /**
    * Change l'état, si la transition est permise.
    *
    * `APPROVED_TO_CONTACT` exige un relecteur nommé. Une approbation anonyme
    * n'engage personne, et c'est précisément ce que cette étape doit faire.
    */
+  /**
+   * Confirmer l'identite d'un prospect avec une preuve de premiere main.
+   *
+   * L'identite est etablie a la decouverte, a partir de ce que la recherche a
+   * rapporte : souvent le seul titre du resultat, ce qui plafonne la confiance
+   * a 0,55 et bloque la redaction d'un brouillon. C'est voulu — ecrire a une
+   * entreprise en l'appelant par un nom non verifie se remarque.
+   *
+   * **Cette methode ne renomme jamais le prospect.**
+   *
+   * Une entite juridique et une marque commerciale sont deux choses. Les
+   * mentions legales de groupe-ledoux.com nomment LEDOUX FINANCE, le holding ;
+   * l'entreprise qu'on a trouvee et dont on cite les faits s'appelle Cybermeca.
+   * La preuve legale sert a corroborer que le domaine appartient bien a une
+   * societe identifiee — elle ne dit pas a qui on ecrit. Ecraser le nom
+   * commercial produirait un courriel qui cite un fait sur une marque en
+   * s'adressant a sa maison mere : exact sur le papier, et incomprehensible
+   * pour celui qui le recoit.
+   *
+   * Le nom legal est donc conserve dans les sources d'identite, ou il reste
+   * lisible et verifiable, et la confiance seule est relevee.
+   *
+   * La confiance ne peut que monter : une confirmation s'ajoute, elle ne retire
+   * pas ce qui etait deja etabli.
+   */
+  confirmIdentity(
+    prospectId: string,
+    input: {
+      /** Le nom lu sur la preuve. Conserve comme source, jamais applique. */
+      legalName: string;
+      confidence: number;
+      source: string;
+    },
+  ): { applied: boolean; reason: string } {
+    const row = this.db
+      .prepare('SELECT company_name, identity_confidence, identity_sources FROM sales_prospects WHERE id = ?')
+      .get(prospectId) as
+      | { company_name: string; identity_confidence: number | null; identity_sources: string | null }
+      | undefined;
+    if (!row) return { applied: false, reason: 'prospect inconnu' };
+
+    const actuelle = row.identity_confidence ?? 0;
+    if (input.confidence <= actuelle) {
+      return {
+        applied: false,
+        reason: `confiance deja a ${actuelle} : une confirmation ne la baisse pas`,
+      };
+    }
+    const legal = input.legalName.trim();
+    if (legal.length < 2) return { applied: false, reason: 'denomination vide' };
+
+    const sources: string[] = row.identity_sources
+      ? (JSON.parse(row.identity_sources) as string[])
+      : [];
+    // Le nom legal entre ici, dans les sources — pas dans le nom commercial.
+    const trace = `entite juridique « ${legal} » — ${input.source}`;
+    if (!sources.includes(trace)) sources.push(trace);
+
+    this.db
+      .prepare(
+        `UPDATE sales_prospects
+            SET identity_confidence = @confidence,
+                identity_sources = @sources
+          WHERE id = @id`,
+      )
+      .run({
+        id: prospectId,
+        confidence: input.confidence,
+        sources: JSON.stringify(sources),
+      });
+
+    return {
+      applied: true,
+      reason:
+        `identite corroboree par « ${legal} » a ${input.confidence} ; ` +
+        `nom commercial « ${row.company_name} » inchange`,
+    };
+  }
+
   setState(
     prospectId: string,
     state: ProspectState,

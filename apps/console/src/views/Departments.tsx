@@ -65,14 +65,14 @@ export function DepartmentsView() {
               </span>
             </div>
 
-            <dl className="mt-4 grid grid-cols-4 gap-2 text-center text-[0.68rem]">
+            <dl className="mt-4 grid grid-cols-4 gap-2 text-center text-[0.6875rem]">
               <Metric label="Missions" value={formatNumber(stats.missionsTotal)} />
               <Metric label="Découvertes" value={formatNumber(stats.opportunitiesDiscovered)} />
               <Metric label="Qualifiées" value={formatNumber(stats.opportunitiesQualified)} />
               <Metric label="Retenues" value={formatNumber(stats.opportunitiesShortlisted)} />
             </dl>
 
-            <p className="mt-3 text-[0.68rem] text-[--color-faint]">
+            <p className="mt-3 text-[0.6875rem] text-[--color-faint]">
               {stats.costPerQualifiedOpportunity !== null
                 ? `≈ $${stats.costPerQualifiedOpportunity.toFixed(4)} par opportunité qualifiée`
                 : 'Cost par opportunité qualifiée: not yet measurable'}
@@ -194,7 +194,7 @@ function DepartmentDetail({ departmentKey }: { departmentKey: string }) {
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-[0.68rem] text-[--color-faint]">
+              <p className="mt-2 text-[0.6875rem] text-[--color-faint]">
                 Seuil de shortlist : {department.scoringModel.shortlistThreshold}/100.
               </p>
             </section>
@@ -207,7 +207,7 @@ function DepartmentDetail({ departmentKey }: { departmentKey: string }) {
                 {department.teams.map((team) => (
                   <div key={team.key} className="rounded border border-[--color-border] px-3 py-2">
                     <p className="text-sm text-[--color-ink]">{team.name}</p>
-                    <p className="mt-0.5 text-[0.68rem] text-[--color-muted]">{team.purpose}</p>
+                    <p className="mt-0.5 text-[0.6875rem] text-[--color-muted]">{team.purpose}</p>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {team.agentKeys.map((key) => (
                         <span key={key} className="chip border border-[--color-border] text-[--color-faint]">
@@ -260,7 +260,7 @@ function DepartmentDetail({ departmentKey }: { departmentKey: string }) {
               <li key={mission.id} className="flex items-center justify-between gap-3 py-2">
                 <Link to={`/missions/${mission.id}`} className="min-w-0 flex-1 hover:underline">
                   <span className="text-sm text-[--color-ink]">{mission.title}</span>
-                  <span className="ml-2 text-[0.68rem] text-[--color-faint]">{mission.code}</span>
+                  <span className="ml-2 text-[0.6875rem] text-[--color-faint]">{mission.code}</span>
                 </Link>
                 <MissionStatusChip status={mission.status} />
               </li>

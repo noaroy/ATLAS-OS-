@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "client": {
+    "name": "NOM_DU_CLIENT",
+    "country": "France",
+    "offering": "ce que le client vend, en une phrase — remplacer",
+    "internalTest": false
+  },
+  "market": { "country": "Suède", "countryLabel": "Suède", "regions": [] },
+  "targetRoles": ["distributor", "reseller", "commercial-partner"],
+  "productKeywords": ["mot-clé produit 1", "mot-clé produit 2", "mot-clé produit 3"],
+  "industries": ["secteur A", "secteur B"],
+  "requiredCriteria": [
+    { "key": "critere-requis-1", "label": "Ce que la société doit faire pour être retenue", "hint": "mots que la page publie quand c'est le cas", "weight": 3 },
+    { "key": "critere-requis-2", "label": "Second critère requis", "hint": "indice de lecture", "weight": 2 }
+  ],
+  "preferredCriteria": [
+    { "key": "critere-souhaite-1", "label": "Ce qui fait une meilleure société, sans être obligatoire", "hint": "indice de lecture", "weight": 1 }
+  ],
+  "exclusionCriteria": [
+    { "key": "exclusion-1", "label": "Ce qui écarte la société si la page l'établit", "hint": "indice de lecture", "weight": 1 }
+  ],
+  "competitorExclusions": ["Marque concurrente A", "Marque concurrente B"],
+  "preferSpecialist": true,
+  "excludedDomains": [],
+  "keepDomains": [],
+  "notes": "Exemple anonymisé du format. Le brief réel d'un client n'est pas versionné (voir .gitignore) ; il se valide avec : npm run client:preflight -- --brief=briefs/<client>.json"
+}

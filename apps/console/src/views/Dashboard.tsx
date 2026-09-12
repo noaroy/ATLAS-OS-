@@ -242,7 +242,7 @@ export function DashboardView() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="text-xs text-[--color-ink]">{event.message}</div>
-                      <div className="mt-0.5 text-[0.68rem] text-[--color-faint]">
+                      <div className="mt-0.5 text-[0.6875rem] text-[--color-faint]">
                         {event.source} · {relativeTime(event.createdAt)}
                       </div>
                     </div>

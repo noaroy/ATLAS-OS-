@@ -1,0 +1,207 @@
+/**
+ * Éprouver une sauvegarde en la restaurant.
+ *
+ * Une sauvegarde jamais restaurée n'est pas une sauvegarde : c'est un fichier
+ * dont on espère qu'il en est une. Le seul moyen de le savoir est de l'ouvrir
+ * et d'y chercher ce qui devrait s'y trouver.
+ *
+ * Deux versions se sont trompées avant celle-ci, et de deux façons opposées.
+ * La première déclarait la restauration vérifiée dès qu'*un* domaine était
+ * peuplé — registre OU conversations OU tâches : une copie ayant perdu toute la
+ * file de tâches passait pour saine tant que les entreprises du registre
+ * étaient là. La seconde comparait bien domaine par domaine, mais ne signalait
+ * qu'un domaine tombé à zéro : une copie ayant gardé trois tâches sur quarante
+ * la satisfaisait.
+ *
+ * La règle est donc l'égalité, pas la présence. Un domaine vide à la source doit
+ * être vide dans la copie ; un domaine à quarante doit être à quarante. Ce n'est
+ * pas plus sévère par principe — c'est la seule comparaison qui distingue une
+ * copie fidèle d'une copie partielle.
+ *
+ * Le contrôle est non destructif : la copie est ouverte dans un répertoire
+ * temporaire, jamais à la place de la base courante.
+ *
+ *   npm run backup && npm run restore-check
+ */
+import {
+  copyFileSync, mkdtempSync, rmSync, readdirSync, statSync, writeFileSync, existsSync, mkdirSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createLogger, loadConfig, nowIso } from '../packages/core/src/index.ts';
+import { createRepositories, type Repositories } from '../packages/data/src/index.ts';
+
+const c = {
+  reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+};
+
+const logger = createLogger({ level: 'error', pretty: false });
+const config = loadConfig(process.cwd());
+const dir = config.paths.backupDir;
+
+const sum = (record: Record<string, number>): number =>
+  Object.values(record).reduce((total, n) => total + n, 0);
+
+/**
+ * Les domaines qu'une base ATLAS porte, et comment les mesurer.
+ *
+ * Chaque mesure passe par une méthode que les dépôts exposent déjà. Aucune n'a
+ * été ajoutée pour les besoins de ce contrôle : une méthode écrite pour être
+ * vérifiée se contente en général de rendre ce qu'on espérait lire.
+ */
+const DOMAINS: Array<{ name: string; measure: (r: Repositories) => number }> = [
+  { name: 'registre commercial', measure: (r) => r.sales.ledgerDomains().length },
+  { name: 'conversations', measure: (r) => r.conversations.all().length },
+  { name: 'file de tâches', measure: (r) => sum(r.tasks.countByStatus()) },
+  {
+    name: 'transitions de tâches',
+    // L'historique compte plus que l'état : deux bases peuvent afficher les
+    // mêmes totaux par statut en ayant perdu tout le chemin qui y mène.
+    measure: (r) => r.tasks
+      .list({ limit: 10_000 })
+      .reduce((total, task) => total + r.tasks.historyFor(task.taskId).length, 0),
+  },
+  {
+    name: 'chaînes IA',
+    measure: (r) => new Set(
+      r.tasks.list({ limit: 10_000 }).map((t) => t.chainId).filter((id): id is string => id !== null),
+    ).size,
+  },
+  {
+    name: 'appels IA',
+    // Depuis l'origine : une fenêtre journalière rendrait zéro sur une base
+    // ancienne et ferait passer une perte pour une absence normale.
+    measure: (r) => r.tasks.aiUsageSince('1970-01-01T00:00:00.000Z').calls,
+  },
+  { name: 'espaces de travail', measure: (r) => sum(r.tasks.workspaceCounts()) },
+  { name: 'états de la boucle commerciale', measure: (r) => sum(r.salesLoop.stateCounts()) },
+  {
+    name: 'brouillons à relire',
+    measure: (r) => r.salesLoop.draftsInState('READY_FOR_APPROVAL').length,
+  },
+];
+
+/**
+ * Le dernier run du daemon, compare par identite plutot que par compte.
+ *
+ * Les depots n'exposent pas de total de runs, et en ajouter un pour ce seul
+ * controle serait ecrire la mesure d'apres la reponse attendue. Comparer
+ * l'identifiant du dernier run repond a la meme question — la copie porte-t-elle
+ * le meme historique d'execution — avec ce qui existe deja.
+ */
+const daemonFingerprint = (r: Repositories): string => {
+  const run = r.tasks.lastDaemonRun();
+  return run ? `${run.id}@${run.startedAt}` : 'aucun';
+};
+
+const copies = existsSync(dir)
+  ? readdirSync(dir)
+      .filter((name) => name.startsWith('atlas-') && name.endsWith('.db'))
+      .map((name) => ({ name, at: statSync(join(dir, name)).mtimeMs }))
+      .sort((a, b) => b.at - a.at)
+  : [];
+
+if (copies.length === 0) {
+  console.error('aucune sauvegarde à éprouver');
+  process.exit(1);
+}
+
+const latest = join(dir, copies[0]!.name);
+const ageHours = (Date.now() - copies[0]!.at) / 3_600_000;
+const scratch = mkdtempSync(join(tmpdir(), 'atlas-restore-'));
+const restored = join(scratch, 'restored.db');
+
+console.log(`\n  ${c.bold}ÉPREUVE DE RESTAURATION${c.reset}`);
+console.log(`  ${c.dim}${latest}${c.reset}`);
+console.log(`  ${c.dim}âge : ${ageHours < 1 ? 'moins d’une heure' : `${Math.round(ageHours)} h`}${c.reset}\n`);
+
+let ok = false;
+let detail = '';
+const rows: Array<{ name: string; source: string; restored: string; equal: boolean }> = [];
+
+try {
+  copyFileSync(latest, restored);
+
+  // La source d'abord, en lecture seule de fait : on ne lui écrit rien.
+  const source = createRepositories(config.paths.databaseFile, logger);
+  const copy = createRepositories(restored, logger);
+  try {
+    for (const domain of DOMAINS) {
+      const inSource = domain.measure(source);
+      const inCopy = domain.measure(copy);
+      rows.push({
+        name: domain.name,
+        source: String(inSource),
+        restored: String(inCopy),
+        equal: inSource === inCopy,
+      });
+    }
+    const runSource = daemonFingerprint(source);
+    const runCopy = daemonFingerprint(copy);
+    rows.push({
+      name: 'dernier run du daemon',
+      source: runSource.slice(0, 22),
+      restored: runCopy.slice(0, 22),
+      equal: runSource === runCopy,
+    });
+  } finally {
+    source.close();
+    copy.close();
+  }
+
+  const divergents = rows.filter((r) => !r.equal);
+
+  /**
+   * Une source entièrement vide ne prouve pas qu'une sauvegarde est bonne : elle
+   * prouve qu'on n'a pas su la lire. Le cas s'est produit — un mauvais nom de
+   * champ pointait à côté de la base, tous les domaines paraissaient vides, et
+   * le verdict annonçait « vérifiée » sans avoir rien comparé.
+   */
+  const sourceVide = rows.every((r) => r.source === '0' || r.source === 'aucun');
+
+  ok = divergents.length === 0 && !sourceVide;
+  detail = sourceVide
+    ? 'base source illisible ou vide : aucune comparaison possible'
+    : divergents.length > 0
+      ? `divergence(s) : ${divergents.map((d) => `${d.name} ${d.restored}≠${d.source}`).join(' ; ')}`
+      : `${rows.length} domaine(s) identiques à la source`;
+
+  const width = Math.max(...rows.map((r) => r.name.length));
+  for (const row of rows) {
+    const mark = row.equal ? `${c.green}=${c.reset}` : `${c.red}DIVERGE${c.reset}`;
+    console.log(
+      `  ${row.name.padEnd(width)}  ${row.restored.padStart(22)} / ${row.source.padEnd(22)}  ${mark}`,
+    );
+  }
+  console.log(`  ${c.dim}${'copie / source'.padStart(width + 30)}${c.reset}`);
+} catch (error) {
+  detail = error instanceof Error ? error.message.slice(0, 160) : String(error);
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+// Le résultat est écrit à côté des sauvegardes : c'est lui que le contrôle de
+// production relira, plutôt que de supposer.
+const receipt = join(dir, 'restore-check.json');
+mkdirSync(dir, { recursive: true });
+writeFileSync(
+  receipt,
+  JSON.stringify(
+    { at: nowIso(), backup: copies[0]!.name, ageHours: Math.round(ageHours * 10) / 10, ok, detail, domains: rows },
+    null, 2,
+  ),
+  'utf8',
+);
+
+console.log(
+  `\n  ${ok ? `${c.green}RESTAURATION VÉRIFIÉE${c.reset}` : `${c.red}ÉCHEC${c.reset}`} — ${detail}`,
+);
+if (!ok && rows.some((r) => !r.equal)) {
+  console.log(
+    `  ${c.dim}une divergence peut venir d'écritures postérieures à la sauvegarde :`
+    + ` relancer « npm run backup » puis ce contrôle${c.reset}`,
+  );
+}
+console.log(`  ${c.dim}reçu : ${receipt}${c.reset}\n`);
+process.exitCode = ok ? 0 : 1;

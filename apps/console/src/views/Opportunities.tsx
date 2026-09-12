@@ -101,7 +101,7 @@ export function MissionOpportunities({ missionId }: { missionId: string }) {
               }`}
             >
               <p className="font-display text-lg">{formatNumber(data.funnel[stage] ?? 0)}</p>
-              <p className="text-[0.62rem] uppercase tracking-wide text-[--color-faint]">{STAGE_LABELS[stage]}</p>
+              <p className="text-[0.6875rem] uppercase tracking-wide text-[--color-faint]">{STAGE_LABELS[stage]}</p>
             </div>
           ))}
         </div>
@@ -114,7 +114,7 @@ export function MissionOpportunities({ missionId }: { missionId: string }) {
         action={
           shortlist.length > 0 ? (
             <div className="flex items-center gap-2">
-              <span className="text-[0.68rem] text-[--color-faint]">
+              <span className="text-[0.6875rem] text-[--color-faint]">
                 {approvedCount}/{shortlist.length} approuvée(s)
               </span>
               {/*
@@ -189,7 +189,7 @@ export function MissionOpportunities({ missionId }: { missionId: string }) {
 
 function Economics({ economics }: { economics: MissionEconomics }) {
   return (
-    <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-[--color-border] pt-3 text-center text-[0.68rem] sm:grid-cols-5">
+    <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-[--color-border] pt-3 text-center text-[0.6875rem] sm:grid-cols-5">
       <Cell label="Jetons" value={formatNumber(economics.tokensUsed)} />
       <Cell
         label="Coût estimé"
@@ -245,7 +245,7 @@ function OpportunityRow({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm text-[--color-ink]">{company.name}</span>
-          <span className="block truncate text-[0.68rem] text-[--color-faint]">
+          <span className="block truncate text-[0.6875rem] text-[--color-faint]">
             {[company.city, company.country, company.domain].filter(Boolean).join(' · ') || 'localisation inconnue'}
           </span>
         </span>
@@ -253,7 +253,7 @@ function OpportunityRow({
           <span className="block font-display text-sm text-[--color-ink]">
             {opportunity.score !== null ? opportunity.score.toFixed(1) : '—'}
           </span>
-          <span className="block text-[0.62rem] text-[--color-faint]">
+          <span className="block text-[0.6875rem] text-[--color-faint]">
             {opportunity.scoreDetail
               ? `${(opportunity.scoreDetail.confidence * 100).toFixed(0)}% de confiance`
               : opportunity.stage}
@@ -312,7 +312,7 @@ function OpportunityDetailPanel({
                     {fit.label}
                   </span>
                   <span className="font-display text-[--color-ink]">{fit.value}/100</span>
-                  <span className="text-[0.62rem] text-[--color-faint]">
+                  <span className="text-[0.6875rem] text-[--color-faint]">
                     {Math.round(fit.confidence * 100)} %
                   </span>
                   <span className="min-w-0 flex-1 text-[--color-muted]">{fit.rationale}</span>
@@ -360,7 +360,7 @@ function OpportunityDetailPanel({
                 <td className="py-1 font-display text-[--color-ink]">
                   {opportunity.scoreDetail.total.toFixed(1)}
                 </td>
-                <td className="py-1 text-[0.62rem] text-[--color-faint]">
+                <td className="py-1 text-[0.6875rem] text-[--color-faint]">
                   modèle {opportunity.scoreDetail.modelVersion} · noté par {opportunity.scoreDetail.scoredBy}
                 </td>
               </tr>
@@ -384,7 +384,7 @@ function OpportunityDetailPanel({
               </li>
             ))}
           </ul>
-          <p className="mt-1 whitespace-pre-line text-[0.68rem] text-[--color-faint]">
+          <p className="mt-1 whitespace-pre-line text-[0.6875rem] text-[--color-faint]">
             {opportunity.qualification.rationale}
           </p>
         </section>
@@ -413,7 +413,7 @@ function OpportunityDetailPanel({
                   <li key={contact.id} className="text-[--color-muted]">
                     <span className="text-[--color-ink]">{contact.name}</span>
                     {contact.role ? ` — ${contact.role}` : ''}
-                    <span className="ml-1 text-[0.62rem] text-[--color-faint]">
+                    <span className="ml-1 text-[0.6875rem] text-[--color-faint]">
                       ({(contact.confidence * 100).toFixed(0)}% de confiance)
                     </span>
                   </li>
@@ -439,7 +439,7 @@ function OpportunityDetailPanel({
 
       <ReviewControls opportunity={opportunity} onReviewed={onReviewed} />
 
-      <p className="text-[0.62rem] text-[--color-faint]">
+      <p className="text-[0.6875rem] text-[--color-faint]">
         {company.name} · enregistrée le {new Date(company.firstSeenAt).toLocaleDateString()}
         {company.lastVerifiedAt
           ? ` · dernière vérification ${new Date(company.lastVerifiedAt).toLocaleDateString()}`
@@ -555,7 +555,7 @@ function EvidenceRow({ evidence }: { evidence: Evidence }) {
         <span className="text-[--color-muted]">
           <span className="text-[--color-faint]">{evidence.field}:</span> {evidence.claim}
         </span>
-        <span className="ml-1 text-[0.62rem] text-[--color-faint]">
+        <span className="ml-1 text-[0.6875rem] text-[--color-faint]">
           {evidence.sourceRef ? (
             <a
               href={evidence.sourceRef}

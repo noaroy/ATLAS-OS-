@@ -139,18 +139,35 @@ describe('le bootstrap d’autorisation', () => {
   // elles le sont. L'assertion porte sur ce qui s'exécute, pas sur la prose.
   const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-  test('ne demande que la lecture', () => {
+  test('ne demande que la lecture et l’envoi', () => {
+    // La liste blanche compte deux entrées, décidées explicitement : lire pour
+    // rattacher les réponses, envoyer pour répondre après approbation humaine.
+    // Celles qui restent interdites donneraient sur la boîte entière un pouvoir
+    // qu'aucune fonction d'ATLAS ne demande — étiqueter, supprimer, tout lire.
     assert.equal(source.includes('gmail.modify'), false);
     assert.equal(source.includes('gmail.compose'), false);
-    assert.equal(source.includes('gmail.send'), false);
     assert.equal(source.includes('mail.google.com'), false);
-    // La portée transmise vient de la constante partagée, jamais d'une chaîne
+
+    // Les portées viennent des constantes partagées, jamais d'une chaîne
     // recopiée ici : deux littéraux finiraient par diverger.
-    assert.ok(source.includes('scope: GMAIL_READONLY_SCOPE'), 'une seule portée demandée');
+    assert.ok(
+      /ACCEPTED_SCOPES = \[GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE\]/.test(source),
+      'la liste blanche est exactement lecture + envoi, depuis les constantes',
+    );
+    assert.ok(
+      /scopes:\s*ACCEPTED_SCOPES/.test(source),
+      'la demande porte sur la liste blanche, pas sur autre chose',
+    );
     assert.equal(
-      /scope:\s*'/.test(source),
+      /scopes?:\s*\[?\s*'/.test(source),
       false,
       'aucune portée écrite en dur dans la requête',
+    );
+    // Le refus porte sur ce que Google a réellement accordé : il reconduit
+    // parfois un consentement plus large donné auparavant au même client.
+    assert.ok(
+      /granted\.filter\(\(scope\) => !ACCEPTED_SCOPES\.includes\(scope\)\)/.test(source),
+      'un jeton plus large que la liste blanche doit être refusé',
     );
   });
 
@@ -184,5 +201,30 @@ describe('le bootstrap d’autorisation', () => {
       assert.ok(calls.length <= (verb === 'POST' ? 1 : 0), `${verb} de trop dans gmail-check`);
     }
     assert.equal(check.includes('/messages/send'), false);
+  });
+});
+
+describe('le plafond du fournisseur de fixture', () => {
+  test('max: 0 ne rend aucun message', () => {
+    // `if (query.max)` traitait zéro comme une absence de plafond : une demande
+    // de zéro message rendait toute la boîte. Un fixture qui ne respecte pas son
+    // contrat fait mentir tous les tests qui s'appuient sur lui.
+    const provider = new FixtureInboxProvider([
+      mailMessage({ messageId: 'a' }),
+      mailMessage({ messageId: 'b' }),
+    ]);
+    return provider.list({ max: 0 }).then((messages) => {
+      assert.equal(messages.length, 0);
+    });
+  });
+
+  test('un plafond ordinaire coupe toujours', async () => {
+    const provider = new FixtureInboxProvider([
+      mailMessage({ messageId: 'a' }),
+      mailMessage({ messageId: 'b' }),
+      mailMessage({ messageId: 'c' }),
+    ]);
+    assert.equal((await provider.list({ max: 2 })).length, 2);
+    assert.equal((await provider.list({})).length, 3);
   });
 });

@@ -172,7 +172,7 @@ export function NewMissionDialog({
               placeholder="Soyez précis sur ce à quoi ressemble un bon résultat. Que doit-il exister à la fin, et pour qui ?"
               onChange={(e) => setObjective(e.target.value)}
             />
-            <p className="mt-1 text-[0.68rem] text-[--color-faint]">
+            <p className="mt-1 text-[0.6875rem] text-[--color-faint]">
               Un objectif clair dès le départ produit un meilleur plan qu’un objectif vague affiné ensuite.
             </p>
           </div>
@@ -194,7 +194,7 @@ export function NewMissionDialog({
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-[0.68rem] text-[--color-faint]">
+            <p className="mt-1 text-[0.6875rem] text-[--color-faint]">
               {department
                 ? department.tagline
                 : 'Un département fournit la méthode. Sans lui, Hermès planifie la mission lui-même.'}
@@ -204,7 +204,7 @@ export function NewMissionDialog({
           {department && (
             <fieldset className="space-y-4 rounded-lg border border-[--color-atlas]/30 p-4">
               <legend className="px-1 text-xs text-[--color-atlas]">Brief</legend>
-              <p className="text-[0.68rem] text-[--color-faint]">
+              <p className="text-[0.6875rem] text-[--color-faint]">
                 Ce que vous indiquez ici fait foi. Hermès lit l’objectif pour le reste, mais ne remplace jamais
                 ce que vous avez fixé.
               </p>
@@ -238,7 +238,7 @@ export function NewMissionDialog({
                         />
                         <span>
                           <span className="text-[--color-ink]">{target.label}</span>
-                          <span className="block text-[0.62rem] text-[--color-faint]">
+                          <span className="block text-[0.6875rem] text-[--color-faint]">
                             {target.description}
                           </span>
                         </span>
@@ -246,7 +246,7 @@ export function NewMissionDialog({
                     ))}
                   </div>
                   {targetTypes.length === 0 && (
-                    <p className="mt-1 text-[0.68rem] text-[--color-warn]">
+                    <p className="mt-1 text-[0.6875rem] text-[--color-warn]">
                       Choisissez au moins un rôle.
                     </p>
                   )}
@@ -406,7 +406,7 @@ export function NewMissionDialog({
               placeholder="Laissez vide pour utiliser la valeur par défaut du déploiement"
               onChange={(e) => setTokenBudget(e.target.value)}
             />
-            <p className="mt-1 text-[0.68rem] text-[--color-faint]">
+            <p className="mt-1 text-[0.6875rem] text-[--color-faint]">
               Si la mission atteint ce plafond, elle s’arrête proprement et conserve ce que les étapes
               achevées ont produit. Saisissez 0 pour aucun plafond.
             </p>

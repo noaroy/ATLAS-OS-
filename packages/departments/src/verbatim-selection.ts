@@ -45,7 +45,8 @@ export interface BlockCatalogue {
  */
 const MAX_BLOCS_PAR_PAGE = 40;
 
-export function buildBlockCatalogue(pages: readonly ReadPage[]): BlockCatalogue {
+export function buildBlockCatalogue(pages: readonly ReadPage[], options: { maxBlocksPerPage?: number } = {}): BlockCatalogue {
+  const parPage = options.maxBlocksPerPage ?? MAX_BLOCS_PAR_PAGE;
   const index = new Map<number, { url: string; blockId: number }>();
   const blocksByUrl = new Map<string, SourceBlock[]>();
   const textByUrl = new Map<string, string>();
@@ -62,7 +63,7 @@ export function buildBlockCatalogue(pages: readonly ReadPage[]): BlockCatalogue 
     textByUrl.set(url, cleanedText(page.html));
     titleByUrl.set(url, pageTitle(page.html));
     lignes.push(`\n## ${url}`);
-    for (const b of blocs.slice(0, MAX_BLOCS_PAR_PAGE)) {
+    for (const b of blocs.slice(0, parPage)) {
       numero += 1;
       index.set(numero, { url, blockId: b.id });
       lignes.push(`[${numero}] ${b.text}`);

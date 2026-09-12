@@ -1,4 +1,5 @@
-import type { ClientReport, ReportCheck, ReportClaim, ReportProspect } from './client-report.ts';
+import type { ClientReport, ReportCheck, ReportClaim, ReportProspect, ReportCriterion, ReviewQueueItem } from './client-report.ts';
+import { CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS } from './client-report.ts';
 
 /**
  * Le rapport client et son extrait gratuit, rendus depuis le même modèle.
@@ -78,7 +79,7 @@ const checkHtml = (k: ReportCheck): string => `
     }
     <div class="src">${
       k.evidenceIds.length > 0
-        ? `Établi par ${k.evidenceIds.length} preuve(s) : ${k.evidenceIds.map((i) => esc(i)).join(', ')}`
+        ? `Établi par ${k.evidenceIds.length} preuve(s) citée(s) dans la section Preuves`
         : '<span class="absent">aucune preuve citée</span>'
     }</div>
   </li>`;
@@ -153,6 +154,10 @@ const STYLE = `
                background:var(--obs-bg);color:var(--obs);margin-left:6px}
   .badge-generic{font-size:11px;font-weight:700;padding:1px 6px;border-radius:3px;
                  background:var(--panel);color:var(--muted);margin-left:6px}
+  .badge-warn{font-size:11px;font-weight:700;padding:1px 6px;border-radius:3px;
+              background:#fbe9e7;color:#b3261e;margin-left:6px}
+  .prov-inline dt{font-weight:700;margin-top:6px}
+  .prov-inline dd{margin:0 0 4px 0}
   .absent{color:var(--muted);font-style:italic}
   .raw{color:var(--muted)}
   a{color:var(--accent)}
@@ -204,8 +209,12 @@ export function reportToHtml(report: ClientReport): string {
   <h4>Principaux enseignements</h4>
   <ul class="findings">${report.summary.findings.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
 
+  ${statusBanner(report)}
+
   <h2>Opportunités retenues</h2>
   ${report.prospects.map(prospectHtml).join('\n')}
+
+  ${exclusionsHtml(report)}
 
   ${
     report.limitations.length > 0
@@ -244,6 +253,10 @@ const prospectHtml = (p: ReportProspect): string => `
         <div class="c">confiance ${p.confidence.toFixed(2)}</div>
       </div>
     </header>
+
+    ${p.activity ? `<p class="lead">${esc(p.activity)} <span class="absent">(résumé à partir des pages lues)</span></p>` : ''}
+    ${synthesisHtml(p)}
+    ${criteriaHtml(p)}
 
     <h4>Ce qui est établi</h4>
     ${
@@ -316,7 +329,87 @@ const prospectHtml = (p: ReportProspect): string => `
             .join('')}</ul>`
         : '<p class="absent">Aucun contact publié n’a été trouvé.</p>'
     }
+    ${p.contactForm ? `<p>Formulaire de contact observé : ${link(p.contactForm)}</p>` : ''}
+    ${verificationHtml(p)}
   </article>`;
+
+const synthesisHtml = (p: ReportProspect): string => {
+  const s = p.synthesis;
+  if (!s) return '';
+  return `
+    <div class="reco">
+      <strong>En bref.</strong>
+      ${s.why.length ? `<div><em>Pourquoi pertinente :</em><ul class="claims">${s.why.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '<div class="absent">Aucun critère établi sur les pages lues.</div>'}
+      ${s.toConfirm.length ? `<div><em>À confirmer :</em> ${esc(s.toConfirm.join(', '))}</div>` : ''}
+      <div><em>Contact :</em> ${esc(s.contact)}</div>
+      ${p.channel && p.channel.method !== 'NONE' ? `<div class="dim-why">${esc(CHANNEL_CONFIDENCE_LABELS[p.channel.confidence] ?? p.channel.confidence)}${p.channel.sourceUrl ? ` · lu sur ${link(p.channel.sourceUrl)}` : ''}</div>` : ''}
+      ${s.sources.length ? `<div class="dim-why">Sources : ${s.sources.map((u) => link(u)).join(' · ')}</div>` : ''}
+    </div>`;
+};
+
+const statusBanner = (report: ClientReport): string => {
+  if (!report.status) return '';
+  return report.status === 'PARTIAL'
+    ? `<div class="reco"><strong>Sélection intermédiaire.</strong> Cette première liste est livrée pour recueillir
+       votre retour — sociétés à conserver, à écarter, critères à renforcer — avant la suite de la recherche.
+       Elle n’est pas la liste finale.</div>`
+    : `<div class="reco"><strong>Rapport final.</strong> La recherche est terminée sur le périmètre convenu.</div>`;
+};
+
+const criteriaHtml = (p: ReportProspect): string => {
+  if (!p.criteria || p.criteria.length === 0) return '';
+  const classe = (v: ReportCriterion['verdict']): string =>
+    v === 'ESTABLISHED' ? 'badge-named' : v === 'TO_CONFIRM' ? 'badge-generic' : 'badge-warn';
+  return `
+    <h4>Vos critères</h4>
+    <table>
+      <thead><tr><th>Critère</th><th>Verdict</th><th>Ce que le site dit</th></tr></thead>
+      <tbody>
+        ${p.criteria.map((c) => `<tr>
+          <td><strong>${esc(c.label)}</strong><div class="dim-why">${c.kind === 'required' ? 'requis' : c.kind === 'preferred' ? 'souhaité' : 'exclusion'}</div></td>
+          <td><span class="${classe(c.verdict)}">${esc(c.verdictLabel)}</span></td>
+          <td>${c.quotes.length
+            ? c.quotes.map((q) => `<div>« ${esc(q.quote)} »<div class="dim-why">${link(q.url)}</div></div>`).join('')
+            : `<div class="dim-why">${esc(c.note || 'les pages lues n’en parlent pas')}</div>`}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+};
+
+const verificationHtml = (p: ReportProspect): string => {
+  const v = p.verification;
+  if (!v) return '';
+  return `
+    <h4>Vérification</h4>
+    <dl class="prov-inline">
+      <dt>Statut</dt><dd><span class="${v.status === 'VERIFIED' ? 'badge-named' : 'badge-generic'}">${esc(v.statusLabel)}</span></dd>
+      <dt>Pays</dt><dd>${esc(v.country.value ?? 'non prouvé')}${v.country.quote ? ` — « ${esc(v.country.quote)} » ${link(v.country.url)}` : ''}</dd>
+      <dt>Vérifié le</dt><dd>${esc(v.verifiedAt?.slice(0, 10) ?? '—')}</dd>
+      ${v.toConfirm.length ? `<dt>À confirmer</dt><dd>${esc(v.toConfirm.join(', '))}</dd>` : ''}
+    </dl>`;
+};
+
+const exclusionsHtml = (report: ClientReport): string => {
+  const ex = report.exclusions ?? [];
+  if (ex.length === 0) return '';
+  const parCategorie = new Map<string, number>();
+  for (const e of ex) parCategorie.set(e.categoryLabel, (parCategorie.get(e.categoryLabel) ?? 0) + 1);
+  return `
+  <h2>Entreprises écartées</h2>
+  <p class="lead">${ex.length} société(s) ou page(s) examinée(s) puis écartée(s) : ${[...parCategorie].map(([k, n]) => `${esc(k)} (${n})`).join(', ')}.</p>
+  <p class="absent">Le tri fait partie du travail : une liste courte est une liste où chaque absence a une raison.</p>
+  <table>
+    <thead><tr><th>Entreprise</th><th>Raison</th><th>Preuve</th></tr></thead>
+    <tbody>
+      ${ex.filter((e) => e.category !== 'DIRECTORY').map((e) => `<tr>
+        <td><strong>${esc(e.company)}</strong><div class="dim-why">${link(e.url)}</div></td>
+        <td>${esc(e.categoryLabel)}<div class="dim-why">${esc(e.reason)}</div></td>
+        <td>${e.quote ? `« ${esc(e.quote)} »<div class="dim-why">${link(e.quoteUrl)}</div>` : '<span class="absent">—</span>'}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  ${ex.some((e) => e.category === 'DIRECTORY') ? `<p class="absent">${ex.filter((e) => e.category === 'DIRECTORY').length} annuaire(s), réseau(x) social(aux) ou agrégateur(s) écarté(s) d’office : ce ne sont pas des entreprises à contacter.</p>` : ''}`;
+};
 
 const provenanceHtml = (report: ClientReport): string => {
   const p = report.provenance;
@@ -436,27 +529,125 @@ export function reportToCsv(report: ClientReport): string {
     return `"${guarded.replace(/"/g, '""')}"`;
   };
 
+  const criteres = report.criteriaLabels ?? [];
   const header = [
-    'rang', 'entreprise', 'site', 'localisation', 'secteurs', 'score_sur_100', 'confiance',
-    'ce_qui_est_etabli', 'ce_qui_n_est_pas_etabli', 'risques', 'recommandation',
+    'rang', 'entreprise', 'domaine', 'site', 'pays', 'localisation', 'activite', 'secteurs', 'score_sur_100', 'confiance',
+    'ce_qui_est_etabli',
+    ...criteres.map((c) => `critere_${c.key}`),
+    'ce_qui_n_est_pas_etabli', 'risques', 'recommandation',
     'nb_faits_sources', 'nb_deductions', 'sources',
-    'contact_nom', 'contact_role', 'contact_email', 'contact_telephone', 'contact_nominatif',
+    'contact_nom', 'contact_role', 'contact_email', 'contact_telephone', 'contact_formulaire', 'contact_nominatif',
+    'statut_verification', 'verifie_le',
+    'canal_retenu', 'canal_confiance', 'pourquoi_pertinente', 'risque_generaliste',
   ];
 
   const rows = report.prospects.map((p) => {
     const contact = p.contacts.find((c) => c.named) ?? p.contacts[0] ?? null;
+    const critere = (key: string) => {
+      const c = p.criteria?.find((x) => x.key === key);
+      if (!c) return '';
+      const preuve = c.quotes[0] ? ` — « ${c.quotes[0].quote} » (${c.quotes[0].url})` : c.note ? ` — ${c.note}` : '';
+      return `${c.verdictLabel}${preuve}`;
+    };
+    const pourquoi = p.criteria
+      ? p.criteria.filter((c) => c.verdict === 'ESTABLISHED').map((c) => `${c.label} : « ${c.quotes[0]?.quote ?? ''} »`).join(' || ')
+      : p.established.filter((k) => k.passed).map((k) => `${k.criterion}: ${k.detail}`).join(' || ');
+    const domaine = p.website ? p.website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] : '';
     return [
-      p.rank, p.company, p.website, p.location, p.sectors.join(' | '), p.score, p.confidence,
-      p.established.filter((k) => k.passed).map((k) => `${k.criterion}: ${k.detail}`).join(' || '),
-      p.notEstablished.join(' || '),
+      p.rank, p.company, domaine, p.website, p.verification?.country.value ?? '', p.location, p.activity ?? '',
+      p.sectors.join(' | '), p.score, p.confidence,
+      pourquoi,
+      ...criteres.map((c) => critere(c.key)),
+      p.verification?.toConfirm.join(' | ') ?? p.notEstablished.join(' || '),
       p.risks.join(' || '), p.recommendation,
       p.facts.length, p.inferences.length,
       [...new Set(p.facts.map((f) => f.sourceRef).filter(Boolean))].join(' | '),
       contact?.name ?? null, contact?.role ?? null, contact?.email ?? null, contact?.phone ?? null,
+      p.contactForm ?? '',
       contact ? (contact.named ? 'oui' : 'non') : '',
+      p.verification?.statusLabel ?? '', p.verification?.verifiedAt?.slice(0, 10) ?? '',
+      p.channel && p.channel.method !== 'NONE' ? `${p.channel.method}: ${p.channel.value ?? ''}` : '',
+      p.channel ? (CHANNEL_CONFIDENCE_LABELS[p.channel.confidence] ?? p.channel.confidence) : '',
+      p.synthesis?.why.join(' || ') ?? '',
+      p.generalistRisk?.score ?? '',
     ].map(cell).join(',');
   });
 
   // BOM : sans lui, Excel lit l'UTF-8 en ANSI et rend « München » en « MÃ¼nchen ».
   return `﻿${[header.map(cell).join(','), ...rows].join('\r\n')}\r\n`;
+}
+
+/** La feuille des écartées : une ligne par société, la raison, la preuve. */
+export function exclusionsToCsv(report: ClientReport): string {
+  const cell = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    return `"${guarded.replace(/"/g, '""')}"`;
+  };
+  const header = ['entreprise', 'domaine', 'site', 'categorie', 'raison', 'preuve', 'source_preuve', 'lot'];
+  const rows = (report.exclusions ?? []).map((e) =>
+    [e.company, e.domain, e.url, e.categoryLabel, e.reason, e.quote ?? '', e.quoteUrl ?? '', e.batch].map(cell).join(','));
+  return `﻿${[header.map(cell).join(','), ...rows].join('\r\n')}\r\n`;
+}
+
+
+// ─── La file de revue : trancher vite, sans relire le site ──────────────────
+
+/**
+ * Une page pour le fondateur, pas pour le client : les sociétés à revoir,
+ * P1 en tête, chacune avec sa raison exacte, deux à cinq preuves, le canal,
+ * la recommandation et les deux commandes qui l'appliquent. Cinquante
+ * candidats doivent se trancher en moins d'une heure — c'est le but.
+ */
+export function reviewQueueToHtml(items: readonly ReviewQueueItem[], context: { runId: string; clientName: string; generatedAt: string }): string {
+  const parPriorite = (p: ReviewQueueItem['priority']) => items.filter((i) => i.priority === p);
+  const badge = (p: ReviewQueueItem['priority']) => `<span class="${p === 'P1' ? 'badge-named' : p === 'P2' ? 'badge-generic' : 'badge-warn'}">${p}</span>`;
+  const bloc = (i: ReviewQueueItem, n: number) => `
+  <article class="prospect">
+    <header>
+      <div class="rank">${n}</div>
+      <div class="ident">
+        <h3>${badge(i.priority)} ${esc(i.company)}</h3>
+        <div class="sub">${link(i.url)}${i.country ? ` · ${esc(i.country)}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}</div>
+      </div>
+      <div class="score"><div class="v">${i.score}<span>/100</span></div><div class="c">confiance ${i.confidence.toFixed(2)}</div></div>
+    </header>
+    <h4>Pourquoi en revue</h4>
+    <ul class="claims">${i.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+    ${i.problematicCriteria.length ? `<p><strong>Critères en question :</strong> ${esc(i.problematicCriteria.join(' · '))}</p>` : ''}
+    ${i.evidence.length ? `<h4>Ce que les pages disent</h4><ul class="claims">${i.evidence.map((e) => `<li><strong>${esc(e.label)}</strong> — « ${esc(e.quote)} » <span class="dim-why">${link(e.url)}</span></li>`).join('')}</ul>` : '<p class="absent">Aucun passage relu.</p>'}
+    <p><strong>Contact :</strong> ${esc(i.contact)}</p>
+    <div class="reco"><strong>Recommandation : ${esc(i.recommendationLabel)}.</strong>
+      <div class="dim-why">RETAIN : <code>${esc(i.commands.retain)}</code></div>
+      <div class="dim-why">EXCLUDE : <code>${esc(i.commands.exclude)}</code></div>
+      <div class="dim-why">TO_CONFIRM : laisser telle quelle — la fiche reste marquée « à revoir » dans le rapport.</div>
+    </div>
+  </article>`;
+  let n = 0;
+  const body = `
+<div class="wrap">
+  <h2>File de revue — ${esc(context.clientName)}</h2>
+  <p class="lead">${items.length} société(s) à trancher : ${parPriorite('P1').length} P1 (probablement à retenir), ${parPriorite('P2').length} P2 (ambiguës), ${parPriorite('P3').length} P3 (probablement à écarter). Mission ${esc(context.runId)} · ${esc(context.generatedAt.slice(0, 16).replace('T', ' '))}.</p>
+  <p class="absent">Document interne. Chaque décision s’applique par une commande ; le rapport client se régénère ensuite.</p>
+  ${(['P1', 'P2', 'P3'] as const).map((p) => parPriorite(p).length ? `<h2>${p} — ${p === 'P1' ? 'probablement à retenir' : p === 'P2' ? 'ambiguës' : 'probablement à écarter'}</h2>${parPriorite(p).map((i) => bloc(i, ++n)).join('\n')}` : '').join('\n')}
+</div>`;
+  return shell(`File de revue — ${context.clientName}`, body);
+}
+
+export function reviewQueueToCsv(items: readonly ReviewQueueItem[]): string {
+  const cell = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    return `"${guarded.replace(/"/g, '""')}"`;
+  };
+  const header = ['priorite', 'entreprise', 'domaine', 'site', 'score', 'confiance', 'pays', 'raisons', 'criteres_en_question', 'preuves', 'contact', 'risque_generaliste', 'recommandation', 'commande_retenir', 'commande_ecarter'];
+  const rows = items.map((i) => [
+    i.priority, i.company, i.domain, i.url, i.score, i.confidence, i.country ?? '',
+    i.reasons.join(' || '), i.problematicCriteria.join(' | '),
+    i.evidence.map((e) => `${e.label} : « ${e.quote} » (${e.url})`).join(' || '),
+    i.contact, i.generalistRisk ?? '', RECOMMENDATION_LABELS[i.recommendation], i.commands.retain, i.commands.exclude,
+  ].map(cell).join(','));
+  return [header.join(','), ...rows].join('\n');
 }

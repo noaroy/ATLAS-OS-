@@ -124,7 +124,7 @@ export function AgentsView() {
 
                   <div className="mt-3 space-y-2">
                     <div>
-                      <div className="mb-1 flex items-center justify-between text-[0.68rem] text-[--color-faint]">
+                      <div className="mb-1 flex items-center justify-between text-[0.6875rem] text-[--color-faint]">
                         <span>Taux de réussite</span>
                         <span>{agent.metrics.successRate}%</span>
                       </div>
@@ -134,7 +134,7 @@ export function AgentsView() {
                       />
                     </div>
 
-                    <dl className="grid grid-cols-3 gap-2 text-center text-[0.68rem]">
+                    <dl className="grid grid-cols-3 gap-2 text-center text-[0.6875rem]">
                       <div>
                         <dt className="text-[--color-faint]">Étapes</dt>
                         <dd className="font-display text-sm text-[--color-ink]">{agent.metrics.tasksTotal}</dd>
@@ -219,7 +219,7 @@ export function AgentsView() {
                         )}
                       </div>
 
-                      <div className="text-[0.68rem] text-[--color-faint]">
+                      <div className="text-[0.6875rem] text-[--color-faint]">
                         Home: {agent.building} · Tokens used: {formatNumber(agent.metrics.tokensUsed)} ·{' '}
                         Étapes max : {agent.maxSteps}
                       </div>

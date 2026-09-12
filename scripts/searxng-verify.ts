@@ -20,9 +20,15 @@
  * Une seule requête réelle est envoyée aux moteurs, à l'étape 4. Les étapes 6
  * et 7 sont conçues pour ne jamais aboutir : elles ne coûtent rien à personne.
  */
+import { loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createLogger } from '../packages/core/src/logger.ts';
 import { SearxngSearchProvider } from '../packages/intelligence/src/search/searxng.ts';
 import { assessSuitability } from '../packages/intelligence/src/search/capabilities.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const c = {
   reset: '\x1b[0m',

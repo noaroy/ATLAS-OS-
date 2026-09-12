@@ -170,7 +170,7 @@ export function MissionDetailView() {
             déduit par le lecteur.
           */}
           <Meta label="Coût réel" value={formatUsd(economics.estimatedCostUsd)}>
-            <div className="mt-1 text-[0.62rem] uppercase tracking-[0.12em]">
+            <div className="mt-1 text-[0.6875rem] uppercase tracking-[0.12em]">
               {detail.mode === 'simulation' ? (
                 <span className="text-amber-300">Simulation · aucune dépense</span>
               ) : economics.measured ? (
@@ -363,7 +363,7 @@ export function MissionDetailView() {
                       </span>
                     </div>
                     <div className="mt-1 line-clamp-2 text-xs text-[--color-muted]">{message.objective}</div>
-                    <div className="mt-0.5 text-[0.68rem] text-[--color-faint]">
+                    <div className="mt-0.5 text-[0.6875rem] text-[--color-faint]">
                       {relativeTime(message.createdAt)}
                     </div>
                   </li>
@@ -380,11 +380,11 @@ export function MissionDetailView() {
                 {events.map((event) => (
                   <li key={event.id} className="px-4 py-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-[0.68rem] text-[--color-faint]">{event.type}</span>
+                      <span className="font-mono text-[0.6875rem] text-[--color-faint]">{event.type}</span>
                       <SeverityChip severity={event.severity} />
                     </div>
                     <div className="mt-1 text-xs text-[--color-muted]">{event.message}</div>
-                    <div className="mt-0.5 text-[0.68rem] text-[--color-faint]">
+                    <div className="mt-0.5 text-[0.6875rem] text-[--color-faint]">
                       {relativeTime(event.createdAt)}
                     </div>
                   </li>

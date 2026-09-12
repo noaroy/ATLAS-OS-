@@ -68,6 +68,14 @@ export interface ReportProspect {
   facts: ReportClaim[];
   inferences: ReportClaim[];
   contacts: ReportContact[];
+  /** Présents pour une mission client ; absents sur les rapports historiques. */
+  criteria?: ReportCriterion[];
+  contactForm?: string | null;
+  verification?: ReportVerification;
+  activity?: string | null;
+  channel?: ReportChannel | null;
+  synthesis?: ReportSynthesis;
+  generalistRisk?: { score: number; signals: string[] } | null;
 }
 
 export interface ReportDimension {
@@ -107,6 +115,154 @@ export interface ReportContact {
   named: boolean;
 }
 
+/**
+ * Un critère du brief, tel que le client le lira : sa question, le verdict,
+ * et les mots exacts qui le fondent. « À confirmer » est un verdict entier,
+ * pas un demi-oui.
+ */
+export interface ReportCriterion {
+  key: string;
+  label: string;
+  kind: 'required' | 'preferred' | 'exclusion';
+  verdict: 'ESTABLISHED' | 'NOT_ESTABLISHED' | 'TO_CONFIRM' | 'EXCLUDED';
+  verdictLabel: string;
+  note: string;
+  quotes: Array<{ quote: string; url: string }>;
+}
+
+/** Ce que la mission a vérifié sur cette fiche, et quand. */
+export interface ReportVerification {
+  status: 'VERIFIED' | 'REVIEW_REQUIRED';
+  statusLabel: string;
+  verifiedAt: string | null;
+  toConfirm: string[];
+  country: { value: string | null; basis: string; quote: string | null; url: string | null };
+}
+
+/** Une société écartée, avec la raison et sa preuve : le client voit le tri, pas seulement le résultat. */
+export interface ReportExclusion {
+  company: string;
+  domain: string;
+  url: string;
+  category: string;
+  categoryLabel: string;
+  reason: string;
+  quote: string | null;
+  quoteUrl: string | null;
+  batch: number;
+}
+
+export const EXCLUSION_LABELS: Record<string, string> = {
+  TOO_GENERAL: 'Trop généraliste',
+  WRONG_COUNTRY: 'Hors du pays visé',
+  COMPETITOR: 'Distribue une marque concurrente',
+  LOW_RELEVANCE: 'Critère requis non rempli',
+  DIRECTORY: 'Annuaire, réseau social ou agrégateur',
+  DUPLICATE: 'Doublon',
+  INSUFFICIENT_EVIDENCE: 'Pages sans matière exploitable',
+  EXCLUSION_CRITERION: 'Critère d’exclusion établi',
+  CLIENT_EXCLUDED: 'Écartée à votre demande',
+};
+
+export const CRITERION_VERDICT_LABELS: Record<ReportCriterion['verdict'], string> = {
+  ESTABLISHED: 'Établi',
+  NOT_ESTABLISHED: 'Non établi',
+  TO_CONFIRM: 'À confirmer',
+  EXCLUDED: 'Exclu',
+};
+
+/** Ce que le pipeline client ajoute à une fiche, au-delà du modèle historique. */
+export interface ProspectExtras {
+  criteria: ReportCriterion[];
+  contactForm: string | null;
+  verification: ReportVerification;
+  activity: string | null;
+  /** Le canal retenu par le pipeline, avec sa confiance et sa raison. */
+  channel?: ReportChannel | null;
+  generalistRisk?: { score: number; signals: string[] } | null;
+}
+
+export interface ReportChannel {
+  method: 'EMAIL' | 'FORM' | 'PHONE' | 'NONE';
+  value: string | null;
+  sourceUrl: string | null;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
+  confidenceLabel: string;
+  why: string;
+}
+
+/**
+ * La fiche en six lignes, écrite par le code à partir des preuves relues :
+ * pourquoi cette société, ce qui est établi, ce qui reste à confirmer, le
+ * contact, les sources. Rien n'y est formulé par un modèle — chaque ligne
+ * « pourquoi » est un critère du client et la phrase de la page qui le fonde.
+ */
+export interface ReportSynthesis {
+  company: string;
+  why: string[];
+  established: string[];
+  toConfirm: string[];
+  contact: string;
+  sources: string[];
+}
+
+export const CHANNEL_CONFIDENCE_LABELS: Record<string, string> = {
+  HIGH: 'Canal commercial identifié', MEDIUM: 'Canal général', LOW: 'Canal à vérifier', NONE: 'Aucun canal publié',
+};
+
+/**
+ * Une ligne de la file de revue : tout ce qu'il faut pour trancher en une
+ * minute, et rien d'autre. Classée P1 (probablement à retenir), P2 (ambigu),
+ * P3 (probablement à écarter).
+ */
+export interface ReviewQueueItem {
+  priority: 'P1' | 'P2' | 'P3';
+  company: string;
+  domain: string;
+  url: string;
+  score: number;
+  confidence: number;
+  reasons: string[];
+  evidence: Array<{ label: string; quote: string; url: string }>;
+  problematicCriteria: string[];
+  contact: string;
+  recommendation: 'RETAIN' | 'EXCLUDE' | 'TO_CONFIRM';
+  recommendationLabel: string;
+  generalistRisk: number | null;
+  country: string | null;
+  /** Les commandes qui appliquent la décision — copiables telles quelles. */
+  commands: { retain: string; exclude: string };
+}
+
+export const RECOMMENDATION_LABELS: Record<ReviewQueueItem['recommendation'], string> = {
+  RETAIN: 'Retenir', EXCLUDE: 'Écarter', TO_CONFIRM: 'À confirmer',
+};
+
+export function buildSynthesis(p: Pick<ReportProspect, 'company' | 'criteria' | 'verification' | 'activity' | 'contacts' | 'contactForm' | 'facts'> & { channel?: ReportChannel | null }): ReportSynthesis {
+  const etablis = (p.criteria ?? []).filter((c) => c.verdict === 'ESTABLISHED');
+  const why = etablis.map((c) => c.quotes[0] ? `${c.label} — « ${c.quotes[0].quote} »` : c.label);
+  if (p.verification?.country.value) {
+    why.push(`Basée en ${p.verification.country.value}${p.verification.country.quote ? ` — « ${p.verification.country.quote} »` : ''}`);
+  }
+  const canal = p.channel;
+  const contact = canal && canal.method !== 'NONE' && canal.value
+    ? `${canal.method === 'EMAIL' ? canal.value : canal.method === 'FORM' ? `formulaire ${canal.value}` : `téléphone ${canal.value}`} (${canal.why})`
+    : p.contactForm ? `formulaire ${p.contactForm}` : 'aucune coordonnée commerciale publiée';
+  const sources = [...new Set([
+    ...etablis.flatMap((c) => c.quotes.map((q) => q.url)),
+    ...(p.verification?.country.url ? [p.verification.country.url] : []),
+    ...(canal?.sourceUrl ? [canal.sourceUrl] : []),
+  ])];
+  return {
+    company: p.company,
+    why,
+    established: etablis.map((c) => c.label),
+    toConfirm: p.verification?.toConfirm ?? [],
+    contact,
+    sources,
+  };
+}
+
 export interface ClientReport {
   /** Ce que le client a demandé, dans ses termes. */
   clientName: string;
@@ -124,6 +280,11 @@ export interface ClientReport {
   scoringNarrative: string;
   provenance: ReportProvenance;
   economics: ReportEconomics | null;
+  /** PARTIAL : une première sélection, la mission continue. FINAL : la liste complète. */
+  status?: 'PARTIAL' | 'FINAL';
+  /** Les critères du brief, dans l'ordre, pour les en-têtes. */
+  criteriaLabels?: Array<{ key: string; label: string; kind: 'required' | 'preferred' | 'exclusion' }>;
+  exclusions?: ReportExclusion[];
 }
 
 export interface ReportSummary {
@@ -160,13 +321,19 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   'Market position': 'Position sur le marché',
 };
 
-export const fieldLabel = (field: string): string =>
-  FIELD_LABELS[field] ?? FIELD_LABELS[field.toLowerCase()] ?? capitalise(field.replace(/[_-]/g, ' '));
+export const fieldLabel = (field: string): string => {
+  // Les champs du pipeline client portent un préfixe : ils se lisent en français.
+  if (field.startsWith('criterion:')) return `Critère · ${capitalise(field.slice('criterion:'.length).replace(/[_-]/g, ' '))}`;
+  if (field.startsWith('competitor:')) return `Marque concurrente citée · ${field.slice('competitor:'.length)}`;
+  const connus: Record<string, string> = { country: 'Pays', activity: 'Activité', specialisation: 'Spécialisation' };
+  return connus[field] ?? FIELD_LABELS[field] ?? FIELD_LABELS[field.toLowerCase()] ?? capitalise(field.replace(/[_-]/g, ' '));
+};
 
 const NATURE_LABELS: Readonly<Record<ReportClaim['nature'], string>> = {
   observed: 'Constaté sur la source',
   reported: 'Rapporté par la source',
-  inferred: 'Déduit par ATLAS',
+  // Un client lit un document, pas le nom d'un outil : la déduction est nommée par sa nature.
+  inferred: 'Déduit des pages lues',
 };
 
 /**
@@ -229,6 +396,8 @@ export interface ReportEntry {
   checkTranslations?: Record<string, { criterion: string; detail: string }>;
   /** Traductions des justifications de notation, par « entreprise|dimension ». */
   rationaleTranslations?: Record<string, string>;
+  /** Ce que le pipeline client a relevé en plus : critères, formulaire, vérification. */
+  extras?: ProspectExtras;
 }
 
 /**
@@ -257,6 +426,9 @@ export function buildClientReport(input: {
    * de relecture, pas un calcul.
    */
   unverifiedPoints?: readonly string[];
+  status?: 'PARTIAL' | 'FINAL';
+  criteriaLabels?: Array<{ key: string; label: string; kind: 'required' | 'preferred' | 'exclusion' }>;
+  exclusions?: ReportExclusion[];
 }): ClientReport {
   const prospects: ReportProspect[] = [];
   const limitations: string[] = [];
@@ -344,7 +516,19 @@ export function buildClientReport(input: {
         phone: c.phone,
         named: isNamed(c),
       })),
+      ...(entry.extras
+        ? {
+            criteria: entry.extras.criteria,
+            contactForm: entry.extras.contactForm,
+            verification: entry.extras.verification,
+            activity: entry.extras.activity,
+            channel: entry.extras.channel ?? null,
+            generalistRisk: entry.extras.generalistRisk ?? null,
+          }
+        : {}),
     });
+    const derniere = prospects[prospects.length - 1]!;
+    if (entry.extras) derniere.synthesis = buildSynthesis(derniere);
   }
 
   const best = prospects[0];
@@ -373,6 +557,9 @@ export function buildClientReport(input: {
     scoringNarrative: input.scoringModel.narrative,
     provenance: input.provenance,
     economics: input.economics ?? null,
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.criteriaLabels ? { criteriaLabels: input.criteriaLabels } : {}),
+    ...(input.exclusions ? { exclusions: input.exclusions } : {}),
   };
 }
 

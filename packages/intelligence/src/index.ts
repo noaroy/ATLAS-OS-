@@ -52,6 +52,14 @@ export { toCsv, toPrintableHtml, type ExportInput, type ExportedFile } from './e
 export * from './discovery/index.ts';
 
 export * from './search/types.ts';
+export {
+  classifySearchReadiness,
+  probeSearchProviders,
+  isUsableProbe,
+  type SearchReadiness,
+  type SearchReadinessReport,
+  type ProviderProbe,
+} from './search/readiness.ts';
 export { BraveSearchProvider, type BraveOptions } from './search/brave.ts';
 export { SearxngSearchProvider, type SearxngOptions } from './search/searxng.ts';
 export { DuckDuckGoSearchProvider } from './search/duckduckgo.ts';
@@ -98,6 +106,10 @@ export {
   type MailQuery,
   type MailInboxProvider,
   type MailProviderStatus,
+  ACCEPTED_GMAIL_SCOPES,
+  scopesInExcess,
+  GMAIL_READONLY_SCOPE_URI,
+  GMAIL_SEND_SCOPE_URI,
   USEFUL_HEADERS,
 } from './mail/types.ts';
 export {
@@ -105,6 +117,26 @@ export {
   gmailCredentialsFromEnv,
   extractPlainText,
   GMAIL_READONLY_SCOPE,
+  MAX_MESSAGES_PER_SYNC,
   type GmailCredentials,
 } from './mail/gmail.ts';
+export {
+  buildGmailAuthorizeUrl,
+  validateAuthorizeUrl,
+  loopbackRedirectUri,
+  GOOGLE_AUTH_ENDPOINT,
+  type AuthorizeUrlInput,
+} from './mail/oauth-url.ts';
+export {
+  DryRunOutboundProvider,
+  GmailOutboundProvider,
+  OutboundNotAuthorisedError,
+  GMAIL_SEND_SCOPE,
+  encodeRfc822,
+  base64Url,
+  type GmailOutboundOptions,
+  type MailOutboundProvider,
+  type OutboundMessage,
+  type SendReceipt,
+} from './mail/outbound.ts';
 export { FixtureInboxProvider, mailMessage } from './mail/fixture.ts';

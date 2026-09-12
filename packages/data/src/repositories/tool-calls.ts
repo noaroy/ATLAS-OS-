@@ -193,10 +193,78 @@ export class ToolCallRepository {
    * la mission, pas sur une étape, sans quoi il suffirait de le répartir entre
    * les étapes pour le contourner.
    */
+  /**
+   * L'usage des outils sur tout le parc, pas seulement sur une mission.
+   *
+   * Le cockpit lit ici ce que la recherche a reellement coute en appels et en
+   * temps. Les compteurs vivants d'un moteur appartiennent au processus qui l'a
+   * cree ; cette table, elle, survit au processus — c'est la seule mesure qui
+   * vaille encore apres un redemarrage.
+   */
+  usageSince(iso: string): ToolUsageWindow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT tool,
+                category,
+                COUNT(*)                                  AS calls,
+                SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)   AS failures,
+                SUM(CASE WHEN external = 1 THEN 1 ELSE 0 END) AS external,
+                COALESCE(AVG(duration_ms), 0)             AS avg_ms,
+                MAX(created_at)                           AS last_at
+           FROM tool_calls
+          WHERE created_at >= ?
+          GROUP BY tool, category
+          ORDER BY calls DESC`,
+      )
+      .all(iso) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      tool: row.tool as string,
+      category: (row.category as string | null) ?? null,
+      calls: Number(row.calls),
+      failures: Number(row.failures ?? 0),
+      external: Number(row.external ?? 0),
+      avgDurationMs: Math.round(Number(row.avg_ms ?? 0)),
+      lastAt: (row.last_at as string | null) ?? null,
+    }));
+  }
+
+  /** Les derniers echecs, avec leur motif — un compteur seul ne se diagnostique pas. */
+  failuresSince(iso: string, limit = 10): Array<{
+    tool: string; error: string | null; at: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT tool, error, created_at
+           FROM tool_calls
+          WHERE created_at >= ? AND ok = 0
+          ORDER BY created_at DESC
+          LIMIT ?`,
+      )
+      .all(iso, limit) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      tool: row.tool as string,
+      error: (row.error as string | null) ?? null,
+      at: row.created_at as string,
+    }));
+  }
+
   countTool(missionId: MissionId, tool: string): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS n FROM tool_calls WHERE mission_id = ? AND tool = ?')
       .get(missionId, tool) as { n: number } | undefined;
     return Number(row?.n ?? 0);
   }
+}
+
+/** L'usage d'un outil sur une fenetre de temps, tous processus confondus. */
+export interface ToolUsageWindow {
+  tool: string;
+  category: string | null;
+  calls: number;
+  failures: number;
+  external: number;
+  avgDurationMs: number;
+  lastAt: string | null;
 }

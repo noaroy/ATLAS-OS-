@@ -9,7 +9,7 @@
  * dépouille les pieds de page pour alléger le contexte du modèle. Ici c'est
  * précisément là que l'adresse se trouve le plus souvent.
  */
-import { withDeadline, describeError, createLogger } from '../packages/core/src/index.ts';
+import { withDeadline, describeError, createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
   resolveContacts,
@@ -17,6 +17,11 @@ import {
   contactLinksIn,
   type ContactPage,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const batchId = process.argv[2];
 const only = process.argv.slice(3).filter((a) => !a.startsWith('--'));

@@ -6,8 +6,14 @@
  * s'affiche NONE, jamais reconstruit. Une adresse inventée se repère en dix
  * secondes et disqualifie tout le reste de la fiche.
  */
+import { loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createLogger } from '../packages/core/src/logger.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const batchId = process.argv[2];
 if (!batchId) throw new Error('usage: founder-pack <batch-id> [domaine…]');

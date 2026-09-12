@@ -30,6 +30,12 @@ import { isSecureRequest, requireFounder, requireOperator, tokenFrom } from './a
 import { appendSetCookie, clearSessionCookie, serializeSessionCookie } from './cookies.ts';
 import { guardLogin, type Limiters } from './limits.ts';
 import { UserRepository } from '@atlas/data';
+import { buildAtlasOverview } from './atlas-overview.ts';
+import {
+  buildWarRoom, buildProspecting, buildCompanies, buildCompanyDetail, buildApprovals,
+  buildAgents, buildOrganization, buildAiFabric, buildCosts, buildInbox, buildSystemHealth,
+  buildSearchFabric, buildMultiModelTrace, buildOutreach, buildFollowUps, buildAnalytics,
+} from './command-center.ts';
 
 /**
  * The complete REST surface.
@@ -100,6 +106,69 @@ export function registerRoutes(app: FastifyInstance, system: AtlasSystem, limite
   });
 
   app.get('/api/stats', async (_request, reply) => sendOk(reply, buildDashboardStats(repos)));
+
+  // L'écran de gestion : une seule requête, pour que les chiffres racontent
+  // tous la même histoire au même instant.
+  app.get('/api/atlas/overview', async (_request, reply) =>
+    sendOk(reply, buildAtlasOverview(repos, system.config)));
+
+  // ─── Centre de commande ─────────────────────────────────────────────────
+  //
+  // Une route par écran, chacune agrégeant les dépôts existants. Aucune ne
+  // stocke, aucune ne décide : elles lisent. Les mutations passent par les
+  // routes métier déjà en place, qui portent leurs propres gardes — un écran
+  // qui pourrait contourner une approbation n'aurait plus rien d'un écran.
+  app.get('/api/cc/war-room', async (_request, reply) =>
+    sendOk(reply, buildWarRoom(repos, system.config)));
+
+  app.get('/api/cc/prospecting', async (_request, reply) =>
+    sendOk(reply, buildProspecting(repos, system.config)));
+
+  app.get('/api/cc/companies', async (_request, reply) =>
+    sendOk(reply, buildCompanies(repos, system.config)));
+
+  app.get('/api/cc/companies/:domain', async (request, reply) => {
+    const { domain } = request.params as { domain: string };
+    const detail = buildCompanyDetail(repos, domain);
+    if (!detail) throw notFound(`aucune entreprise « ${domain} » au registre`);
+    return sendOk(reply, detail);
+  });
+
+  app.get('/api/cc/approvals', async (_request, reply) =>
+    sendOk(reply, buildApprovals(repos)));
+
+  app.get('/api/cc/agents', async (_request, reply) =>
+    sendOk(reply, buildAgents(repos, system.config)));
+
+  app.get('/api/cc/organization', async (_request, reply) =>
+    sendOk(reply, buildOrganization(repos)));
+
+  app.get('/api/cc/ai-fabric', async (_request, reply) =>
+    sendOk(reply, buildAiFabric(repos, system.config)));
+
+  app.get('/api/cc/costs', async (_request, reply) =>
+    sendOk(reply, buildCosts(repos, system.config)));
+
+  app.get('/api/cc/inbox', async (_request, reply) =>
+    sendOk(reply, buildInbox(repos)));
+
+  app.get('/api/cc/system', async (_request, reply) =>
+    sendOk(reply, await buildSystemHealth(repos, system.config, system.logger)));
+
+  app.get('/api/cc/search-fabric', async (_request, reply) =>
+    sendOk(reply, buildSearchFabric(repos, system.config, system.searchFabric)));
+
+  app.get('/api/cc/multi-model', async (_request, reply) =>
+    sendOk(reply, buildMultiModelTrace(repos)));
+
+  app.get('/api/cc/outreach', async (_request, reply) =>
+    sendOk(reply, buildOutreach(repos, system.config)));
+
+  app.get('/api/cc/follow-ups', async (_request, reply) =>
+    sendOk(reply, buildFollowUps(repos, system.config)));
+
+  app.get('/api/cc/analytics', async (_request, reply) =>
+    sendOk(reply, buildAnalytics(repos, system.config)));
 
   app.get('/api/resources', async (_request, reply) => sendOk(reply, repos.ops.recentSamples(120)));
 

@@ -31,6 +31,16 @@ export interface MailMessage {
    * coûte à transporter et à lire.
    */
   headers: Record<string, string>;
+  /**
+   * Les étiquettes du fournisseur, quand il en expose.
+   *
+   * `SENT` y est la preuve la plus directe qu'un message vient de notre propre
+   * boîte : Gmail la pose lui-même, et elle ne dépend ni du formatage de
+   * l'en-tête `From` ni d'un alias. On la lit en plus de l'adresse, jamais à sa
+   * place — un fournisseur qui n'étiquette pas ne doit pas rendre la garde
+   * inopérante.
+   */
+  labels: readonly string[];
 }
 
 export interface MailQuery {
@@ -40,6 +50,17 @@ export interface MailQuery {
   max?: number;
   /** Filtre propre au fournisseur, quand il en accepte un. */
   rawFilter?: string;
+  /**
+   * Remonter aussi nos propres messages.
+   *
+   * Faux par défaut : la synchronisation commerciale n'a rien à faire de ce que
+   * nous avons écrit, et les rapatrier pour les jeter ensuite coûterait un appel
+   * par message. Vrai pour un audit — vérifier qu'un envoi a bien eu lieu
+   * suppose de pouvoir le lire. La garde de direction reste appliquée en aval
+   * dans tous les cas : ce drapeau change ce qu'on rapatrie, jamais ce qu'on
+   * accepte de classer comme réponse.
+   */
+  includeOwnMessages?: boolean;
 }
 
 /**
@@ -80,3 +101,29 @@ export const USEFUL_HEADERS = [
   'x-failed-recipients',
   'delivered-to',
 ] as const;
+
+/**
+ * Les portées Gmail qu'ATLAS accepte de détenir, et rien d'autre.
+ *
+ * Lire pour rattacher les réponses aux entreprises, envoyer pour répondre après
+ * approbation humaine. Ce qui reste dehors donnerait sur la boîte entière un
+ * pouvoir qu'aucune fonction n'emploie : `gmail.modify` étiquette et supprime,
+ * `gmail.compose` accède aux brouillons, `mail.google.com` fait tout.
+ *
+ * Déclarées ici, à un seul endroit, parce que les avoir écrites en trois
+ * exemplaires a coûté une panne : la lecture, l'envoi et l'écran de contrôle
+ * jugeaient chacun de leur côté, et le jour où l'envoi a été accordé, la lecture
+ * a refusé le nouveau jeton pendant que l'envoi continuait de se croire
+ * interdit. Trois copies d'une règle finissent par ne plus dire la même chose.
+ */
+export const GMAIL_READONLY_SCOPE_URI = 'https://www.googleapis.com/auth/gmail.readonly';
+export const GMAIL_SEND_SCOPE_URI = 'https://www.googleapis.com/auth/gmail.send';
+
+export const ACCEPTED_GMAIL_SCOPES: readonly string[] = [
+  GMAIL_READONLY_SCOPE_URI,
+  GMAIL_SEND_SCOPE_URI,
+];
+
+/** Ce qui, dans un jeton, dépasse ce qu'ATLAS accepte de détenir. */
+export const scopesInExcess = (granted: readonly string[]): string[] =>
+  granted.filter((scope) => !ACCEPTED_GMAIL_SCOPES.includes(scope));

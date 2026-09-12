@@ -97,6 +97,29 @@ export class EventRepository {
     ).map(toEvent);
   }
 
+  /**
+   * Ce qui a ete ecrit depuis un instant donne, du plus ancien au plus recent.
+   *
+   * Le bus d'evenements vit en memoire : un lot de prospection lance en ligne
+   * de commande est un autre processus, et ses evenements n'atteignent jamais
+   * le navigateur. Ils atteignent en revanche cette table. La lire permet au
+   * temps reel de couvrir tout ATLAS, et pas seulement ce que le serveur fait
+   * lui-meme — sans second canal ni second socket.
+   *
+   * L'ordre est croissant, contrairement a `list` : un flux se rejoue dans le
+   * sens ou il s'est produit.
+   */
+  since(iso: string, limit = 100): SystemEvent[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM events WHERE created_at > @since
+            ORDER BY created_at ASC, id ASC LIMIT @limit`,
+        )
+        .all({ since: iso, limit }) as EventRow[]
+    ).map(toEvent);
+  }
+
   forMission(missionId: string, limit = 200): SystemEvent[] {
     return this.list({ missionId, limit });
   }

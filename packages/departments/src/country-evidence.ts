@@ -30,6 +30,8 @@
  */
 
 /** Ce que les sources permettent de conclure, et sur quoi. */
+import { swedishPostalAddresses } from './nordic-address.ts';
+
 export interface CountryVerdict {
   /** Le pays, en français, ou `null` — jamais deviné. */
   country: string | null;
@@ -80,6 +82,30 @@ const IDENTIFIANTS: ReadonlyArray<{ pays: string; motif: RegExp; label: string }
   { pays: 'Belgique', motif: /\bTVA\s*[:.]?\s*BE\s*0?[0-9]{9,10}\b/i, label: 'TVA belge' },
   { pays: 'Suisse', motif: /\bCHE[-\s]?[0-9]{3}[.\s]?[0-9]{3}[.\s]?[0-9]{3}\b/i, label: 'IDE suisse' },
   { pays: 'Luxembourg', motif: /\bTVA\s*[:.]?\s*LU\s*[0-9]{8}\b/i, label: 'TVA luxembourgeoise' },
+  /*
+   * Suède. L'organisationsnummer s'écrit en dix chiffres coupés d'un tiret
+   * (556123-4567). Dix chiffres et un tiret ne prouvent rien seuls — un numéro
+   * de téléphone suédois a la même forme — donc le mot-clé est exigé, sous ses
+   * graphies réelles : « Organisationsnummer », « Org.nr », « Org nr »,
+   * « Orgnr ».
+   *
+   * Le numéro de TVA, lui, se suffit : « SE » suivi de dix chiffres puis
+   * « 01 », douze chiffres au total. Aucune autre suite courante n'a cette
+   * forme.
+   */
+  {
+    pays: 'Suède',
+    motif: /\b(?:organisationsnummer|organisationsnr|org\.?\s?nr\.?|orgnr)\b[^0-9]{0,24}([0-9]{6}-[0-9]{4})\b/i,
+    label: 'Organisationsnummer',
+  },
+  { pays: 'Suède', motif: /\bSE\s?[0-9]{10}\s?01\b/, label: 'TVA suédoise' },
+  /*
+   * Allemagne : l'USt-IdNr, avec son mot-clé. « DE » suivi de neuf chiffres
+   * seul ressemble trop à une référence produit pour conclure. Sur un marché
+   * nordique, l'intrus le plus fréquent est allemand ; le nommer permet de
+   * l'écarter avec sa preuve au lieu de le laisser en attente.
+   */
+  { pays: 'Allemagne', motif: /\bUSt[-.\s]?Id(?:\.?\s?Nr)?\.?[^0-9]{0,30}DE\s?[0-9]{9}\b/i, label: 'USt-IdNr' },
 ];
 
 /**
@@ -104,6 +130,10 @@ const PAYS: ReadonlyArray<{ nom: string; formes: string[] }> = [
   { nom: 'États-Unis', formes: ['états-unis', 'etats-unis', 'united states', 'u.s.a.', 'usa'] },
   { nom: 'Pologne', formes: ['pologne', 'poland', 'polska'] },
   { nom: 'Suède', formes: ['suède', 'suede', 'sweden', 'sverige'] },
+  // Les voisins d'un marché suédois : nommés pour être reconnus, jamais confondus.
+  { nom: 'Norvège', formes: ['norvège', 'norvege', 'norway', 'norge'] },
+  { nom: 'Danemark', formes: ['danemark', 'denmark', 'danmark'] },
+  { nom: 'Finlande', formes: ['finlande', 'finland', 'suomi'] },
   { nom: 'Turquie', formes: ['turquie', 'turkey', 'türkiye'] },
   { nom: 'Portugal', formes: ['portugal'] },
   { nom: 'Autriche', formes: ['autriche', 'austria', 'österreich'] },
@@ -220,6 +250,27 @@ function paysDeclare(html: string): { pays: string; extrait: string } | null {
  * sans rien dire du siège. Seules les fenêtres autour d'un marqueur d'adresse
  * sont lues, et une fenêtre qui nomme deux pays ne conclut pas.
  */
+/** Le texte, débarrassé des sections qui décrivent quelqu'un d'autre. */
+function horsSectionsTierces(texte: string): string {
+  const plat = aplatir(texte);
+  let out = texte;
+  for (const marqueur of SECTIONS_TIERCES) {
+    let depuis = 0;
+    for (;;) {
+      const debut = plat.indexOf(aplatir(marqueur), depuis);
+      if (debut === -1) break;
+      depuis = debut + 1;
+      const fins = RETOUR_EDITEUR
+        .map((m) => plat.indexOf(aplatir(m), debut + marqueur.length))
+        .filter((x) => x !== -1);
+      const fin = fins.length > 0 ? Math.min(...fins) : texte.length;
+      // Même longueur : les positions restent alignées avec `plat`.
+      out = out.slice(0, debut) + ' '.repeat(fin - debut) + out.slice(fin);
+    }
+  }
+  return out;
+}
+
 function paysDeLAdresse(texte: string): { pays: string; extrait: string } | null {
   const plat = aplatir(texte);
   const trouves = new Map<string, string>();
@@ -297,6 +348,13 @@ export function extractCountryEvidence(
 
     const adresse = paysDeLAdresse(texte);
     if (adresse) parAdresse.set(adresse.pays, { url: page.url, extrait: adresse.extrait });
+    /*
+     * L'adresse suédoise ne nomme pas son pays : « 142 50 Skogås » suffit à
+     * un facteur suédois. Reconnue à sa forme et à sa localité, hors des
+     * sections tierces (hébergeur, crédits), elle vaut une adresse publiée.
+     */
+    const suedoise = swedishPostalAddresses(horsSectionsTierces(texte))[0];
+    if (suedoise) parAdresse.set('Suède', { url: page.url, extrait: suedoise.extrait });
   }
 
   const rangs: Array<[CountryVerdict['basis'], Map<string, { url: string; extrait: string }>, string]> = [
@@ -378,13 +436,38 @@ const INDICATIFS: ReadonlyArray<{ pays: string; motif: RegExp }> = [
   { pays: 'Belgique', motif: /(?:^|[^0-9])\+32[\s.\-]?[1-9]/ },
   { pays: 'Suisse', motif: /(?:^|[^0-9])\+41[\s.\-]?[1-9]/ },
   { pays: 'Luxembourg', motif: /(?:^|[^0-9])\+352[\s.\-]?[0-9]/ },
+  // Corroboration seulement, comme les autres : un +46 seul ne conclut jamais.
+  { pays: 'Suède', motif: /(?:^|[^0-9])\+46[\s.\-]?[1-9]/ },
+  /*
+   * Les voisins, pour voir une contradiction. Kafeko Nordic déclare
+   * `addressCountry = SE` sur son site suédois et publie un +358 : sans le
+   * préfixe finlandais dans cette table, la contradiction n'existait pas, et
+   * la fiche sortait « Suède » sans réserve.
+   */
+  { pays: 'Finlande', motif: /(?:^|[^0-9])\+358[\s.\-]?[1-9]/ },
+  { pays: 'Norvège', motif: /(?:^|[^0-9])\+47[\s.\-]?[1-9]/ },
+  { pays: 'Danemark', motif: /(?:^|[^0-9])\+45[\s.\-]?[1-9]/ },
+  { pays: 'Allemagne', motif: /(?:^|[^0-9])\+49[\s.\-]?[1-9]/ },
+  // Les intrus fréquents d'un marché nordique, pour qu'une mention « China »
+  // ou « Deutschland » trouve son second signal : yanbanmachine.com est
+  // sorti « pays non prouvé » avec un +86 en pied de page.
+  { pays: 'Chine', motif: /(?:^|[^0-9])\+86[\s.\-]?[1-9]/ },
+  { pays: 'Royaume-Uni', motif: /(?:^|[^0-9])\+44[\s.\-]?[1-9]/ },
+  { pays: 'Pays-Bas', motif: /(?:^|[^0-9])\+31[\s.\-]?[1-9]/ },
+  { pays: 'Italie', motif: /(?:^|[^0-9])\+39[\s.\-]?[0-9]/ },
+  { pays: 'Espagne', motif: /(?:^|[^0-9])\+34[\s.\-]?[6-9]/ },
+  { pays: 'Pologne', motif: /(?:^|[^0-9])\+48[\s.\-]?[1-9]/ },
+  { pays: 'Autriche', motif: /(?:^|[^0-9])\+43[\s.\-]?[1-9]/ },
+  { pays: 'Turquie', motif: /(?:^|[^0-9])\+90[\s.\-]?[1-9]/ },
+  { pays: 'Inde', motif: /(?:^|[^0-9])\+91[\s.\-]?[1-9]/ },
 ];
 
 /** Les prefixes de TVA intracommunautaire. */
 const TVA: ReadonlyArray<{ pays: string; motif: RegExp }> = [
-  { pays: 'France', motif: /FR\s?[0-9A-Z]{2}\s?[0-9]{9}/ },
-  { pays: 'Belgique', motif: /BE\s?0?[0-9]{9,10}/ },
-  { pays: 'Luxembourg', motif: /LU\s?[0-9]{8}/ },
+  { pays: 'France', motif: /\bFR\s?[0-9A-Z]{2}\s?[0-9]{9}\b/ },
+  { pays: 'Belgique', motif: /\bBE\s?0?[0-9]{9,10}\b/ },
+  { pays: 'Luxembourg', motif: /\bLU\s?[0-9]{8}\b/ },
+  { pays: 'Suède', motif: /\bSE\s?[0-9]{10}\s?01\b/ },
 ];
 
 /**
@@ -413,7 +496,10 @@ export function collectCountrySignals(
   for (const page of pages) {
     const texte = texteDe(page.html);
     const chemin = page.url.toLowerCase();
-    const pageIdentite = /mentions|legal|contact|propos|qui-sommes|about/.test(chemin);
+    // « kontakt » et « om-oss » : les pages d'identité suédoises ne s'écrivent
+    // ni « contact » ni « à propos ». Sans elles, une mention « Sverige » sur
+    // la page de contact d'une société suédoise ne comptait pour rien.
+    const pageIdentite = /mentions|legal|contact|propos|qui-sommes|about|kontakt|om-oss|impressum|imprint/.test(chemin);
 
     for (const t of TVA) {
       const m = t.motif.exec(texte);

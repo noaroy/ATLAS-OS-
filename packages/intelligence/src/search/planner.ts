@@ -55,6 +55,19 @@ const MARKET_LANGUAGES: Record<string, { code: string; country: string }> = {
   pologne: { code: 'pl', country: 'PL' },
   'royaume-uni': { code: 'en', country: 'GB' },
   'états-unis': { code: 'en', country: 'US' },
+  /*
+   * La Suède, sous toutes les formes qu'un brief peut employer : le nom
+   * français, l'anglais, le nom local, le code ISO, le code de langue. Un
+   * marché absent d'ici part en anglais sans filtre pays — c'est ce qui serait
+   * arrivé à la première mission client, et ce qu'aucun test ne détectait.
+   */
+  suède: { code: 'sv', country: 'SE' },
+  suede: { code: 'sv', country: 'SE' },
+  sweden: { code: 'sv', country: 'SE' },
+  sverige: { code: 'sv', country: 'SE' },
+  se: { code: 'sv', country: 'SE' },
+  sv: { code: 'sv', country: 'SE' },
+  svenska: { code: 'sv', country: 'SE' },
 };
 
 /**
@@ -69,19 +82,22 @@ const ROLE_TERMS: Record<string, Record<string, string[]>> = {
     de: ['Händler', 'Vertriebspartner'],
     fr: ['distributeur', 'revendeur'],
     en: ['distributor', 'reseller'],
+    sv: ['distributör', 'återförsäljare'],
   },
   integrator: {
     de: ['Systemintegrator', 'Anlagenbau'],
     fr: ['intégrateur', 'ensemblier'],
     en: ['system integrator', 'systems integration'],
+    sv: ['systemintegratör', 'maskinleverantör'],
   },
-  supplier: { de: ['Zulieferer'], fr: ['fournisseur'], en: ['supplier'] },
-  oem: { de: ['OEM Partner'], fr: ['partenaire OEM'], en: ['OEM partner'] },
-  reseller: { de: ['Wiederverkäufer'], fr: ['revendeur'], en: ['reseller'] },
+  supplier: { de: ['Zulieferer'], fr: ['fournisseur'], en: ['supplier'], sv: ['leverantör'] },
+  oem: { de: ['OEM Partner'], fr: ['partenaire OEM'], en: ['OEM partner'], sv: ['OEM-partner'] },
+  reseller: { de: ['Wiederverkäufer'], fr: ['revendeur'], en: ['reseller'], sv: ['återförsäljare', 'återförsäljning'] },
   'commercial-partner': {
     de: ['Vertriebspartner'],
     fr: ['partenaire commercial'],
     en: ['sales partner'],
+    sv: ['agent', 'representant', 'försäljningspartner'],
   },
 };
 
@@ -98,9 +114,18 @@ export function planQueries(query: DiscoveryQuery, options: PlannerOptions): Pla
   const roles = query.targetTypes.map((t) => t.key);
   const planned: PlannedQuery[] = [];
 
-  // Les angles : d'abord les mots-clés fournis par le brief, puis les secteurs.
-  // Le brief est plus précis qu'une déduction, donc il passe en premier.
-  const angles = [...take(query.keywords, 2), ...take(query.industries, 2)];
+  /*
+   * Les angles : chaque mot-clé du brief seul, puis le premier mot-clé
+   * combiné à chaque secteur. Jamais un secteur seul : « distributör kosmetik
+   * Sverige » rend des boutiques de cosmétiques, « distributör läkemedel
+   * Sverige » des grossistes pharmaceutiques — dix-huit sociétés hors sujet
+   * sur cinquante, chacune lue et payée, sur le lot suédois réel. Le secteur
+   * précise le produit ; il ne le remplace pas.
+   */
+  const keywords = take(query.keywords, 3);
+  const angles = keywords.length > 0
+    ? [...keywords, ...take(query.industries, 2).map((industry) => `${keywords[0]} ${industry}`)]
+    : take(query.industries, 2);
   if (angles.length === 0) angles.push('');
 
   for (const role of roles) {
@@ -109,7 +134,7 @@ export function planQueries(query: DiscoveryQuery, options: PlannerOptions): Pla
 
       const terms = [
         ...roleTerms(role, market.language).slice(0, 1),
-        ...shortWords(angle, 2),
+        ...shortWords(angle, 3),
         market.label,
       ].filter(Boolean);
 
@@ -166,6 +191,7 @@ function marketFor(country: string | null): {
     PL: 'Polska',
     GB: 'United Kingdom',
     US: 'United States',
+    SE: 'Sverige',
   };
   return {
     language: known.code,

@@ -115,6 +115,13 @@ export const CONTACT_PATHS = [
   '/legals',
   '/impressum',
   '/kontakt',
+  // Suède : « kontakta oss » et « om oss » sont les deux pages qui publient
+  // l'adresse, l'organisationsnummer et le téléphone.
+  '/kontakta-oss',
+  '/kontakta-oss/',
+  '/om-oss',
+  '/om-oss/',
+  '/kontakt/',
 ] as const;
 
 /**
@@ -124,7 +131,7 @@ export const CONTACT_PATHS = [
  * article : la première est celle que l'entreprise donne, la seconde peut être
  * celle de n'importe qui.
  */
-const AUTHORITATIVE_PATH = /(contact|mention|legal|impressum|kontakt)/i;
+const AUTHORITATIVE_PATH = /(contact|mention|legal|impressum|kontakt|om[- ]oss)/i;
 
 /** Fournisseurs de messagerie grand public : acceptés, mais moins probants. */
 const FREEMAIL = [
@@ -161,8 +168,14 @@ const TEL_RE = /tel:([+0-9().\s-]{7,})/gi;
  * exiger l'un des deux coûte quelques faux négatifs et évite d'écrire un
  * numéro faux dans une fiche de contact.
  */
+/*
+ * Trois formes : la française à cinq paires (01 23 45 67 89), l'internationale
+ * compacte (+33612345678), et l'internationale groupée — « +46 31 123 45 67 »,
+ * « +46 (0)8-123 456 78 » — que la Suède et ses voisins écrivent ainsi et que
+ * les deux premières formes laissaient passer sans numéro.
+ */
 const PHONE_TEXT_RE =
-  /(?:\+\d{1,3}[\s.-]?(?:\(0\)[\s.-]?)?)?0?\d(?:[\s.-]\d{2}){4}|\+\d{1,3}[\s.-]?\d{6,12}/g;
+  /(?:\+\d{1,3}[\s.-]?(?:\(0\)[\s.-]?)?)?0?\d(?:[\s.-]\d{2}){4}|\+\d{1,3}[\s.-]?(?:\(0\)[\s.-]?)?\d{1,4}(?:[\s.-]\d{2,4}){2,4}|\+\d{1,3}[\s.-]?\d{6,12}/g;
 
 /**
  * Deux domaines désignent-ils la même maison ?

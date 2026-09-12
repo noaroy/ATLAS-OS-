@@ -28,3 +28,10 @@ graphify-out/
 # susceptibles de porter des données commerciales qui n'ont rien à faire dans
 # l'historique du dépôt.
 /out/
+# Les briefs clients réels : les critères et le périmètre d'un client sont
+# ses données commerciales, pas les nôtres. Seuls le brief de test interne et
+# les exemples anonymisés (*.example.json) sont versionnés ; le brief réel
+# reste sur la machine qui conduit la mission.
+/briefs/*.json
+!/briefs/internal-test-sweden.json
+!/briefs/*.example.json

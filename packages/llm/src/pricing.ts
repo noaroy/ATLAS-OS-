@@ -1,3 +1,5 @@
+import { loadPricingConfig, type PricingConfigResult } from './pricing-config.ts';
+
 /**
  * Ce qu'un appel coûte réellement.
  *
@@ -63,10 +65,39 @@ export const isSimulatedModel = (model: string): boolean => model.includes(SIMUL
 /** Tarif nul : chaque poste à zéro, plutôt qu'une absence de tarif. */
 const FREE_PRICING: ModelPricing = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+/**
+ * Les tarifs déclarés par le propriétaire, lus une fois.
+ *
+ * Relire le fichier à chaque appel coûterait un accès disque par estimation de
+ * budget. Le cache est vidable pour les tests et pour un rechargement explicite
+ * — jamais automatiquement : un tarif qui changerait en cours de chaîne rendrait
+ * incomparables le coût estimé avant l'appel et le coût constaté après.
+ */
+let configCache: PricingConfigResult | null = null;
+
+export function reloadPricingConfig(path?: string): PricingConfigResult {
+  configCache = loadPricingConfig(path);
+  return configCache;
+}
+
+export function currentPricingConfig(): PricingConfigResult {
+  configCache ??= loadPricingConfig();
+  return configCache;
+}
+
 /** Résout un tarif en tolérant les identifiants de modèle datés. */
 export function pricingFor(model: string): ModelPricing | null {
   // Avant toute résolution par préfixe : c'est elle qui confondait les deux.
   if (isSimulatedModel(model)) return FREE_PRICING;
+
+  // Le fichier du propriétaire prime sur la table livrée : il est daté et
+  // sourcé, alors que la table n'est qu'un instantané du jour de la livraison.
+  const declared = currentPricingConfig().entries;
+  const declaredExact = declared.get(model);
+  if (declaredExact) return declaredExact.pricing;
+  for (const [key, loaded] of declared) {
+    if (model.startsWith(key)) return loaded.pricing;
+  }
 
   const exact = MODEL_PRICING[model];
   if (exact) return exact;

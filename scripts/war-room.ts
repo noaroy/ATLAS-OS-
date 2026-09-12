@@ -11,7 +11,7 @@
  * notée qui coche ces trois cases.
  */
 import { writeFileSync } from 'node:fs';
-import { createLogger, canonicalDomainOf } from '../packages/core/src/index.ts';
+import { createLogger, canonicalDomainOf, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import { fetchRawPages } from '../packages/intelligence/src/contact-fetch.ts';
 import {
@@ -27,6 +27,11 @@ import {
   type ContactPage,
   type ObservedFact,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const c = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',

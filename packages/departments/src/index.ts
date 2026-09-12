@@ -83,13 +83,23 @@ export {
   type ReportSummary,
   type ReportEntry,
   type ReportCheck,
+  type ReportCriterion,
+  type ReportVerification,
+  type ReportExclusion,
+  type ProspectExtras,
+  EXCLUSION_LABELS,
+  CRITERION_VERDICT_LABELS,
+  buildSynthesis, CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS,
+  type ReportChannel, type ReportSynthesis, type ReviewQueueItem,
 } from './client-report.ts';
 
 export {
   reportToHtml,
   reportToCsv,
+  exclusionsToCsv,
   teaserToHtml,
   TEASER_FACT_LIMIT,
+  reviewQueueToHtml, reviewQueueToCsv,
 } from './client-report-render.ts';
 
 export {
@@ -191,6 +201,12 @@ export {
   buildOutreachDraft,
   pickPersonalizationFact,
   personalizationIsGrounded,
+  observationPhrase,
+  customerFacingObservation,
+  saysTheyAreLooking,
+  elide,
+  outreachFactFrom,
+  isCommercialEvidence,
   canTransitionProspect,
   requiresHumanApproval,
   trimSentence,
@@ -199,6 +215,8 @@ export {
   type OutreachContact,
   type OutreachOutcome,
   type OutreachRefusal,
+  type StoredEvidence,
+  type CustomerFacingObservation,
   type ProspectState as OutreachProspectState,
 } from './outreach.ts';
 
@@ -269,8 +287,11 @@ export {
   classifyInbound,
   extractReturnDate,
   deriveConversationState,
+  replyHistory,
+  type ReplyHistory,
   requiresHumanJudgement,
   HUMAN_ONLY_STATUSES,
+  detectOptOut,
   type InboundKind,
   type ReplyClassification,
   type ClassificationResult,
@@ -314,3 +335,210 @@ export {
   type GrowthSignal,
   type GrowthSignalKind,
 } from './growth-signals.ts';
+
+export {
+  canTransitionLoop,
+  nextActionFor,
+  TERMINAL_STATES,
+  HUMAN_ATTENTION_STATES,
+  type LoopState,
+  type TransitionCheck,
+} from './sales-loop.ts';
+
+export {
+  evaluateSendGate,
+  type BlockReason,
+  type SendCandidate,
+  type SendGateLimits,
+  type SendGateVerdict,
+} from './send-gate.ts';
+
+export {
+  shouldNotify,
+  recommendedActionFor,
+  summarise,
+  draftReplyFor,
+  type NotifyDecision,
+  type NotifyInput,
+  type Notification,
+} from './sales-notify.ts';
+
+export {
+  evaluateFollowUp,
+  addBusinessDays,
+  MAX_FOLLOW_UPS_PER_COMPANY,
+  MIN_FOLLOW_UP_BUSINESS_DAYS,
+  type FollowUpVerdict,
+  type FollowUpInput,
+  type FollowUpDecision,
+} from './follow-up.ts';
+export * from './message-direction.ts';
+
+export {
+  collectSourcedFacts,
+  enrichmentPagesFor,
+  enrichmentLinksIn,
+  ENRICHMENT_PATHS,
+  type SourcedFact,
+  type EnrichmentStop,
+  type EnrichmentOutcome,
+  type EnrichmentInput,
+} from './prospect-enrichment.ts';
+
+export {
+  extractLegalIdentity,
+  legalPagesFor,
+  legalLinksIn,
+  looksLikeLegalNotice,
+  confidenceFromLegal,
+  LEGAL_PATHS,
+  type LegalIdentity,
+} from './legal-identity.ts';
+
+export {
+  classifyActionChannel,
+  classifyRecipientString,
+  actionLabelFor,
+  classifyRecipientDomain,
+  canonicalUrl,
+  type ActionChannel,
+  type DomainMatch,
+  type DomainVerdict,
+  type ChannelInput,
+  type ChannelVerdict,
+} from './action-channel.ts';
+
+export {
+  verifyClaimAgainstSource,
+  decodeEntities,
+  readableText,
+  type ClaimCheck,
+} from './claim-verification.ts';
+
+export {
+  REVENUE_STEPS,
+  CYCLE_INNER_STEPS,
+  SENDING_STEPS,
+  REPLY_PRIORITY_ORDER,
+  decideSearchGate,
+  decideBudgetGate,
+  classifyReply,
+  prioritizeInbox,
+  classifyDraft,
+  revenueMomentum,
+  topActions,
+  type RevenueStepId,
+  type SearchVerdict,
+  type SearchProbe,
+  type SearchGate,
+  type BudgetSnapshot,
+  type BudgetGate,
+  type ReplyPriority,
+  type InboxSignal,
+  type DraftClass,
+  type DraftFacts,
+  type DraftVerdict,
+  type Momentum,
+  type MomentumInput,
+  type MomentumVerdict,
+  type ActionsInput,
+} from './revenue-mode.ts';
+
+export {
+  extractCountryEvidence,
+  countryFit,
+  type CountryVerdict,
+  type CountryFit,
+} from './country-evidence.ts';
+
+export {
+  splitIntoBlocks,
+  cleanedText,
+  pageTitle,
+  resolveSelection,
+  quoteExistsInSource,
+  areNearDuplicates,
+  distinctCommercialFacts,
+  hasEnoughCommercialFacts,
+  MIN_COMMERCIAL_FACTS,
+  type EvidenceType,
+  type SourceBlock,
+  type SourcedEvidence,
+  type BlockSelection,
+  // `SelectionOutcome` est deja pris par la selection de contact : celui-ci
+  // porte donc son domaine dans son nom.
+  type SelectionOutcome as BlockSelectionOutcome,
+} from './evidence-blocks.ts';
+
+export {
+  buildBlockCatalogue,
+  resolveSelections,
+  readNormalizedClaim,
+  INTERPRETATION_PREFIX,
+  VERBATIM_SYSTEM,
+  VERBATIM_SCHEMA,
+  type ReadPage,
+  type BlockCatalogue,
+  type ResolvedSelections,
+} from './verbatim-selection.ts';
+
+export {
+  collectIdentitySignals,
+  corroborateIdentity,
+  normalizeCompanyName,
+  type IdentitySignal,
+  type IdentitySourceType,
+  type CorroboratedIdentity,
+} from './identity-signals.ts';
+
+export {
+  collectCountrySignals,
+  corroborateCountry,
+  type CountrySignal,
+  type CountrySignalType,
+  type CorroboratedCountry,
+} from './country-evidence.ts';
+
+export {
+  checkHumanization,
+  greetingFor,
+  addressMatchesPerson,
+  type HumanizationVerdict,
+  type HumanizationCheck,
+  type MessageToCheck,
+  type MessageChannel,
+} from './humanization.ts';
+
+export {
+  ClientBriefSchema,
+  CriterionSchema,
+  parseClientBrief,
+  allCriteria,
+  normaliseDomain,
+  adjustBrief,
+  type ClientBrief,
+  type ClientCriterion,
+  type BriefValidation,
+} from './client-brief.ts';
+
+export {
+  criteriaSchema,
+  criteriaPrompt,
+  CRITERIA_SYSTEM,
+  resolveQualification,
+  scanCompetitors,
+  decideCandidate,
+  scoreCriteria,
+  type CriterionVerdict,
+  type CriterionResult,
+  type SpecialisationVerdict,
+  type SpecialisationResult,
+  type ExclusionCategory,
+  type CompetitorHit,
+  type CandidateDecision,
+  type CriteriaScore,
+  type ResolvedQualification,
+} from './client-criteria.ts';
+export * from './nordic-address.ts';
+export * from './client-pages.ts';
+export * from './client-triage.ts';

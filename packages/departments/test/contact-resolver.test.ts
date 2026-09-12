@@ -433,3 +433,28 @@ describe('l’adresse de l’agence web', () => {
     assert.equal(resolution.publicEmails[0]?.value, 'contact@usine.fr');
   });
 });
+
+describe('les pages de contact suédoises', () => {
+  test('« Kontakta oss » et « Om oss » sont des pages d’autorité, et leurs liens sont suivis', () => {
+    const pages = contactPagesFor('https://nordpack.se', 'nordpack.se');
+    assert.ok(pages.includes('https://nordpack.se/kontakta-oss'));
+    assert.ok(pages.includes('https://nordpack.se/om-oss'));
+    const links = contactLinksIn(
+      '<a href="/om-oss">Om oss</a> <a href="/kontakta-oss/">Kontakta oss</a> <a href="/produkter">Produkter</a>',
+      'https://nordpack.se/', 'nordpack.se',
+    );
+    assert.ok(links.includes('https://nordpack.se/om-oss'));
+    assert.ok(links.includes('https://nordpack.se/kontakta-oss/'));
+    assert.ok(!links.some((l) => l.includes('produkter')));
+  });
+
+  test('une adresse relevée sur /kontakta-oss vaut une page de contact', () => {
+    const r = resolveContacts({
+      officialDomain: 'nordpack.se',
+      pages: [{ url: 'https://nordpack.se/kontakta-oss', html: '<p>E-post: <a href="mailto:info@nordpack.se">info@nordpack.se</a> · Tel +46 31 123 45 67</p>' }],
+    });
+    assert.equal(r.publicEmails[0]?.value, 'info@nordpack.se');
+    assert.equal(r.publicEmails[0]?.confidence, 'HIGH');
+    assert.equal(r.publicEmails[0]?.observed, true);
+  });
+});

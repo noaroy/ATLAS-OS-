@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { RateLimiter } from '../src/rate-limit.ts';
+import { parseRetryAfter } from '../src/index.ts';
 
 /**
  * The limiter guards the login path, so its edge behaviour matters: an
@@ -109,5 +110,26 @@ describe('RateLimiter', () => {
       limiter.trackedKeys <= 100,
       `expected bounded tracking, got ${limiter.trackedKeys} keys`,
     );
+  });
+});
+
+describe('un délai annoncé trop lointain', () => {
+  test('une date à l’an 2999 est refusée comme un nombre trop grand', () => {
+    // Le chemin numérique plafonnait à sept jours ; le chemin date ne plafonnait
+    // pas. Un en-tête malformé — ou hostile — garait donc une tâche pour un
+    // millénaire, alors qu'un `Retry-After: 99999999` était refusé.
+    assert.equal(parseRetryAfter('Tue, 01 Jan 2999 00:00:00 GMT'), null);
+    assert.equal(parseRetryAfter('99999999'), null);
+  });
+
+  test('un délai raisonnable passe, quelle que soit la forme', () => {
+    const now = Date.parse('2026-08-26T00:00:00.000Z');
+    assert.equal(parseRetryAfter('60', now), now + 60_000);
+    assert.equal(parseRetryAfter('2026-08-26T01:00:00.000Z', now), now + 3_600_000);
+  });
+
+  test('une date déjà passée ne programme rien', () => {
+    const now = Date.parse('2026-08-26T00:00:00.000Z');
+    assert.equal(parseRetryAfter('2026-08-25T00:00:00.000Z', now), null);
   });
 });

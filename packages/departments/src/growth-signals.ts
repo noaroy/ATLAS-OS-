@@ -245,6 +245,21 @@ const NAVIGATION = [
   // « Passer au contenu Rechercher: Qui sommes nous ? »
   'passer au contenu', 'aller au contenu', 'rechercher', 'qui sommes nous',
   'mon compte', 'panier', 'connexion', 'inscription', 'partager',
+  // Ces mots n'existaient qu'en francais, comme les mots de liaison plus bas.
+  // Consequence : « Mantenimiento Saber mas Ofrecemos el servicio de
+  // mantenimiento… » a ete cite comme fait observe, le « Saber mas » du menu
+  // colle a la phrase. Un menu se reconnait dans toutes les langues.
+  'saber mas', 'leer mas', 'ver mas', 'mas informacion', 'read more',
+  'learn more', 'find out more', 'click here', 'our services', 'our products',
+  'mehr erfahren', 'weiterlesen', 'scopri di piu', 'leggi tutto',
+  'ler mais', 'daha fazla', 'devamini oku', 'lees meer',
+  // Le decor d'une boutique en ligne, releve comme fait chez un distributeur
+  // reel : « Geneq USA testing instruments - authorized distributor The store
+  // will not work correctly when cookies are disabled. »
+  'cookies are disabled', 'cookies desactivados', 'javascript seems to be',
+  'turn on javascript', 'enable javascript', 'the store will not work',
+  'accept cookies', 'we use cookies', 'utilisons des cookies',
+  'usamos cookies', 'este sitio usa cookies', 'privacy policy',
 ];
 
 /**
@@ -256,10 +271,38 @@ const NAVIGATION = [
  * les sépare, sans avoir à analyser la grammaire : une phrase a une majuscule
  * au début et peu ailleurs, un titre en a partout.
  */
+/** Mots de liaison, par langue : leur absence signale une enumeration. */
+const LINKING_WORDS = new Set([
+  'de','des','du','le','la','les','et','en','pour','dans','avec','nos','notre',
+  'qui','que','au','aux','sur','par','une','un','est','sont','ce','cette',
+  'the','and','of','to','in','for','with','our','we','that','which','is','are',
+  'from','their','its','as','all','on','by','you','your','at','an','a',
+  'el','los','las','para','con','nuestra','nuestras','nuestro','nuestros','por',
+  'como','se','su','es','ademas','tambien',
+  'lo','gli','per','nostro','nostra','della','delle','dei','degli','che','sono','il',
+  'der','die','das','und','fuer','mit','von','unsere','unser','ist','sind','im',
+  'zu','den','dem','auf','wir','sie','eine','einen',
+  'het','een','voor','onze','zijn','van','em','nossa','nossos','uma','ao',
+  've','ile','icin','bir','bizim','olarak','bu',
+]);
+
+/** Un mot de liaison, quelle que soit la langue de la phrase. */
+function hasLinkingWord(quote: string): boolean {
+  return quote
+    .toLowerCase()
+    .split(/[^a-zà-ÿ]+/)
+    .some((word) => LINKING_WORDS.has(word));
+}
+
 export function readsAsSentence(quote: string): boolean {
   const words = quote.split(/\s+/).filter((w) => w.length > 1);
   if (words.length < 8) return false;
-  if (NAVIGATION.some((nav) => quote.toLowerCase().includes(nav))) return false;
+  // Compare sans accents : la liste est ecrite sans diacritiques, et
+  // « Mantenimiento Saber mas … » ne correspondait donc jamais a 'saber mas'.
+  // Le meme decalage rendait 'nos realisations' inoperant sur « nos
+  // realisations ».
+  const flat = quote.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  if (NAVIGATION.some((nav) => flat.includes(nav))) return false;
 
   const capitalised = words.filter((w) => /^[A-ZÀ-Ü]/.test(w)).length;
   if (capitalised / words.length > 0.4) return false;
@@ -269,11 +312,16 @@ export function readsAsSentence(quote: string): boolean {
   // n'est disqualifiant seul ; trois ensemble le sont.
   const MENU_WORDS = ['accueil', 'contact', 'nos clients', 'en savoir plus', 'projets',
     'le bureau', 'qui suis', 'mentions', 'blog', 'actualites', 'services'];
-  const hits = MENU_WORDS.filter((w) => quote.toLowerCase().includes(w)).length;
+  const hits = MENU_WORDS.filter((w) => flat.includes(w)).length;
   if (hits >= 3) return false;
   // Une phrase contient au moins un mot de liaison : sans cela, c'est une
-  // énumération.
-  return /\b(de|des|du|le|la|les|et|en|pour|dans|avec|nos|notre|qui|que)\b/i.test(quote);
+  // enumeration. Cette liste n'a longtemps contenu que du francais, et la
+  // fonction servait alors un corpus francais. Appliquee a des sites
+  // etrangers, elle rejetait toute phrase correcte qui n'etait pas romane :
+  // « Our specialists routinely propose money-saving adjustments to
+  // customers' orders. » ne contient aucun de ces mots. Le test mesurait la
+  // langue, pas la syntaxe.
+  return hasLinkingWord(quote);
 }
 
 /** Le libellé lisible d'un signal, pour un rapport de revue. */

@@ -37,6 +37,10 @@ export type ContactIntent =
   | 'WEBMASTER'
   /** Une personne nommée, sans fonction publiée. */
   | 'PERSONAL'
+  /** Recrutement, carrières. Un candidat, pas un fournisseur. */
+  | 'HR'
+  /** Facturation, comptabilité. On y envoie des factures, pas des offres. */
+  | 'BILLING'
   | 'UNKNOWN';
 
 export type OutreachSuitability =
@@ -59,7 +63,7 @@ export type OutreachSuitability =
 const MAILBOX_INTENTS: ReadonlyArray<{ intent: ContactIntent; mailboxes: string[] }> = [
   {
     intent: 'EXPORT',
-    mailboxes: ['export', 'international', 'worldwide', 'overseas', 'emea'],
+    mailboxes: ['export', 'international', 'worldwide', 'overseas', 'emea', 'global'],
   },
   {
     intent: 'SALES',
@@ -67,6 +71,23 @@ const MAILBOX_INTENTS: ReadonlyArray<{ intent: ContactIntent; mailboxes: string[
       'commercial', 'commerce', 'sales', 'vente', 'ventes', 'devis', 'business',
       'businessdevelopment', 'bizdev', 'salesteam', 'prescription', 'partenariat',
       'partenariats', 'partners', 'distribution', 'achat', 'achats', 'appeloffre',
+      // Suède : « försäljning » s'écrit « forsaljning » une fois aplati, « sälj » « salj ».
+      'forsaljning', 'salj', 'saljare', 'offert', 'offerter', 'order', 'orders', 'inkop',
+      'partner', 'aterforsaljare', 'distributor', 'distributors', 'dealer', 'dealers',
+    ],
+  },
+  {
+    intent: 'HR',
+    mailboxes: [
+      'hr', 'rh', 'jobb', 'jobs', 'job', 'career', 'careers', 'karriar', 'rekrytering',
+      'recruiting', 'recruitment', 'recrutement', 'candidature', 'candidatures', 'personal',
+    ],
+  },
+  {
+    intent: 'BILLING',
+    mailboxes: [
+      'faktura', 'fakturor', 'invoice', 'invoices', 'billing', 'facturation', 'facture',
+      'ekonomi', 'accounting', 'comptabilite', 'redovisning', 'lon', 'payroll', 'finance',
     ],
   },
   {
@@ -82,6 +103,7 @@ const MAILBOX_INTENTS: ReadonlyArray<{ intent: ContactIntent; mailboxes: string[
     mailboxes: [
       'support', 'sav', 'assistance', 'help', 'helpdesk', 'hotline', 'technique',
       'technical', 'maintenance', 'depannage', 'service', 'serviceclient', 'reclamation',
+      'kundservice', 'kundtjanst', 'reservdelar', 'garanti',
     ],
   },
   {
@@ -97,6 +119,7 @@ const MAILBOX_INTENTS: ReadonlyArray<{ intent: ContactIntent; mailboxes: string[
       'contact', 'contacts', 'info', 'infos', 'information', 'accueil', 'hello',
       'bonjour', 'mail', 'courrier', 'secretariat', 'standard', 'administration',
       'bureau', 'office', 'enquiries', 'anfrage', 'kontakt', 'nouscontacter',
+      'hej', 'post', 'reception', 'vaxel', 'kontor',
     ],
   },
 ];
@@ -201,7 +224,7 @@ export function classifyContactIntent(input: {
   if (looksPersonal(mailbox)) {
     // Une fonction commerciale publiée change la nature de l'adresse : c'est
     // l'entreprise elle-même qui désigne cette personne comme interlocuteur.
-    if (input.role && /(commercial|vente|sales|business|export|développement)/i.test(input.role)) {
+    if (input.role && /(commercial|vente|sales|business|export|développement|försäljning|sälj|key account|account manager|marknad|vd\b|ceo|verkställande)/i.test(input.role)) {
       return 'SALES';
     }
     return 'PERSONAL';
@@ -240,6 +263,8 @@ export function outreachSuitability(intent: ContactIntent, hasCommercialRole = f
     case 'LEGAL':
     case 'PRIVACY':
     case 'WEBMASTER':
+    case 'HR':
+    case 'BILLING':
       return 'BLOCKED';
   }
 }

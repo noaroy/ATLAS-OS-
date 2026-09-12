@@ -146,7 +146,7 @@ export function VillageView() {
                 }`}
               />
               <span className="font-display text-sm font-semibold text-[--color-ink]">{pulse.label}</span>
-              <span className="ml-auto text-[0.6rem] uppercase tracking-[0.14em] text-[--color-faint]">
+              <span className="ml-auto text-[0.6875rem] uppercase tracking-[0.14em] text-[--color-faint]">
                 Rythme de la cité
               </span>
             </div>
@@ -221,17 +221,17 @@ export function VillageView() {
                         />
                         <span className="truncate text-xs font-medium text-[--color-ink]">{agent.name}</span>
                         <span
-                          className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[0.56rem] uppercase tracking-wider ${
+                          className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] uppercase tracking-wider ${
                             real ? 'bg-sky-500/15 text-sky-300' : 'bg-white/5 text-[--color-faint]'
                           }`}
                         >
                           {real ? 'mission' : 'village'}
                         </span>
                       </div>
-                      <div className="mt-1 truncate pl-3.5 text-[0.68rem] text-[--color-muted]">
+                      <div className="mt-1 truncate pl-3.5 text-[0.6875rem] text-[--color-muted]">
                         {occupation?.label ?? 'En attente'}
                       </div>
-                      <div className="mt-0.5 truncate pl-3.5 text-[0.6rem] text-[--color-faint]">
+                      <div className="mt-0.5 truncate pl-3.5 text-[0.6875rem] text-[--color-faint]">
                         {occupation?.phase === 'travelling'
                           ? `en route vers ${styleOf(occupation.at).short}`
                           : styleOf(occupation?.at ?? agent.building).short}
@@ -254,18 +254,18 @@ export function VillageView() {
                     <div className="flex items-center gap-2">
                       <span className="size-2 rounded-sm" style={{ background: district.accent }} />
                       <span className="text-xs font-medium text-[--color-ink]">{district.label}</span>
-                      <span className="ml-auto text-[0.6rem] text-[--color-faint]">
+                      <span className="ml-auto text-[0.6875rem] text-[--color-faint]">
                         {members.length} bâtiments
                       </span>
                     </div>
-                    <p className="mt-0.5 pl-4 text-[0.62rem] text-[--color-faint]">{district.role}</p>
+                    <p className="mt-0.5 pl-4 text-[0.6875rem] text-[--color-faint]">{district.role}</p>
                     <div className="mt-1.5 flex flex-wrap gap-1 pl-4">
                       {members.map((building) => (
                         <button
                           key={building.key}
                           type="button"
                           onClick={() => rendererRef.current?.focusBuilding(building.key)}
-                          className={`rounded px-1.5 py-0.5 text-[0.6rem] transition-colors ${
+                          className={`rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors ${
                             building.status === 'alert'
                               ? 'bg-rose-500/15 text-rose-300'
                               : building.status === 'busy'
@@ -278,7 +278,7 @@ export function VillageView() {
                       ))}
                     </div>
                     {(busy > 0 || alert > 0) && (
-                      <div className="mt-1 pl-4 text-[0.6rem] text-[--color-faint]">
+                      <div className="mt-1 pl-4 text-[0.6875rem] text-[--color-faint]">
                         {busy > 0 && <span className="text-emerald-300">{busy} en activité</span>}
                         {busy > 0 && alert > 0 && ' · '}
                         {alert > 0 && <span className="text-rose-300">{alert} en alerte</span>}
@@ -292,7 +292,7 @@ export function VillageView() {
 
           {village.activeMissions.length > 0 && (
             <div className="border-t border-white/10 p-3">
-              <div className="mb-2 text-[0.6rem] font-semibold uppercase tracking-[0.14em] text-[--color-faint]">
+              <div className="mb-2 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-[--color-faint]">
                 Missions en cours
               </div>
               <ul className="space-y-2">
@@ -361,10 +361,10 @@ export function VillageView() {
       <div className="pointer-events-none absolute bottom-5 left-5 w-[24rem] max-w-[36vw] space-y-2">
         <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/60 p-3 backdrop-blur">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-[--color-faint]">
+            <span className="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-[--color-faint]">
               Journal du système
             </span>
-            <span className="flex items-center gap-1.5 text-[0.64rem] text-[--color-faint]">
+            <span className="flex items-center gap-1.5 text-[0.6875rem] text-[--color-faint]">
               <span
                 className={`size-1.5 rounded-full ${connection === 'live' ? 'bg-emerald-400' : 'bg-rose-400'}`}
               />
@@ -403,7 +403,7 @@ export function VillageView() {
           prendre une réunion ambiante pour une découverte réelle. Elle nomme la
           frontière que le reste du code applique.
         */}
-        <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/55 px-3 py-2 text-[0.62rem] backdrop-blur">
+        <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/55 px-3 py-2 text-[0.6875rem] backdrop-blur">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-sky-400" />
@@ -470,12 +470,12 @@ function AgentCard({
           }`}
         >
           <div
-            className={`text-[0.6rem] uppercase tracking-wider ${real ? 'text-sky-300' : 'text-[--color-faint]'}`}
+            className={`text-[0.6875rem] uppercase tracking-wider ${real ? 'text-sky-300' : 'text-[--color-faint]'}`}
           >
             {real ? 'Étape de mission' : 'Activité de village'}
           </div>
           <div className="mt-0.5 text-xs text-[--color-ink]">{occupation.label}</div>
-          <div className="mt-1 text-[0.62rem] text-[--color-faint]">
+          <div className="mt-1 text-[0.6875rem] text-[--color-faint]">
             {occupation.phase === 'travelling' ? 'en route vers ' : 'à '}
             {styleOf(occupation.at).short}
             {!real && ' · sans effet sur les données métier'}
@@ -512,7 +512,7 @@ function BuildingCard({
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <span
-          className="rounded px-1.5 py-0.5 text-[0.58rem] uppercase tracking-wider"
+          className="rounded px-1.5 py-0.5 text-[0.6875rem] uppercase tracking-wider"
           style={{ background: `${district.accent}22`, color: district.accent }}
         >
           {district.label}
@@ -533,7 +533,7 @@ function BuildingCard({
       <p className="text-xs leading-relaxed text-[--color-muted]">{building.purpose}</p>
 
       <div>
-        <div className="mb-1 flex items-center justify-between text-[0.64rem] text-[--color-faint]">
+        <div className="mb-1 flex items-center justify-between text-[0.6875rem] text-[--color-faint]">
           <span>Développement · niveau {building.level}</span>
           <span>{Math.round(building.activityScore)} d’activité</span>
         </div>
@@ -541,7 +541,7 @@ function BuildingCard({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[0.64rem] uppercase tracking-wider text-[--color-faint]">
+        <div className="mb-1.5 text-[0.6875rem] uppercase tracking-wider text-[--color-faint]">
           Présents ({residents.length})
         </div>
         {residents.length === 0 ? (
@@ -554,7 +554,7 @@ function BuildingCard({
                 <li key={resident.key} className="flex items-center justify-between gap-2 text-xs">
                   <span className="truncate text-[--color-ink]">{resident.name}</span>
                   <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[0.56rem] uppercase tracking-wider ${
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] uppercase tracking-wider ${
                       occupation?.real ? 'bg-sky-500/15 text-sky-300' : 'bg-white/5 text-[--color-faint]'
                     }`}
                   >
@@ -593,7 +593,7 @@ const LifeBar = ({
   hint: string;
 }) => (
   <div title={hint}>
-    <div className="flex items-baseline justify-between text-[0.62rem]">
+    <div className="flex items-baseline justify-between text-[0.6875rem]">
       <span className="text-[--color-muted]">{label}</span>
       <span className="text-[--color-faint]">
         {value}/{total || '—'}
@@ -619,13 +619,13 @@ const VitalTile = ({
 }) => (
   <div className="rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-center backdrop-blur">
     <div className={`font-display text-lg font-semibold leading-none ${tone}`}>{value}</div>
-    <div className="mt-1 text-[0.56rem] uppercase tracking-[0.12em] text-[--color-faint]">{label}</div>
+    <div className="mt-1 text-[0.6875rem] uppercase tracking-[0.12em] text-[--color-faint]">{label}</div>
   </div>
 );
 
 const Metric = ({ label, value }: { label: string; value: string | number }) => (
   <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
-    <dt className="text-[0.56rem] uppercase tracking-wider text-[--color-faint]">{label}</dt>
+    <dt className="text-[0.6875rem] uppercase tracking-wider text-[--color-faint]">{label}</dt>
     <dd className="mt-0.5 font-display text-sm text-[--color-ink]">{value}</dd>
   </div>
 );

@@ -11,9 +11,14 @@
  * fait devient rapporté, sa source revient à celle qu'on connaît, et le motif
  * est écrit dans `basis`. Aucun appel modèle.
  */
-import { createLogger } from '../packages/core/src/index.ts';
+import { createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import { isOfficialPage } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const batchId = process.argv[2];
 const apply = process.argv.includes('--apply');

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "client": {
+    "name": "INTERNAL_TEST",
+    "offering": "machines de contrôle et de conditionnement — test technique, aucun contact commercial",
+    "internalTest": true
+  },
+  "market": { "country": "Suède", "countryLabel": "Suède", "regions": [] },
+  "targetRoles": ["distributor", "reseller"],
+  "productKeywords": ["förpackningsmaskiner", "kontrollutrustning"],
+  "industries": ["kosmetik", "läkemedel", "livsmedel"],
+  "requiredCriteria": [
+    { "key": "vente-machines", "label": "Vend ou distribue des machines industrielles (contrôle, conditionnement, packaging)", "hint": "gamme de machines, marques représentées", "weight": 3 },
+    { "key": "secteurs-clients", "label": "Est présent sur au moins un des marchés : cosmétique, pharma, agroalimentaire, packaging", "hint": "références clients, secteurs cités", "weight": 2 }
+  ],
+  "preferredCriteria": [
+    { "key": "capacite-service", "label": "Assure installation, étalonnage ou maintenance", "hint": "service, installation, kalibrering, underhåll", "weight": 1 }
+  ],
+  "exclusionCriteria": [],
+  "competitorExclusions": [],
+  "preferSpecialist": true,
+  "excludedDomains": [],
+  "keepDomains": [],
+  "notes": "INTERNAL_TEST — test technique du pipeline sur le marché suédois. Aucune entreprise ne doit être contactée."
+}

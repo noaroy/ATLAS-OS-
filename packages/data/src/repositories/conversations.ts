@@ -391,4 +391,82 @@ export class ConversationRepository {
       .get(conversationId) as { follow_up_at: string | null } | undefined;
     return row?.follow_up_at ?? null;
   }
+
+  /**
+   * Jusqu'où cette boîte a-t-elle été lue ?
+   *
+   * `null` veut dire « jamais synchronisée », ce qui n'est pas « à jour » : le
+   * premier passage doit alors remonter volontairement loin, plutôt que de
+   * supposer que ce qui précède ne compte pas.
+   */
+  /**
+   * Normalise la boîte comme une adresse, pas comme une chaîne quelconque.
+   *
+   * `Moi@Gmail.com` et `moi@gmail.com` désignent la même boîte mais produisaient
+   * deux curseurs distincts : une simple différence de casse dans `GMAIL_USER`
+   * remettait la synchronisation à zéro, ou en créait une seconde qui n'avançait
+   * jamais — et le trou que le curseur existe pour empêcher se rouvrait. Les
+   * domaines sont canonisés partout ailleurs ; la boîte ne l'était pas.
+   */
+  private static mailboxKey(mailbox: string): string {
+    return mailbox.trim().toLowerCase();
+  }
+
+  syncCheckpoint(provider: string, mailbox: string): {
+    lastReceivedAt: string; lastSyncedAt: string; messagesSeen: number;
+  } | null {
+    const row = this.db
+      .prepare(
+        `SELECT last_received_at, last_synced_at, messages_seen
+           FROM mail_sync_checkpoints WHERE provider = ? AND mailbox = ?`,
+      )
+      .get(provider, ConversationRepository.mailboxKey(mailbox)) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      lastReceivedAt: row.last_received_at as string,
+      lastSyncedAt: row.last_synced_at as string,
+      messagesSeen: row.messages_seen as number,
+    };
+  }
+
+  /**
+   * Avancer le curseur — et seulement une fois le lot entièrement traité.
+   *
+   * L'avancer plus tôt, message par message, rendrait un plantage en cours de
+   * pagination indiscernable d'une synchronisation réussie : le curseur serait
+   * au-delà de ce qui a été traité, et les messages sautés ne seraient jamais
+   * relus. Un trou permanent, sans trace.
+   *
+   * Le curseur ne recule jamais non plus. Une relecture volontaire d'une
+   * ancienne fenêtre ne doit pas faire oublier ce qui a déjà été lu depuis.
+   */
+  advanceSyncCheckpoint(input: {
+    provider: string;
+    mailbox: string;
+    lastReceivedAt: string;
+    messagesSeen: number;
+    now?: string;
+  }): { advanced: boolean; lastReceivedAt: string } {
+    const current = this.syncCheckpoint(input.provider, input.mailbox);
+    const keep = current && current.lastReceivedAt >= input.lastReceivedAt
+      ? current.lastReceivedAt
+      : input.lastReceivedAt;
+
+    this.db
+      .prepare(
+        `INSERT INTO mail_sync_checkpoints
+           (provider, mailbox, last_received_at, last_synced_at, messages_seen)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (provider, mailbox) DO UPDATE SET
+           last_received_at = excluded.last_received_at,
+           last_synced_at   = excluded.last_synced_at,
+           messages_seen    = mail_sync_checkpoints.messages_seen + excluded.messages_seen`,
+      )
+      .run(
+        input.provider, ConversationRepository.mailboxKey(input.mailbox),
+        keep, input.now ?? nowIso(), input.messagesSeen,
+      );
+
+    return { advanced: keep === input.lastReceivedAt, lastReceivedAt: keep };
+  }
 }

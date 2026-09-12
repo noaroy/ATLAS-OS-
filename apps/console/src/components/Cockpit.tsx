@@ -159,7 +159,7 @@ export function Cockpit({
           bâtie sur des inférences n'est pas une shortlist bâtie sur des
           observations, et le rapport doit permettre de le voir d'un coup d'œil.
         */}
-        <div className="mt-3 flex flex-wrap gap-2 text-[0.68rem]">
+        <div className="mt-3 flex flex-wrap gap-2 text-[0.6875rem]">
           <NatureChip label="observed" count={pipeline.evidence.observed} tone="text-emerald-300" />
           <NatureChip label="reported" count={pipeline.evidence.reported} tone="text-sky-300" />
           <NatureChip label="inferred" count={pipeline.evidence.inferred} tone="text-amber-300" />
@@ -207,20 +207,20 @@ export function Cockpit({
             {decisions.map((decision) => (
               <li key={decision.id} className="rounded-lg border border-[--color-border] px-3 py-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="chip border border-[--color-border-bright] text-[0.6rem] uppercase tracking-wider text-[--color-muted]">
+                  <span className="chip border border-[--color-border-bright] text-[0.6875rem] uppercase tracking-wider text-[--color-muted]">
                     {decision.kind}
                   </span>
                   {decision.taskRef && (
-                    <span className="font-mono text-[0.66rem] text-[--color-faint]">{decision.taskRef}</span>
+                    <span className="font-mono text-[0.6875rem] text-[--color-faint]">{decision.taskRef}</span>
                   )}
                   {decision.evidenceIds.length > 0 && (
-                    <span className="text-[0.62rem] text-emerald-300">
+                    <span className="text-[0.6875rem] text-emerald-300">
                       {decision.evidenceIds.length} preuve(s)
                     </span>
                   )}
                 </div>
                 <div className="mt-1 text-xs text-[--color-ink]">{decision.decision}</div>
-                <div className="mt-0.5 text-[0.68rem] leading-relaxed text-[--color-muted]">
+                <div className="mt-0.5 text-[0.6875rem] leading-relaxed text-[--color-muted]">
                   {decision.rationale}
                 </div>
               </li>
@@ -329,13 +329,13 @@ function ReviewSection({ missionId }: { missionId: string }) {
                   laissée à l'interprétation du lecteur.
                 */}
                 {!decided && (
-                  <span className="text-[0.62rem] uppercase tracking-wider text-amber-300">
+                  <span className="text-[0.6875rem] uppercase tracking-wider text-amber-300">
                     non décidée
                   </span>
                 )}
               </div>
 
-              <div className="mt-1.5 flex flex-wrap gap-2 text-[0.66rem]">
+              <div className="mt-1.5 flex flex-wrap gap-2 text-[0.6875rem]">
                 <NatureChip label="observed" count={natures.observed} tone="text-emerald-300" />
                 <NatureChip label="reported" count={natures.reported} tone="text-sky-300" />
                 <NatureChip label="inferred" count={natures.inferred} tone="text-amber-300" />
@@ -346,12 +346,12 @@ function ReviewSection({ missionId }: { missionId: string }) {
                   href={source}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="mt-1.5 block truncate text-[0.68rem] text-[--color-atlas] hover:underline"
+                  className="mt-1.5 block truncate text-[0.6875rem] text-[--color-atlas] hover:underline"
                 >
                   {source}
                 </a>
               ) : (
-                <p className="mt-1.5 text-[0.68rem] text-[--color-faint]">
+                <p className="mt-1.5 text-[0.6875rem] text-[--color-faint]">
                   Aucune source consultable — à ne pas approuver en l’état.
                 </p>
               )}
@@ -396,7 +396,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
         laisserait croire que tout s'est passé normalement.
       */}
       {fabric.lastFailover.length > 0 && (
-        <p className="mb-3 rounded border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[0.68rem] leading-relaxed text-amber-200">
+        <p className="mb-3 rounded border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[0.6875rem] leading-relaxed text-amber-200">
           Dernier appel : bascule après{' '}
           {fabric.lastFailover.map((f) => `${f.providerId} (${f.outcome})`).join(' → ')}.
         </p>
@@ -417,7 +417,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-[--color-ink]">{p.name}</span>
               {p.selected && (
-                <span className="chip border border-emerald-500/40 bg-emerald-500/10 text-[0.6rem] uppercase tracking-wider text-emerald-300">
+                <span className="chip border border-emerald-500/40 bg-emerald-500/10 text-[0.6875rem] uppercase tracking-wider text-emerald-300">
                   actif
                 </span>
               )}
@@ -425,7 +425,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
               <SuitabilityChip verdict={p.suitability} />
               {p.circuit !== 'closed' && (
                 <span
-                  className={`chip border text-[0.62rem] ${
+                  className={`chip border text-[0.6875rem] ${
                     p.circuit === 'open'
                       ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
                       : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
@@ -441,7 +441,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
             </div>
 
             {p.excludedReason && (
-              <p className="mt-1 text-[0.68rem] leading-relaxed text-[--color-faint]">
+              <p className="mt-1 text-[0.6875rem] leading-relaxed text-[--color-faint]">
                 Écarté — {p.excludedReason}
               </p>
             )}
@@ -451,7 +451,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
               jamais interrogé n'a pas un taux de réussite de zéro : il n'en a
               pas, et afficher « 0 % » le condamnerait sur la foi de rien.
             */}
-            <div className="mt-1 text-[0.66rem] text-[--color-faint]">
+            <div className="mt-1 text-[0.6875rem] text-[--color-faint]">
               {p.calls === 0 ? (
                 'aucun appel enregistré — ni bon ni mauvais, inconnu'
               ) : (
@@ -474,7 +474,7 @@ function FabricSection({ fabric }: { fabric: NonNullable<MissionCockpit['fabric'
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="panel p-4">
-    <h3 className="mb-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[--color-faint]">
+    <h3 className="mb-2.5 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-[--color-faint]">
       {title}
     </h3>
     {children}
@@ -491,7 +491,7 @@ const Cell = ({
   tone?: 'good' | 'warn' | 'bad';
 }) => (
   <div className="rounded-lg border border-[--color-border] bg-[--color-deep] px-2.5 py-2">
-    <dt className="text-[0.58rem] uppercase tracking-wider text-[--color-faint]">{label}</dt>
+    <dt className="text-[0.6875rem] uppercase tracking-wider text-[--color-faint]">{label}</dt>
     <dd
       className={`mt-0.5 font-display text-base ${
         tone === 'good'

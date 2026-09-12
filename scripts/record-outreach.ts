@@ -9,8 +9,13 @@
  *   record-outreach skip semso.com --by=noaroy --note="abandonné volontairement"
  *   record-outreach show seraap.com
  */
-import { createLogger, canonicalDomainOf } from '../packages/core/src/index.ts';
+import { createLogger, canonicalDomainOf, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const [action, domain] = process.argv.slice(2);
 const flag = (name: string) =>

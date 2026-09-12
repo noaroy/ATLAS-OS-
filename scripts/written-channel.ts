@@ -12,7 +12,7 @@
  * se cache souvent une page plus loin que la page de contact.
  */
 import { writeFileSync } from 'node:fs';
-import { createLogger } from '../packages/core/src/index.ts';
+import { createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { fetchRawPages } from '../packages/intelligence/src/contact-fetch.ts';
 import {
   resolveContacts,
@@ -21,6 +21,11 @@ import {
   type ContactPage,
   type ResolvedContact,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const logger = createLogger({ level: 'error', pretty: false });
 

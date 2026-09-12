@@ -8,6 +8,7 @@
  * Aucun appel modèle, aucune requête réseau : les motifs viennent des gardes
  * déterministes, rejouées sur des données déjà collectées.
  */
+import { loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createLogger } from '../packages/core/src/logger.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
@@ -15,6 +16,11 @@ import {
   resolveCompanyIdentity,
   icpStatus,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const batchId = process.argv[2];
 const apply = process.argv.includes('--apply');

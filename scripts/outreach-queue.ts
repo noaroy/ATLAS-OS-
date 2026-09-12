@@ -12,7 +12,7 @@
  * règle. Cette commande ne fait que trancher l'ordre.
  */
 import { writeFileSync } from 'node:fs';
-import { createLogger, canonicalDomainOf } from '../packages/core/src/index.ts';
+import { createLogger, canonicalDomainOf, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
   scoreConversion,
@@ -23,6 +23,11 @@ import {
   type ObservedFact,
   type GrowthSignalKind,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;

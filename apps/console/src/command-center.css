@@ -1,0 +1,567 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CENTRE DE COMMANDE
+ *
+ * Une salle de contrôle, pas une page d'accueil. Le fond est presque noir pour
+ * que l'œil aille aux chiffres ; les panneaux sont anthracite, séparés par des
+ * traits d'un pixel plutôt que par des ombres. La couleur ne décore rien : vert
+ * pour ce qui va, orange pour ce qui demande attention, rouge pour ce qui
+ * bloque, acier pour les actions. Tout le reste est gris.
+ *
+ * La densité est assumée. Un opérateur qui doit faire défiler pour savoir si
+ * son système va bien ne le saura pas.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+.cc {
+  /*
+   * Alias, plus une seconde palette.
+   *
+   * Ces noms restent parce que quatre-vingts règles les citent — mais leurs
+   * valeurs vivent maintenant dans `@theme`. Deux jeux de tokens décrivant les
+   * mêmes rôles finissaient toujours par diverger : l'accent du shell et celui
+   * du centre de commande étaient devenus deux bleus différents sans que
+   * personne l'ait décidé.
+   */
+  --cc-void: var(--color-void);
+  --cc-panel: var(--color-panel);
+  --cc-panel-2: var(--color-panel-raised);
+  --cc-line: var(--color-border);
+  --cc-line-soft: #14171d;
+  --cc-ink: var(--color-ink);
+  --cc-muted: var(--color-muted);
+  --cc-faint: var(--color-faint);
+  --cc-ok: var(--color-healthy);
+  --cc-warn: var(--color-warning);
+  --cc-bad: var(--color-error);
+  --cc-steel: var(--color-running);
+  --cc-arcane: var(--color-ai);
+
+  /* ─── Échelle d'espacement ────────────────────────────────────────────
+   *
+   * Quatorze valeurs coexistaient, dont neuf fractionnaires : elles venaient
+   * d'un pas de 0,05rem appliqué à un corps de 13 px, ce qui produisait des
+   * 6,72 px et des 11,2 px qu'aucune décision n'avait choisis.
+   */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /*
+   * Rayons. Trois valeurs, une intention chacune : un repère minuscule, un
+   * élément d'interface, un grand conteneur.
+   */
+  --r-micro: 2px;
+  --r-ui: 4px;
+  --r-container: 6px;
+
+  background: var(--cc-void);
+  color: var(--cc-ink);
+  min-height: 100%;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--cc-line);
+  background: var(--cc-panel);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.cc-head h1 {
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin: 0;
+  color: var(--cc-ink);
+  font-weight: 600;
+}
+.cc-spacer { flex: 1; }
+.cc-head time,
+.cc-head .cc-meta {
+  color: var(--cc-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+/* L'état de connexion : un point, pas une phrase. */
+.cc-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cc-muted);
+}
+.cc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cc-faint); }
+.cc-dot--live { background: var(--cc-ok); box-shadow: 0 0 0 3px rgb(63 185 80 / 0.12); }
+.cc-dot--connecting { background: var(--cc-warn); }
+.cc-dot--offline { background: var(--cc-bad); }
+
+.cc-body { padding: var(--sp-3) var(--sp-4) var(--sp-8); display: grid; gap: var(--sp-3); align-content: start; }
+
+.cc-panel {
+  background: var(--cc-panel);
+  border: 1px solid var(--cc-line);
+  border-radius: var(--r-ui);
+  min-width: 0;
+}
+.cc-panel > header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--cc-line-soft);
+}
+.cc-panel > header h2 {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cc-muted);
+  font-weight: 600;
+}
+.cc-panel > header .cc-note { margin-left: auto; color: var(--cc-faint); font-size: 0.75rem; }
+.cc-panel > .cc-content { padding: var(--sp-2) var(--sp-3); }
+
+/* ─── Cartes de mesure ──────────────────────────────────────────────────────
+ *
+ * Horizontales et basses, autour de 84 px.
+ *
+ * La version verticale empilait libelle, valeur et precision sur trois lignes
+ * pleines : dix cartes occupaient la moitie de l'ecran, et le pipeline tombait
+ * sous la ligne de flottaison. Un ecran de supervision qu'il faut faire defiler
+ * pour savoir si le systeme va bien ne le dit pas.
+ *
+ * Un liseret d'un pixel porte la couleur d'etat. C'est le seul aplat : peindre
+ * la carte entiere ferait lire la teinte avant le chiffre, et rendrait dix
+ * cartes illisibles ensemble.
+ */
+.cc-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 1px;
+  background: var(--cc-line-soft);
+  border: 1px solid var(--cc-line);
+  border-radius: var(--r-ui);
+  overflow: hidden;
+}
+@media (min-width: 1750px) {
+  /* Huit mesures sur une ligne : tout le tableau de bord d'un regard. */
+  .cc-stats { grid-template-columns: repeat(8, 1fr); }
+}
+@media (min-width: 2400px) {
+  .cc-stats { grid-template-columns: repeat(10, 1fr); }
+}
+
+.cc-stat {
+  background: var(--cc-panel);
+  padding: var(--sp-2) var(--sp-3);
+  /*
+   * Le plancher, pas la hauteur.
+   *
+   * `min-height: 84px` s'appliquait a toutes les cartes, y compris a celles
+   * sans texte de precision : l'espace vide n'etait pas recupere. Le plancher
+   * descend a 72px et la carte reprend la hauteur de son contenu — une carte
+   * avec precision atteint ~76px, une carte sans s'arrete a 72px, et la grille
+   * reste alignee puisque les lignes s'egalisent d'elles-memes.
+   */
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  position: relative;
+}
+/* Le liseret d'etat : discret, et jamais plus large qu'un trait. */
+.cc-stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+}
+.cc-stat--ok::before { background: var(--cc-ok); }
+.cc-stat--warn::before { background: var(--cc-warn); }
+.cc-stat--bad::before { background: var(--cc-bad); }
+.cc-stat--run::before { background: var(--cc-steel); }
+
+.cc-stat dt {
+  margin: 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cc-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cc-stat dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  line-height: 1.15;
+  font-weight: 600;
+  color: var(--cc-ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.cc-stat .cc-hint {
+  display: block;
+  font-size: 0.6875rem;
+  line-height: 1.25;
+  color: var(--cc-faint);
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Un glyphe pale, en filigrane : reperer la carte sans lire son libelle. */
+.cc-stat .cc-glyph {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.55rem;
+  font-size: 0.8rem;
+  color: var(--cc-line);
+  pointer-events: none;
+}
+/* N/A ne crie pas : une mesure absente est un fait calme, pas une alerte. */
+.cc-stat dd.cc-na { color: var(--cc-faint); font-size: 0.95rem; font-weight: 400; }
+
+/* Tableaux : la densité prime, la bordure disparaît. */
+.cc-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.cc-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cc-faint);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--cc-line);
+}
+.cc-table td {
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--cc-line-soft);
+  color: var(--cc-ink);
+}
+/* Le survol de ligne changeait de fond sans transition, la ou les boutons en
+ * avaient une : le retour visuel etait incoherent d'un composant a l'autre. */
+.cc-table tbody tr { transition: background-color 120ms ease; }
+.cc-table tbody tr:hover { background: var(--cc-panel-2); }
+.cc-table tbody tr.cc-clickable { cursor: pointer; }
+.cc-num { font-family: var(--font-mono); text-align: right; }
+.cc-dim { color: var(--cc-muted); }
+.cc-faint { color: var(--cc-faint); }
+
+/* Pastilles d'état. Trois couleurs de sens, jamais plus. */
+.cc-badge {
+  display: inline-block;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-ui);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--cc-line);
+  color: var(--cc-muted);
+  font-family: var(--font-mono);
+}
+.cc-badge--ok { color: var(--cc-ok); border-color: rgb(63 185 80 / 0.3); background: rgb(63 185 80 / 0.08); }
+.cc-badge--warn { color: var(--cc-warn); border-color: rgb(210 153 34 / 0.3); background: rgb(210 153 34 / 0.08); }
+.cc-badge--bad { color: var(--cc-bad); border-color: rgb(248 81 73 / 0.3); background: rgb(248 81 73 / 0.08); }
+.cc-badge--idle { color: var(--cc-faint); }
+.cc-badge--ai { color: var(--cc-arcane); border-color: rgb(125 107 176 / 0.3); background: rgb(125 107 176 / 0.08); }
+
+/* La barre de santé : un composant par colonne, lisible d'un coup d'œil. */
+.cc-health {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 1px;
+  background: var(--cc-line-soft);
+}
+.cc-health > div { background: var(--cc-panel); padding: var(--sp-2) var(--sp-3); }
+.cc-h-label { font-size: 0.6875rem; letter-spacing: 0.1em; color: var(--cc-faint); text-transform: uppercase; }
+.cc-h-state { font-family: var(--font-mono); font-size: 0.75rem; margin-top: var(--sp-1); }
+.cc-h-detail {
+  font-size: 0.6875rem;
+  color: var(--cc-faint);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Le pipeline : des étapes qui se suivent, pas des cartes qui flottent. */
+.cc-pipeline { display: flex; flex-wrap: wrap; gap: 1px; background: var(--cc-line-soft); }
+.cc-stage { background: var(--cc-panel); padding: var(--sp-2) var(--sp-3); min-width: 132px; flex: 1; }
+.cc-s-label { font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cc-faint); }
+.cc-s-count { font-family: var(--font-mono); font-size: 1.1rem; margin-top: var(--sp-1); }
+.cc-s-count.cc-na { color: var(--cc-faint); font-size: 0.8rem; }
+.cc-stage--active { background: var(--cc-panel-2); box-shadow: inset 2px 0 0 var(--cc-steel); }
+
+/* Bandeau d'alerte : rare, donc voyant quand il paraît. */
+.cc-alert {
+  border: 1px solid rgb(248 81 73 / 0.35);
+  background: rgb(248 81 73 / 0.07);
+  color: var(--cc-bad);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-ui);
+  font-size: 0.78rem;
+}
+.cc-alert--warn { border-color: rgb(210 153 34 / 0.35); background: rgb(210 153 34 / 0.07); color: var(--cc-warn); }
+
+/* Ce qui attend une personne. */
+.cc-needs { display: grid; gap: var(--sp-2); }
+.cc-need {
+  border: 1px solid var(--cc-line);
+  border-left: 2px solid var(--cc-warn);
+  border-radius: var(--r-ui);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--cc-panel-2);
+}
+.cc-n-kind { font-size: 0.6875rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cc-warn); }
+.cc-n-what { margin: 0.25rem 0; font-size: 0.82rem; }
+.cc-n-why { color: var(--cc-muted); font-size: 0.73rem; }
+.cc-need code,
+.cc-code {
+  display: inline-block;
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--cc-muted);
+  background: var(--cc-void);
+  border: 1px solid var(--cc-line);
+  border-radius: var(--r-ui);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.cc-empty { color: var(--cc-faint); font-size: 0.78rem; padding: var(--sp-2) 0; }
+.cc-btn {
+  background: var(--cc-panel-2);
+  border: 1px solid var(--cc-line);
+  color: var(--cc-ink);
+  border-radius: var(--r-ui);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.cc-btn:hover { border-color: var(--cc-steel); background: #16202c; }
+.cc-btn--primary { border-color: var(--cc-steel); background: rgb(47 91 143 / 0.18); }
+
+.cc-two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+@media (max-width: 1180px) { .cc-two { grid-template-columns: 1fr; } }
+.cc-scroll { max-height: 460px; overflow-y: auto; }
+
+.cc-msg { border-bottom: 1px solid var(--cc-line-soft); padding: var(--sp-2) 0; }
+.cc-msg:last-child { border-bottom: none; }
+.cc-m-top { display: flex; gap: var(--sp-2); align-items: baseline; }
+.cc-m-company { font-size: 0.8rem; }
+.cc-m-subject { color: var(--cc-muted); font-size: 0.75rem; margin-top: 2px; }
+.cc-m-excerpt { color: var(--cc-faint); font-size: 0.75rem; margin-top: var(--sp-1); }
+
+/* ─── Trace multi-modèle ────────────────────────────────────────────────────
+ *
+ * Un arbre en texte plutôt qu'un graphe dessiné : la structure est déjà celle
+ * d'un appel imbriqué, et un arbre ASCII se lit sans légende. Chaque ligne
+ * porte un fait mesuré — fournisseur, modèle, intention, coût — et rien qui
+ * ressemble à une conversation entre modèles, laquelle n'existe pas.
+ */
+.cc .cc-trace {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.9;
+}
+.cc .cc-trace-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 2px 0;
+  border-bottom: 1px solid transparent;
+}
+.cc .cc-trace-row:hover { border-bottom-color: var(--cc-line); }
+.cc .cc-trace-limb { color: var(--cc-faint); user-select: none; }
+.cc .cc-trace-provider {
+  color: var(--cc-arcane);
+  font-weight: 600;
+  min-width: 5.5rem;
+}
+.cc .cc-trace-purpose { color: var(--cc-ink); flex: 1; }
+
+/* ─── Barre proportionnelle ─────────────────────────────────────────────────
+ *
+ * Sans bibliothèque de graphiques : la valeur chiffrée reste dans la colonne
+ * voisine, et la barre ne fait qu'aider l'œil à comparer. Une barre qui
+ * remplacerait le chiffre rendrait la mesure illisible.
+ */
+.cc .cc-bar {
+  display: block;
+  height: 6px;
+  width: 100%;
+  background: var(--cc-line);
+  border-radius: var(--r-micro);
+  overflow: hidden;
+}
+.cc .cc-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--cc-steel);
+}
+
+/* ─── Actions ───────────────────────────────────────────────────────────────
+ *
+ * Les boutons existent et sont désactivés, plutôt qu'absents. Un bouton qu'on
+ * ne voit pas laisse croire que la fonction n'a pas été pensée ; un bouton
+ * grisé, avec son motif à côté, dit exactement où en est le système : la
+ * décision se prend, mais pas ici.
+ */
+.cc .cc-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.cc .cc-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 2px;
+  border: 1px solid var(--cc-line);
+  background: var(--cc-panel-2);
+  color: var(--cc-muted);
+  cursor: pointer;
+}
+.cc .cc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cc .cc-btn--ok:not(:disabled) { border-color: var(--cc-ok); color: var(--cc-ok); }
+.cc .cc-btn--bad:not(:disabled) { border-color: var(--cc-bad); color: var(--cc-bad); }
+
+/* ─── Entonnoir ─────────────────────────────────────────────────────────────
+ *
+ * Une barre par etat, proportionnelle au registre.
+ *
+ * Le tableau precedent alignait treize lignes de chiffres : exact, et illisible
+ * d'un coup d'oeil. La barre donne la forme, le chiffre reste a cote — elle
+ * aide l'oeil, elle ne remplace pas la mesure.
+ *
+ * Les etats vides gardent leur ligne : un entonnoir dont les cases nulles
+ * disparaissent laisse croire qu'elles n'existent pas.
+ */
+.cc-funnel { display: grid; gap: 1px; background: var(--cc-line-soft); }
+.cc-f-row {
+  display: grid;
+  grid-template-columns: 11rem 1fr 3rem;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--cc-panel);
+  padding: var(--sp-1) var(--sp-3);
+}
+.cc-f-row:hover { background: var(--cc-panel-2); }
+.cc-f-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--cc-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cc-f-track { height: 8px; background: var(--cc-line-soft); border-radius: var(--r-micro); overflow: hidden; }
+.cc-f-fill { display: block; height: 100%; background: var(--cc-steel); opacity: 0.75; }
+.cc-f-fill--won { background: var(--cc-ok); }
+.cc-f-fill--lost { background: var(--cc-bad); opacity: 0.5; }
+.cc-f-fill--wait { background: var(--cc-warn); opacity: 0.6; }
+.cc-f-count {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  text-align: right;
+  color: var(--cc-ink);
+  font-variant-numeric: tabular-nums;
+}
+.cc-f-row--empty .cc-f-count { color: var(--cc-faint); }
+
+/* ─── Grille au-dessus de la ligne de flottaison ────────────────────────────
+ *
+ * Entonnoir 50 %, decisions 25 %, boucle 25 %. Sous 1400 px la colonne de
+ * droite passe dessous plutot que de se comprimer : trois colonnes etroites
+ * tronquent les libelles, et un libelle tronque se devine au lieu de se lire.
+ */
+.cc-fold { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: var(--sp-3); align-items: start; }
+@media (max-width: 1400px) { .cc-fold { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .cc-fold { grid-template-columns: 1fr; } }
+
+/* Apercu des agents : trois compteurs, le detail vit dans /cc/agents. */
+.cc-agents-mini { display: grid; gap: 1px; background: var(--cc-line-soft); }
+.cc-am-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  background: var(--cc-panel);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: 0.74rem;
+}
+.cc-am-row strong {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.cc-am-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--cc-faint); }
+.cc-am-dot--run { background: var(--cc-steel); }
+.cc-am-dot--need { background: var(--cc-warn); }
+.cc-am-dot--idle { background: var(--cc-faint); }
+/* « En cours » : acier. Un etat qui bouge, pas un etat sain. */
+.cc-badge--run {
+  color: #7fb0e8;
+  border-color: rgb(74 127 191 / 0.35);
+  background: rgb(74 127 191 / 0.1);
+}
+
+/* ─── Focus clavier ─────────────────────────────────────────────────────────
+ *
+ * Visible immediatement, sans devenir une enseigne.
+ *
+ * Le seul repere de focus du projet etait un halo d'un pixel a 25 %
+ * d'opacite sur le champ de connexion — techniquement present, difficile a
+ * voir sur un fond presque noir. L'acier le rend perceptible ; il reste la
+ * couleur de « quelque chose se passe ici », donc il ne detonne pas.
+ *
+ * `:focus-visible` et non `:focus` : un clic a la souris n'a pas besoin d'etre
+ * signale, un deplacement au clavier si.
+ */
+.cc :focus-visible,
+.login-screen :focus-visible {
+  outline: 2px solid var(--color-running);
+  outline-offset: 1px;
+  border-radius: var(--r-micro);
+}
+.cc .cc-table tbody tr:focus-visible { outline-offset: -2px; }
+
+/* ─── Mouvement reduit ──────────────────────────────────────────────────────
+ *
+ * Aucune regle n'existait dans les 918 lignes de feuille de style, alors qu'une
+ * animation tourne en boucle infinie. Le reglage systeme etait simplement
+ * ignore.
+ *
+ * Les transitions ne sont pas supprimees mais ramenees a une duree
+ * imperceptible : un changement instantane reste un retour visuel, une
+ * animation qui insiste ne l'est plus.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

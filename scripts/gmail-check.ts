@@ -9,6 +9,9 @@
  * la boîte et la liste des portées. Le jeton n'est jamais affiché.
  */
 import { loadConfig } from '../packages/core/src/index.ts';
+import {
+  ACCEPTED_GMAIL_SCOPES, scopesInExcess, GMAIL_SEND_SCOPE_URI,
+} from '../packages/intelligence/src/mail/types.ts';
 import { GMAIL_READONLY_SCOPE } from '../packages/intelligence/src/mail/gmail.ts';
 
 loadConfig(process.cwd());
@@ -50,11 +53,16 @@ if (!response.ok) {
 
 const payload = (await response.json()) as { access_token?: string; scope?: string; expires_in?: number };
 const granted = (payload.scope ?? '').split(/\s+/).filter(Boolean);
-const extra = granted.filter((scope) => scope !== GMAIL_READONLY_SCOPE);
+// La regle vient de la liste partagee, pas d'une copie locale : trois copies
+// d'une meme regle finissent par ne plus dire la meme chose, et c'est ce qui
+// est arrive le jour ou l'envoi a ete accorde.
+const extra = scopesInExcess(granted);
+const peutLire = granted.includes(GMAIL_READONLY_SCOPE);
+const peutEnvoyer = granted.includes(GMAIL_SEND_SCOPE_URI);
 
 console.log(`  boîte           ${user}`);
 console.log(`  portée accordée ${granted.join(', ') || '(aucune)'}`);
-console.log(`  portée exigée   ${GMAIL_READONLY_SCOPE}`);
+console.log(`  portées admises ${ACCEPTED_GMAIL_SCOPES.join(', ')}`);
 
 if (extra.length > 0) {
   console.log(`\n  ${c.red}CONNEXION REFUSÉE${c.reset} — portée(s) d'écriture : ${extra.join(', ')}`);
@@ -76,5 +84,13 @@ if (profile.ok) {
   process.exit(1);
 }
 
-console.log(`\n  ${c.green}Lecture seule confirmée.${c.reset}`);
+console.log(
+  `\n  ${c.green}Portées confirmées${c.reset} — lecture${peutEnvoyer ? ' et envoi' : ' seule'}.`,
+);
+if (peutEnvoyer) {
+  console.log(`  ${c.dim}L'envoi reste soumis à l'approbation humaine : rien ne part seul.${c.reset}`);
+}
+if (!peutLire) {
+  console.log(`  ${c.red}La lecture n'est pas accordée : les réponses ne remonteront pas.${c.reset}`);
+}
 console.log('  npm run sales:inbox-sync -- --allow-production\n');

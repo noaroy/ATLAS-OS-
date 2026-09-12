@@ -164,7 +164,7 @@ export function MemoryView() {
                     <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-[--color-muted]">
                       {item.content.length > 600 ? `${item.content.slice(0, 600)}…` : item.content}
                     </p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[0.68rem] text-[--color-faint]">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[0.6875rem] text-[--color-faint]">
                       <span>importance {(item.importance * 100).toFixed(0)}%</span>
                       <span>· confiance {(item.confidence * 100).toFixed(0)}%</span>
                       <span>· rappelée {item.accessCount}×</span>
@@ -192,7 +192,7 @@ export function MemoryView() {
                     </div>
 
                     {isUnsourcedBusiness(item) && (
-                      <p className="mt-1.5 rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[0.68rem] leading-relaxed text-amber-300">
+                      <p className="mt-1.5 rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[0.6875rem] leading-relaxed text-amber-300">
                         Connaissance métier sans mission d’origine — rien ne permet de remonter à
                         la source qui l’atteste. À vérifier avant de s’en servir, ou à oublier.
                       </p>

@@ -158,7 +158,39 @@ export interface RuntimeSettingsView {
   n8nEnabled: boolean;
 }
 
+/** Ce que l'ecran de gestion recoit, en une seule requete. */
+export interface AtlasOverview {
+  status: 'ONLINE' | 'DEGRADED' | 'ACTION_REQUIRED';
+  statusReason: string;
+  today: {
+    prospects: number; contacted: number; replies: number; positiveReplies: number;
+    clients: number; revenueEur: number;
+    /** `null` quand aucun appel n'a de tarif connu : l'affichage ecrit N/A. */
+    aiCostUsd: number | null; aiCostUnknownCalls: number;
+  };
+  needsYou: Array<{
+    kind: string; what: string; why: string; recommendation: string; action: string;
+  }>;
+  pipeline: {
+    discovered: number; qualified: number; contacted: number;
+    interested: number; preview: number | null; paid: number;
+  };
+  agents: Array<{
+    name: string; status: string; currentTask: string | null;
+    quota: string; lastResult: string | null;
+  }>;
+  system: Array<{ name: string; state: 'OK' | 'ATTENTION' | 'ABSENT'; detail: string }>;
+  autonomy: { level: number; label: string; description: string };
+  advanced: {
+    taskStates: Record<string, number>;
+    workspaces: Record<string, number>;
+    repoWriteLock: string | null;
+    aiLive: boolean;
+  };
+}
+
 export const api = {
+  atlasOverview: () => get<AtlasOverview>('/api/atlas/overview'),
   // Auth
   login: (email: string, password: string) =>
     post<AuthSession>('/api/auth/login', { email, password }),
@@ -331,4 +363,404 @@ export const api = {
   skills: () => get<Array<Skill & { holders: string[] }>>('/api/skills'),
   toggleSkill: (key: string, enabled: boolean) => patch<Skill>('/api/skills/' + key, { enabled }),
   tools: () => get<Array<{ name: string; description: string; category: SkillCategory }>>('/api/tools'),
+};
+
+/**
+ * Le centre de commande.
+ *
+ * Chaque écran a sa route : une requête ciblée plutôt qu'une charge unique que
+ * tout le monde télécharge pour en lire un dixième.
+ *
+ * Les champs qui peuvent valoir `null` le déclarent. Ce n'est pas une précaution
+ * de typage : c'est la règle du produit remontée jusqu'ici — une valeur absente
+ * s'affiche N/A, jamais zéro, et un type qui l'oublierait laisserait écrire
+ * `?? 0` sans que rien ne proteste.
+ */
+export type HealthState = 'HEALTHY' | 'DEGRADED' | 'OFFLINE' | 'BLOCKED' | 'UNKNOWN';
+
+export interface WarRoom {
+  generatedAt: string;
+  ledgerTotal: number;
+  funnelTotal: number;
+  consistent: boolean;
+  funnel: Array<{ state: string; count: number; unexpected?: boolean }>;
+  metrics: {
+    contacted: number;
+    everReplied: number;
+    replyRate: number | null;
+    positiveReplies: number;
+    paidClients: number;
+    revenueEur: number;
+    followUpsDue: number;
+    messagesSent: number;
+    sentToday: number;
+    dailyCap: number;
+    dailyRemaining: number;
+    freePreviews: number | null;
+    aiCostToday: number | null;
+    aiCostUnknownCalls: number;
+  };
+  repliedCompanies: Array<{ domain: string; name: string; at: string | null }>;
+  followUps: Array<{ domain: string; name: string; reason: string }>;
+}
+
+export interface Prospecting {
+  generatedAt: string;
+  running: boolean;
+  cycles: number;
+  latestBatch: string | null;
+  latestBatchStartedAt: string | null;
+  stages: Array<{ id: string; label: string; count: number | null }>;
+  lastCycle: {
+    batchId: string;
+    discovered: number;
+    qualified: number;
+    contactable: number;
+    drafts: number;
+    modelCalls: number | null;
+    costUsd: number | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+  } | null;
+  /** Total à vie des domaines connus : c'est contre lui que la déduplication travaille. */
+  registryDomains: number;
+  guards: {
+    humanApprovalRequired: boolean;
+    minConversionScore: number;
+    maxNewOutreachPerDay: number;
+    budgetUsd: number;
+  };
+}
+
+export interface CompanyRow {
+  domain: string;
+  name: string;
+  state: string;
+  contactedOn: string;
+  lastOutboundAt: string | null;
+  lastHumanReplyAt: string | null;
+  lastAutoReplyAt: string | null;
+  followUpsSent: number;
+  followUpDue: boolean;
+  followUpReason: string;
+  hasConversation: boolean;
+}
+
+export interface CompanyDetail {
+  generatedAt: string;
+  domain: string;
+  name: string;
+  ledger: { kind: string; note: string | null; recordedBy: string; recordedAt: string };
+  history: Array<Record<string, unknown>>;
+  events: Array<{
+    at: string; kind: string; classification: string;
+    sender: string | null; subject: string | null; excerpt: string | null;
+    humanReviewed: boolean; declaredStatus: string | null; source: string;
+  }>;
+  followUpsSent: number;
+  lastOutboundAt: string | null;
+}
+
+export interface ApprovalItem {
+  id: string;
+  source: 'OUTREACH_DRAFT' | 'SALES_PROSPECT';
+  prospectId: string | null;
+  company: string;
+  domain: string;
+  recipient: string | null;
+  subject: string | null;
+  body: string;
+  createdAt: string;
+  createdBy: string | null;
+  score: number | null;
+  facts: Array<{ quote: string; sourceUrl: string }>;
+  guards: string[];
+  /** Par quel canal la décision peut réellement être exécutée. Calculé, non persisté. */
+  actionType: 'EMAIL' | 'FORM' | 'PHONE' | 'MANUAL' | 'UNAVAILABLE';
+  channelTarget: string | null;
+  actionLabel: string;
+  channelReason: string;
+  /** Le destinataire est-il sur le domaine du prospect ? Signalé, jamais bloquant. */
+  recipientDomainMatch: 'MATCH' | 'CROSS_DOMAIN' | 'UNKNOWN';
+  recipientDomain: string | null;
+  relatedDomainEvidence: string | null;
+  domainReason: string;
+  /** L'état réel en base — jamais réécrit pour l'affichage. */
+  sourceState: string;
+  /** Le libellé montré à l'opérateur : une traduction, pas une valeur stockée. */
+  uiStatus: 'READY FOR APPROVAL';
+  canApprove: boolean;
+}
+
+export interface Approvals {
+  generatedAt: string;
+  humanApprovalRequired: boolean;
+  canApprove: boolean;
+  actionEndpoint: string;
+  byDomainMatch: { MATCH: number; CROSS_DOMAIN: number; UNKNOWN: number };
+  byChannel: {
+    EMAIL: number; FORM: number; PHONE: number; MANUAL: number; UNAVAILABLE: number;
+  };
+  bySource: { OUTREACH_DRAFT: number; SALES_PROSPECT: number };
+  pending: ApprovalItem[];
+  excluded: Array<{
+    id: string;
+    source: 'OUTREACH_DRAFT' | 'SALES_PROSPECT';
+    company: string;
+    domain: string;
+    sourceState: string;
+    reason: string;
+  }>;
+}
+
+export interface AgentsView {
+  generatedAt: string;
+  workers: Array<{
+    name: string; workerType: string | null; provider: string | null;
+    status: string; currentTask: string | null; startedAt: string | null;
+    runningMs: number | null; attempts: number | null; quota: string;
+    lastResult: { outcome: string; at: string } | null; detail?: string;
+  }>;
+  queue: {
+    byStatus: Record<string, number>;
+    running: number; queued: number; waitingHuman: number;
+    servedTypes: string[];
+  };
+  waiting: Array<{ taskId: string; taskType: string; department: string; reason: string; errorCode: string | null }>;
+  needsYou: Array<{ kind: string; what: string; why: string; recommendation: string; action: string }>;
+}
+
+export interface Organization {
+  generatedAt: string;
+  hermes: { role: string; departments: number; agents: number };
+  departments: Array<{
+    key: string; name: string; tagline: string; building: string;
+    teams: Array<{ key: string; stages: Array<{ ref: string; title: string; agentKey: string; action: string }> }>;
+    agents: Array<{ key: string; name: string; role: string; tier: string; status: string; activity: string | null; lastActiveAt: string | null; model: string | null; enabled: boolean }>;
+  }>;
+  unassigned: Organization['departments'][number]['agents'];
+}
+
+export interface AiFabric {
+  generatedAt: string;
+  aiLive: boolean;
+  providers: Array<{
+    id: string; label: string; available: boolean; auth: string;
+    model: string; priced: boolean; health: string;
+    usage: {
+      calls: number; inputTokens: number; outputTokens: number;
+      costUsd: number | null; unknownCostCalls: number;
+      lastUsedAt: string | null; lastOutcome: string | null;
+    };
+  }>;
+  claudeCode: {
+    available: boolean; detail: string; auth: string; authDetail: string;
+    remainingCredits: number | null; remainingCreditsNote: string;
+  };
+  pricing: { configuredFile: string | null; rejected: Array<{ model: string; reason: string }>; declared: string[] };
+  routing: { servedWorkerTypes: string[]; multiProvider: boolean; multiProviderNote: string };
+}
+
+export interface CostWindow {
+  calls: number; inputTokens: number; outputTokens: number;
+  costUsd: number | null; unknownCostCalls: number;
+}
+
+export interface Costs {
+  generatedAt: string;
+  windows: { today: CostWindow; last24h: CostWindow; last7d: CostWindow; month: CostWindow; total: CostWindow };
+  byProvider: Array<{ provider: string; calls: number; costUsd: number | null; unknownCostCalls: number }>;
+  byModel: CostSlice[];
+  byAgent: CostSlice[];
+  byMission: CostSlice[];
+  byPurpose: CostSlice[];
+  byDepartment: CostSlice[];
+  workerByModel: CostSlice[];
+  salesLoop: {
+    calls: number; costUsd: number | null; unknownCostCalls: number; purposes: string[];
+  };
+  budgets: {
+    dailyMode: string; monthlyMode: string; maxChainCostUsd: number;
+    maxMissionCostUsd: number; salesBudgetUsd: number; unknownCostPolicy: string;
+  };
+  unknownPriceCalls: number;
+}
+
+export interface InboxMessage {
+  at: string; domain: string; company: string; classification: string;
+  subject: string | null; sender: string | null; excerpt: string | null;
+  humanReviewed: boolean;
+}
+
+export interface Inbox {
+  generatedAt: string;
+  total: number;
+  categories: {
+    humanReplies: InboxMessage[]; autoReplies: InboxMessage[];
+    bounces: InboxMessage[]; needsAction: InboxMessage[];
+  };
+  unmatched: number | null;
+}
+
+export interface SystemView {
+  generatedAt: string;
+  overall: HealthState;
+  autonomy: { level: number; label: string; description: string };
+  aiLive: boolean;
+  components: Array<{ id: string; label: string; state: HealthState; detail: string }>;
+}
+
+/** Une tranche de dépense, quel que soit l'axe qui l'a découpée. */
+export interface CostSlice {
+  label: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  knownCostUsd: number;
+  unknownCostCalls: number;
+  lastAt: string | null;
+}
+
+export interface SearchEngine {
+  id: string;
+  name: string;
+  health: 'HEALTHY' | 'UNHEALTHY' | 'UNKNOWN';
+  available: boolean;
+  reason: string | null;
+  circuit: string | null;
+  inRoutingOrder: boolean;
+  sessionCalls: number | null;
+  sessionFailures: number | null;
+  sessionLatencyMs: number | null;
+  lastSuccessAt: string | null;
+}
+
+export interface SearchFabricView {
+  generatedAt: string;
+  configured: boolean;
+  mode: string;
+  fallbackEnabled: boolean;
+  blocked: boolean;
+  blockedReason: string | null;
+  routingOrder: string[];
+  primary: string | null;
+  fallback: string | null;
+  engines: SearchEngine[];
+  ledger: {
+    queries: number;
+    queryFailures: number;
+    queriesToday: number;
+    avgQueryMs: number | null;
+    pagesVisited: number;
+    pageFailures: number;
+    avgPageMs: number | null;
+    lastActivityAt: string | null;
+    entities: number | null;
+  };
+  byTool: Array<{
+    tool: string; category: string | null; calls: number; failures: number;
+    external: number; avgDurationMs: number; lastAt: string | null;
+  }>;
+  recentFailures: Array<{ tool: string; error: string | null; at: string }>;
+}
+
+export interface MultiModelTrace {
+  generatedAt: string;
+  note: string | null;
+  missions: Array<{
+    missionId: string;
+    title: string | null;
+    status: string | null;
+    providers: number;
+    models: number;
+    startedAt: string;
+    lastAt: string;
+    steps: Array<{
+      provider: string; model: string; agentKey: string | null; purpose: string | null;
+      calls: number; failures: number; costUsd: number | null; unknownCostCalls: number;
+      firstAt: string; lastAt: string;
+    }>;
+  }>;
+}
+
+export interface OutreachView {
+  generatedAt: string;
+  metrics: {
+    messagesSent: number;
+    sentToday: number;
+    dailyCap: number;
+    dailyRemaining: number;
+    readyForApproval: number;
+    approvedNotSent: number;
+    reservedWithoutOutcome: number;
+  };
+  byPurpose: Array<{ purpose: string; count: number }>;
+  sent: Array<{
+    domain: string; recipient: string; subject: string; purpose: string;
+    at: string | null; by: string; messageId: string | null;
+  }>;
+  reserved: Array<{
+    domain: string; recipient: string; subject: string; purpose: string;
+    claimedAt: string; claimedBy: string; key: string;
+  }>;
+  abandonments: Array<{ idempotencyKey: string; actor: string; reason: string; at: string }>;
+}
+
+export interface FollowUpsView {
+  generatedAt: string;
+  afterBusinessDays: number;
+  metrics: { due: number; waiting: number; replied: number; contacted: number };
+  due: Array<{
+    domain: string; name: string; state: string; contactedOn: string;
+    lastOutboundAt: string | null; followUpsSent: number; reason: string;
+  }>;
+  waiting: Array<{
+    domain: string; name: string; state: string; contactedOn: string;
+    followUpsSent: number; reason: string;
+  }>;
+}
+
+export interface AnalyticsView {
+  generatedAt: string;
+  windowDays: number;
+  daily: Array<{
+    day: string; calls: number; costUsd: number | null;
+    unknownCostCalls: number; sent: number;
+  }>;
+  funnel: Array<{ state: string; count: number; unexpected?: boolean }>;
+  conversion: {
+    contacted: number;
+    replied: number;
+    replyRate: number | null;
+    positive: number;
+    positiveRate: number | null;
+    paidClients: number;
+    revenueEur: number;
+    costPerClientUsd: number | null;
+  };
+  costByProvider: CostSlice[];
+  costByModel: CostSlice[];
+  costByAgent: CostSlice[];
+  costByPurpose: CostSlice[];
+  workerByModel: CostSlice[];
+  workerByDepartment: CostSlice[];
+}
+
+export const cc = {
+  warRoom: () => get<WarRoom>('/api/cc/war-room'),
+  prospecting: () => get<Prospecting>('/api/cc/prospecting'),
+  companies: () => get<{ generatedAt: string; companies: CompanyRow[] }>('/api/cc/companies'),
+  company: (domain: string) => get<CompanyDetail>(`/api/cc/companies/${encodeURIComponent(domain)}`),
+  approvals: () => get<Approvals>('/api/cc/approvals'),
+  agents: () => get<AgentsView>('/api/cc/agents'),
+  organization: () => get<Organization>('/api/cc/organization'),
+  aiFabric: () => get<AiFabric>('/api/cc/ai-fabric'),
+  costs: () => get<Costs>('/api/cc/costs'),
+  inbox: () => get<Inbox>('/api/cc/inbox'),
+  system: () => get<SystemView>('/api/cc/system'),
+  searchFabric: () => get<SearchFabricView>('/api/cc/search-fabric'),
+  multiModel: () => get<MultiModelTrace>('/api/cc/multi-model'),
+  outreach: () => get<OutreachView>('/api/cc/outreach'),
+  followUps: () => get<FollowUpsView>('/api/cc/follow-ups'),
+  analytics: () => get<AnalyticsView>('/api/cc/analytics'),
 };

@@ -207,7 +207,7 @@ function Section({
                     )}
                   </div>
                   <p className="mt-1 text-xs text-[--color-muted]">{workflow.description}</p>
-                  <div className="mt-1 text-[0.68rem] text-[--color-faint]">
+                  <div className="mt-1 text-[0.6875rem] text-[--color-faint]">
                     {describeTrigger(workflow)} · {workflow.runCount} run(s) ·{' '}
                     {workflow.lastRunAt ? `last ${relativeTime(workflow.lastRunAt)}` : 'never run'}
                   </div>

@@ -42,3 +42,164 @@ export {
 } from './stage-contract.ts';
 
 export { DeterministicPipeline, type PipelineDeps, type StageOutcome } from './pipeline.ts';
+
+export {
+  AtlasDaemon,
+  DEFAULT_WORKER_TYPES,
+  PERMANENT_ERROR_CODES,
+  type DaemonOptions,
+  type DaemonStats,
+} from './daemon.ts';
+
+export {
+  WorkerRegistry,
+  DeterministicWorker,
+  DisabledModelWorker,
+  HumanWorker,
+  type Worker,
+  type WorkerContext,
+  type WorkerOutcome,
+  type WorkerOutcomeKind,
+} from './workers.ts';
+
+export {
+  DEMO_HANDLERS,
+  DEMO_TASK_TYPES,
+  SALES_TASK_TYPES,
+} from './demo-workers.ts';
+
+export {
+  validateAiResult,
+  taskFingerprint,
+  checkCommand,
+  redactSecrets,
+  ENGINEERING_COMMAND_ALLOWLIST,
+  type AiTaskResult,
+  type SchemaCheck,
+  type CommandVerdict,
+} from './ai-contracts.ts';
+
+export {
+  OpenAiWorker,
+  ClaudeWorker,
+  runAllowedCommand,
+  killTree,
+  type AiWorkerOptions,
+  type ClaudeWorkerOptions,
+} from './ai-workers.ts';
+
+export {
+  HermesRouter,
+  routeTask,
+  fallbackFor,
+  ROUTED_TASK_TYPES,
+  ROUTE_TARGETS,
+  type RouteTarget,
+  type RouteDecision,
+  type ChainLimits,
+  type ChainVerdict,
+  type ChainBlockReason,
+  type HermesOptions,
+} from './hermes-router.ts';
+
+export {
+  createAiProviders,
+  createWorkerRegistry,
+  type AiFactoryOptions,
+} from './ai-factory.ts';
+
+export {
+  checkPath,
+  isDeniedPath,
+  resolveReal,
+  auditChangedFiles,
+  flagInjectionAttempt,
+  type PathVerdict,
+  type PathGuardOptions,
+} from './repo-guard.ts';
+
+export {
+  createWorkspace,
+  removeWorkspace,
+  applyEdits,
+  captureDiff,
+  checkChangeBudget,
+  auditWorkspace,
+  applyToRepo,
+  revertApply,
+  inspectRepo,
+  readWorkspaceFile,
+  repoRootOf,
+  hashDiff,
+  type Workspace,
+  type FileEdit,
+  type EditOutcome,
+  type DiffSummary,
+  type ApplyVerdict,
+  type ApplyOptions,
+  type RepoCleanliness,
+  type ChangeBudgetVerdict,
+} from './workspace.ts';
+
+export {
+  runEngineeringTask,
+  measureBaseline,
+  parseEdits,
+  type EngineeringOutcome,
+  type EngineeringOptions,
+  type EngineeringPhase,
+  type BaselineVerdict,
+} from './engineering.ts';
+
+export {
+  collectNeedsYou,
+  todaySnapshot,
+  pipelineSnapshot,
+  type NeedsYouItem,
+  type NeedsYouKind,
+  type TodaySnapshot,
+  type PipelineSnapshot,
+} from './needs-you.ts';
+
+export {
+  ClaudeCodeWorker,
+  detectClaudeCode,
+  detectClaudeCodeAuth,
+  usesApiKeyBilling,
+  type ClaudeCodeAuth,
+  runClaudeCode,
+  buildMission,
+  extractLastJson,
+  readQuotaFromOutput,
+  normaliseBinary,
+  DEFAULT_ALLOWED_TOOLS,
+  type ClaudeCodeOptions,
+  type ClaudeCodeAvailability,
+  type ClaudeCodeRun,
+} from './claude-code.ts';
+
+export {
+  createClientRun,
+  loadClientRun,
+  adjustClientRun,
+  runClientBatch,
+  spendSoFar,
+  budgetStop,
+  startOfUtcDay,
+  titreDuSite,
+  CLIENT_BATCH_DEFAULTS,
+  clientBudgetLimits,
+  describeClientBudgetLimits,
+  type ClientBudgetLimits,
+  type ClientMissionDeps,
+  type ClientRunContext,
+  type BatchSummary,
+  type BatchMetrics,
+  type CandidateTiming,
+  type FetchedPages,
+  type BatchSummary as ClientBatchSummary,
+  type BatchOptions,
+} from './client-mission.ts';
+
+export { buildClientRunReport, buildReviewQueue, renderReviewQueue, type ClientRunReport, type ClientRunReportInput } from './client-report-run.ts';
+export { proposeBriefAdjustment, type BriefProposal } from './client-feedback.ts';

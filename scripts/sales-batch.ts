@@ -29,9 +29,21 @@ import {
   runSalesPipeline,
   funnelBalances,
   resolveContacts,
-  isOfficialPage,
+  isOfficialPage, isCommercialEvidence, outreachFactFrom,
   contactPagesFor,
   contactLinksIn,
+  collectSourcedFacts,
+  extractLegalIdentity,
+  extractCountryEvidence,
+  countryFit,
+  ATLAS_SALES_ICP,
+  legalPagesFor,
+  legalLinksIn,
+  confidenceFromLegal,
+  canonicalUrl,
+  verifyClaimAgainstSource,
+  readableText,
+  type EnrichmentOutcome,
   type ContactPage,
   domainOf,
   scoreSalesProspect,
@@ -39,6 +51,20 @@ import {
   SALES_SCORING_MODEL,
   planQueries,
   whyNotACompanyName,
+  checkHumanization,
+  collectIdentitySignals,
+  corroborateIdentity,
+  collectCountrySignals,
+  corroborateCountry,
+  buildBlockCatalogue,
+  resolveSelections,
+  INTERPRETATION_PREFIX,
+  distinctCommercialFacts,
+  MIN_COMMERCIAL_FACTS,
+  VERBATIM_SYSTEM,
+  VERBATIM_SCHEMA,
+  type SourcedEvidence,
+  type BlockSelection,
   type RawCandidate,
   type SalesAssessment,
   type OutreachFact,
@@ -179,6 +205,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  /**
+   * Ce que la lecture du web a reellement coute.
+   *
+   * Un cycle a un jour passe deux minutes trente sur un hote qui refusait
+   * toutes les connexions, sans que le rapport le dise. Ces compteurs le
+   * disent.
+   */
+  const reseau = { attempts: 0, aborts: 0, timeSavedMs: 0, abortedHosts: [] as string[] };
+  const compteReseau = (o: { attempts: number; aborted: Array<{ host: string; kind: string }>; timeSavedMsEstimate: number }) => {
+    reseau.attempts += o.attempts;
+    reseau.aborts += o.aborted.length;
+    reseau.timeSavedMs += o.timeSavedMsEstimate;
+    for (const a of o.aborted) reseau.abortedHosts.push(a.host + ' (' + a.kind + ')');
+  };
+
   const started = Date.now();
   const startedAt = new Date().toISOString();
   const batchId = `BATCH-${startedAt.slice(0, 10)}-${Date.now().toString(36).slice(-4)}`;
@@ -224,7 +265,19 @@ async function main(): Promise<void> {
         raw.push({
           companyName: (result.title ?? '').replace(/\s*[|–—-]\s*.*$/, '').trim(),
           domain: domainOf(result.url),
-          country: 'France',
+          /*
+           * Le pays n'est pas connu a la decouverte.
+           *
+           * Il valait « France » ici, parce que la requete est regionalisee en
+           * FR. Ce n'etait pas une mesure du prospect : c'etait la reformulation
+           * de notre propre intention, ecrite dans une colonne que le filtre ICP
+           * est cense interroger. Zhejiang NPC Machinery, fabricant chinois, et
+           * Diversitech Equipment & Sales, societe canadienne, sont ainsi entres
+           * en base comme francaises.
+           *
+           * Il est etabli plus loin, sur les pages du site, ou reste `null`.
+           */
+          country: null,
           industry: null,
           sourceUrl: result.url,
           searchProvider: provider,
@@ -401,7 +454,9 @@ async function main(): Promise<void> {
         field: signal.field,
         claim: signal.claim,
         nature,
-        sourceUrl: onOfficialSite ? claimed : prospect.sourceUrl,
+        // Les parametres de suivi marketing ne survivent pas a l'enregistrement :
+        // colles dans un courriel, ils se periment et signalent le pistage.
+        sourceUrl: canonicalUrl(onOfficialSite ? claimed : prospect.sourceUrl),
         basis:
           nature === 'inferred'
             ? 'Déduit du texte rapporté par la recherche.'
@@ -450,6 +505,11 @@ async function main(): Promise<void> {
   // La règle porte désormais sur la page. Rien ici n'appelle le modèle.
   console.log(`
   ${c.bold}Contacts${c.reset}`);
+  // Les pages lues ici sont conservées : l'enrichissement qui suit commence
+  // par elles. Les jeter puis les redemander doublerait les requêtes pour lire
+  // exactement le même HTML — et c'est précisément ce que faisait ce lot.
+  const readPages = new Map<string, ContactPage[]>();
+
   for (const prospect of repos.sales.forBatch(batchId).filter((p) => p.state === 'QUALIFIED')) {
     const domain = prospect.domain!;
     const queue = contactPagesFor(prospect.website, domain);
@@ -463,8 +523,12 @@ async function main(): Promise<void> {
       const fetched = await fetchRawPages(batch, {
         logger: system.logger,
         timeoutMs: 12_000,
-        maxPages: Math.max(0, 8 - pages.length),
+        // Le plafond était écrit 8 en dur ici, alors que la configuration en
+        // porte un. Les deux valaient huit, donc rien ne le signalait ; changer
+        // le réglage n'aurait simplement rien fait.
+        maxPages: Math.max(0, config.sales.maxPagesPerDomain - pages.length),
       });
+      compteReseau(fetched);
       pages.push(...fetched.pages);
       if (pass === 0) {
         const home = fetched.pages.find((page) => new URL(page.url).pathname === '/');
@@ -476,10 +540,38 @@ async function main(): Promise<void> {
       }
     }
 
+    readPages.set(prospect.id, pages);
+
     const contacts = resolveContacts({ officialDomain: domain, pages });
     if (contacts.primary) {
-      const email = contacts.publicEmails[0] ?? null;
-      const phone = contacts.publicPhones[0] ?? null;
+      /*
+       * Le contact RETENU, pas le premier trouve.
+       *
+       * Cette ligne prenait `publicEmails[0]` — l'adresse brute, dans l'ordre
+       * ou elle apparaissait sur la page. La selection par intention
+       * (`selectOutreachContact`, qui ecarte les boites juridiques, support,
+       * RGPD et personnelles) etait donc calculee puis ignoree.
+       *
+       * Consequence reelle : Fujielectric est arrive en READY_FOR_REVIEW avec
+       * `nadia.dasilva@fujielectric.fr`, une adresse personnelle relevee dans
+       * les mentions legales. Ecrire a une personne nommee sans fonction
+       * publiee, sur une adresse trouvee dans un avis juridique, est exactement
+       * ce que la garde existait pour empecher.
+       *
+       * La meme garde protege desormais les deux chemins, batch et boucle.
+       */
+      const retenu = contacts.primary;
+      const commercial = retenu.suitability !== 'LOW' && retenu.intent !== 'PERSONAL';
+      const email = retenu.type === 'EMAIL' && commercial ? retenu : null;
+      const phone = retenu.type === 'PHONE' ? retenu : contacts.publicPhones[0] ?? null;
+
+      if (!commercial) {
+        console.log(
+          `       ${c.amber}canal ecarte${c.reset} ${c.dim}${retenu.intent} / ${retenu.suitability} — ` +
+            `aucun brouillon commercial sur cette adresse${c.reset}`,
+        );
+      }
+
       repos.sales.setContact(prospect.id, {
         name: contacts.contactPersonName,
         role: contacts.contactPersonRole,
@@ -501,7 +593,211 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── Enrichissement : les faits qui manquent, lus sur le site ─────────────
+  //
+  // Le lot précédent a qualifié huit entreprises, en a retenu une en PRIORITY,
+  // et n'a produit aucun brouillon : zéro fait constaté et sourcé, alors que
+  // l'étape ci-dessus venait de lire leurs pages. La garde des deux faits n'a
+  // pas été touchée — c'est la collecte qui était aveugle.
+  //
+  // Seuls les PRIORITY passent ici. Élargir la profondeur à tout le monde
+  // multiplierait les requêtes sur des dossiers dont aucun brouillon ne peut
+  // sortir, et ferait payer en temps ce qui ne change aucune décision.
+  const enrichmentStart = spendOf(repos, mission.id, startedAt);
+  const enrichment = new Map<string, EnrichmentOutcome>();
+  const toEnrich = repos.sales
+    .forBatch(batchId)
+    .filter((p) => p.state === 'QUALIFIED' && p.tier === 'PRIORITY' && p.domain);
+
+  if (toEnrich.length > 0) {
+    console.log(`\n  ${c.bold}Enrichissement PRIORITY${c.reset} ${c.dim}` +
+      `${config.sales.maxPagesPerPriorityDomain} pages max · arrêt à 2 faits distincts · aucun modèle${c.reset}`);
+  }
+
+  for (const prospect of toEnrich) {
+    const domain = prospect.domain!;
+    const already = repos.sales
+      .evidenceFor(prospect.id)
+      .filter((e) => e.nature === 'observed' && e.sourceUrl && !e.field.startsWith('identite:')).length;
+
+    const outcome = await collectSourcedFacts({
+      website: prospect.website,
+      domain,
+      maxPages: config.sales.maxPagesPerPriorityDomain,
+      targetFacts: Math.max(0, 2 - already),
+      seedPages: readPages.get(prospect.id) ?? [],
+      deadline: Date.now() + 90_000,
+      fetchPages: async (urls, maxPages) => {
+        const o = await fetchRawPages(urls, { logger: system.logger, timeoutMs: 12_000, maxPages });
+        compteReseau(o);
+        return o;
+      },
+    });
+    enrichment.set(prospect.id, outcome);
+
+    // Chaque fait est écrit comme constaté, avec l'adresse de la page où il a
+    // été lu — jamais celle du résultat de recherche. C'est cette distinction
+    // qui rend le fait vérifiable par le destinataire lui-même.
+    /**
+     * La raison sociale, lue la ou la loi oblige a l'ecrire.
+     *
+     * Deux prospects du lot precedent avaient leurs deux faits sources et n'ont
+     * produit aucun brouillon : leur nom venait du titre d'un resultat de
+     * recherche, et la garde d'identite refuse — a raison — d'ecrire a une
+     * entreprise dont le nom n'est confirme par rien.
+     *
+     * Cette lecture ne touche pas la garde : elle lui apporte la preuve qu'elle
+     * reclame. Trois pages au plus, aucun appel de modele.
+     */
+    const identiteConfirmee = await (async () => {
+      const dejaSur = new Set((readPages.get(prospect.id) ?? []).map((pg) => pg.url));
+      const accueil = (readPages.get(prospect.id) ?? [])[0];
+      const candidates = [
+        ...(accueil ? legalLinksIn(accueil.html, accueil.url, domain) : []),
+        ...legalPagesFor(prospect.website, domain),
+      ].filter((u) => !dejaSur.has(u));
+
+      // Les pages deja en main d'abord : elles ne coutent rien.
+      const dejaLues = readPages.get(prospect.id) ?? [];
+      const trouve = extractLegalIdentity(dejaLues, domain);
+      if (trouve) return trouve;
+
+      // Une seule page suffit : les chemins conventionnels redirigent tous vers
+      // la meme, et `fetchRawPages` s'arrete au premier succes. Demander trois
+      // pages payait trois requetes pour lire le meme document.
+      const fetched = await fetchRawPages(candidates, {
+        logger: system.logger, timeoutMs: 12_000, maxPages: 1,
+      });
+      compteReseau(fetched);
+      return extractLegalIdentity(fetched.pages, domain);
+    })();
+
+    if (identiteConfirmee) {
+      const niveau = confidenceFromLegal(identiteConfirmee);
+      const verdict = repos.sales.confirmIdentity(prospect.id, {
+        legalName: identiteConfirmee.legalName,
+        confidence: niveau,
+        source: `mentions legales (${identiteConfirmee.sourceUrl})`,
+      });
+      repos.sales.addEvidence({
+        prospectId: prospect.id,
+        // L'entite juridique est une preuve d'identite du domaine, pas le nom
+        // auquel on ecrit : le champ le dit, pour qu'aucune relecture ne s'y
+        // trompe.
+        field: 'identite:entite_juridique',
+        claim: `${identiteConfirmee.legalName}${identiteConfirmee.legalForm ? ' ' + identiteConfirmee.legalForm : ''}`
+          + (identiteConfirmee.registration ? ` — ${identiteConfirmee.registration}` : ''),
+        nature: 'observed',
+        sourceUrl: identiteConfirmee.sourceUrl,
+        basis: identiteConfirmee.basis,
+        confidence: niveau,
+      });
+      console.log(
+        `       ${c.green}identite${c.reset} ${identiteConfirmee.legalName}` +
+          `${identiteConfirmee.legalForm ? ' ' + identiteConfirmee.legalForm : ''} ` +
+          `${c.dim}${niveau} · ${verdict.applied ? 'confirmee' : verdict.reason}${c.reset}`,
+      );
+    }
+
+    /*
+     * Le pays, etabli sur les pages deja lues.
+     *
+     * Aucune requete supplementaire : les memes pages qui portent la raison
+     * sociale portent l'adresse. Si rien ne le dit, le pays reste `null` et le
+     * profil traitera le dossier comme « a verifier » -- ce qu'il est.
+     */
+    /*
+     * La corroboration plutot que la preuve isolee.
+     *
+     * `extractCountryEvidence` ne voit que les preuves directes -- adresse,
+     * identifiant national, metadonnee. Beaucoup de sites francais n'en
+     * publient aucune aux chemins conventionnels et ressortaient UNKNOWN alors
+     * qu'ils affichaient un numero en +33 et le mot France sur leur page
+     * contact. Deux signaux secondaires concordants valent desormais une
+     * preuve ; un seul ne vaut toujours rien, et le `.fr` n'entre nulle part.
+     */
+    const pagesLues = readPages.get(prospect.id) ?? [];
+    const paysCorrobore = corroborateCountry(collectCountrySignals(pagesLues));
+    const paysLu = extractCountryEvidence(pagesLues);
+    const paysSource = paysLu.sourceUrl
+      ?? paysCorrobore.signals.find((x) => !x.corroborationOnly)?.sourceUrl
+      ?? paysCorrobore.signals[0]?.sourceUrl
+      ?? null;
+    if (paysCorrobore.country && paysSource) {
+      repos.sales.setCountry(prospect.id, {
+        country: paysCorrobore.country,
+        basis: paysLu.basis === 'NONE' ? 'CORROBORATION' : paysLu.basis,
+        sourceUrl: paysSource,
+      });
+      const fit = countryFit(paysCorrobore.country, ATLAS_SALES_ICP.countries);
+      const teinte = fit.fit === 'IN_SCOPE' ? c.green : c.amber;
+      console.log(`       ${teinte}pays${c.reset} ${paysCorrobore.country} ${c.dim}${paysCorrobore.reason.slice(0, 70)}${c.reset}`);
+    } else {
+      console.log(`       ${c.dim}pays     UNKNOWN — ${paysCorrobore.reason.slice(0, 70)}${c.reset}`);
+    }
+
+    /*
+     * L'identite, lue dans les pages et jamais dans le titre du moteur.
+     *
+     * Le nom venait du titre du resultat de recherche : pour nincar.com il
+     * commencait par « Sous-traitance… » et la base a enregistre une entreprise
+     * appelee « Sous ». Treize citations verbatim parfaitement verifiees n'ont
+     * produit aucun brouillon, la garde d'identite refusant -- a raison --
+     * d'ecrire a une societe dont le nom n'etait confirme par rien.
+     *
+     * `confirmIdentity` ne renomme jamais : il eleve la confiance et consigne
+     * ses sources. Le nom commercial affiche reste celui de la decouverte, et
+     * le nom corrobore vit comme preuve a cote.
+     */
+    const signaux = collectIdentitySignals(pagesLues);
+    const identite = corroborateIdentity(signaux, prospect.domain ?? '');
+    if (identite.name && identite.confidence >= 0.75) {
+      repos.sales.confirmIdentity(prospect.id, {
+        legalName: identite.name,
+        confidence: identite.confidence,
+        source: `identite corroboree (${[...new Set(identite.supporting.map((x) => x.sourceType))].join(', ')})`,
+      });
+      console.log(`       ${c.green}identite${c.reset} « ${identite.name} » ${c.dim}${identite.confidence} — ${identite.reason.slice(0, 56)}${c.reset}`);
+    } else if (signaux.length > 0) {
+      console.log(`       ${c.dim}identite « ${identite.name ?? 'aucune'} » ${identite.confidence} — ${identite.reason.slice(0, 56)}${c.reset}`);
+    }
+
+    const dejaEcrites = new Set(
+      repos.sales.evidenceFor(prospect.id).map((e) => e.claim.trim()),
+    );
+    for (const fact of outcome.facts) {
+      // La table est append-only : une seconde passe réécrirait la même phrase
+      // sous un second identifiant, et le compte de faits doublerait sans
+      // qu'un seul fait de plus ait été constaté.
+      if (dejaEcrites.has(fact.claim.trim())) continue;
+      repos.sales.addEvidence({
+        prospectId: prospect.id,
+        field: `signal:${fact.kind.toLowerCase()}`,
+        claim: fact.claim,
+        nature: 'observed',
+        sourceUrl: canonicalUrl(fact.sourceUrl),
+        basis: `Relevé sur ${fact.sourceUrl} — motif « ${fact.marker} ».`,
+        confidence: 0.8,
+      });
+    }
+
+    console.log(
+      `    ${outcome.factsFound > 0 ? `${c.green}✓${c.reset}` : `${c.dim}·${c.reset}`} ` +
+        `${prospect.companyName.slice(0, 28).padEnd(30)}` +
+        `FACTS ${String(already + outcome.factsFound).padStart(2)} · ` +
+        `PAGES ${String(outcome.pagesVisited).padStart(2)} ` +
+        `${c.dim}(${outcome.pagesReused} reprises, +${outcome.pagesFetchedExtra} nouvelles) · ${outcome.earlyStopReason}${c.reset}`,
+    );
+    for (const fact of outcome.facts) {
+      console.log(`       ${c.dim}« ${fact.claim.slice(0, 88)} » ${fact.sourceUrl.slice(0, 60)}${c.reset}`);
+    }
+  }
+  const enrichmentCost = spendOf(repos, mission.id, startedAt) - enrichmentStart;
+
   // ── Approche : un brouillon par PRIORITY, sur un fait sourcé ─────────────
+  // Relecture apres l'enrichissement : une identite confirmee a pu remplacer
+  // le nom et remonter la confiance, et c'est cette version que la garde doit
+  // examiner — pas celle qu'on avait avant d'aller lire les mentions legales.
   const qualified = repos.sales.forBatch(batchId).filter((p) => p.state === 'QUALIFIED');
 
   // Le score ne suffit pas à faire un PRIORITY. Le lot 002 en a produit deux à
@@ -509,10 +805,101 @@ async function main(): Promise<void> {
   // de communication. Un score élevé sur un objet mal identifié reste un score
   // élevé — c'est l'identification qui doit précéder, et cette garde le vérifie
   // une dernière fois avant qu'un brouillon existe.
+  /*
+   * Les preuves verbatim, sur les pages deja lues.
+   *
+   * La qualification ne recoit que l'extrait du moteur de recherche : on lui
+   * demandait des « faits observes » sur un texte qu'elle n'avait jamais lu, et
+   * elle rendait des reformulations. Vingt-cinq entreprises, huit PRIORITY,
+   * zero brouillon -- chaque fait echouait a la verification entre 50 et 75 %.
+   *
+   * Ici les pages sont en main. Elles sont decoupees en passages numerotes, le
+   * modele en designe quelques-uns, et la citation est relue a ce numero. Le
+   * modele n'a aucun champ ou ecrire une phrase de la page.
+   *
+   * Un seul appel par PRIORITY -- il n'y en a qu'un ou deux par cycle -- et il
+   * remplace des faits qui ne servaient a rien.
+   */
+  const verbatim = new Map<string, SourcedEvidence[]>();
+  let verbatimCalls = 0;
+  const verbatimAvant = spendOf(repos, mission.id, startedAt);
+
+  for (const p of qualified.filter((x) => x.tier === 'PRIORITY')) {
+    const pages = readPages.get(p.id) ?? [];
+    if (pages.length === 0) continue;
+    if (spendOf(repos, mission.id, startedAt) >= MAX_COST_USD) {
+      console.log(`    ${c.red}plafond atteint — pas de preuve verbatim${c.reset}`);
+      break;
+    }
+    const catalogue = buildBlockCatalogue(pages);
+    if (catalogue.size === 0) continue;
+
+    let selections: BlockSelection[] = [];
+    try {
+      const reponse = await system.provider.complete({
+        model: MODEL,
+        system: VERBATIM_SYSTEM,
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'text',
+            text: `# Entreprise
+${p.companyName}
+${p.website ?? p.domain}
+
+# Passages${catalogue.text}`,
+          }],
+        }],
+        jsonSchema: VERBATIM_SCHEMA as unknown as Record<string, unknown>,
+        maxTokens: 1200,
+        meta: {
+          missionId: mission.id, taskRef: 'verbatim-evidence', agentKey: 'ambassador',
+          purpose: 'sales-verbatim-evidence', subject: p.id, evidenceCount: null,
+        },
+      });
+      verbatimCalls += 1;
+      const brut = textOf(reponse.content).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      const a = brut.indexOf('{');
+      const b = brut.lastIndexOf('}');
+      if (a >= 0 && b > a) {
+        selections = (JSON.parse(brut.slice(a, b + 1)) as { selections?: BlockSelection[] }).selections ?? [];
+      }
+    } catch (err) {
+      console.log(`    ${c.amber}·${c.reset} ${p.companyName.slice(0, 30)} — selection impossible : ${(err as Error).message.slice(0, 40)}`);
+      continue;
+    }
+
+    const { evidence, rejected } = resolveSelections(selections, catalogue);
+    for (const r of rejected) console.log(`    ${c.red}refuse${c.reset} ${c.dim}${r.slice(0, 66)}${c.reset}`);
+    const commerciaux = distinctCommercialFacts(evidence);
+    verbatim.set(p.id, commerciaux);
+    console.log(`    ${commerciaux.length >= MIN_COMMERCIAL_FACTS ? c.green : c.amber}${commerciaux.length} fait(s) verbatim${c.reset} ${c.dim}${p.companyName.slice(0, 34)}${c.reset}`);
+
+    // Les citations rejoignent les preuves : elles se relisent plus tard.
+    const dejaLa = new Set(repos.sales.evidenceFor(p.id).map((e) => e.claim.trim()));
+    for (const f of commerciaux) {
+      if (dejaLa.has(f.evidenceQuote.trim())) continue;
+      repos.sales.addEvidence({
+        prospectId: p.id,
+        field: `verbatim:${f.blockId}`,
+        claim: f.evidenceQuote,
+        nature: 'observed',
+        sourceUrl: f.sourceUrl,
+        basis: `${INTERPRETATION_PREFIX}${f.normalizedClaim}${f.sourcePageTitle ? ` — page « ${f.sourcePageTitle} »` : ''}`,
+        confidence: 0.9,
+      });
+    }
+  }
+  const verbatimCost = spendOf(repos, mission.id, startedAt) - verbatimAvant;
+
   const priority: typeof qualified = [];
   for (const p of qualified) {
     if (p.tier !== 'PRIORITY') continue;
-    const observed = repos.sales.evidenceFor(p.id).filter((e) => e.nature === 'observed' && e.sourceUrl);
+    // Une preuve d'identite n'est pas un fait commercial : elle etablit qui
+    // edite le domaine, pas ce que l'entreprise fait.
+    const observed = repos.sales
+      .evidenceFor(p.id)
+      .filter((e) => e.nature === 'observed' && e.sourceUrl && !e.field.startsWith('identite:'));
     const check = checkPriorityEligibility({
       identity: p.identityConfidence != null && p.domain
         ? {
@@ -544,12 +931,152 @@ async function main(): Promise<void> {
   console.log(`\n  ${c.bold}Brouillons d'approche${c.reset}`);
   let drafts = 0;
   for (const prospect of priority) {
+    /*
+     * Seuls les faits reellement retrouvables dans leur source peuvent etre
+     * cites.
+     *
+     * Le message ecrit « j'ai releve ceci, publie sur votre site ». Deux
+     * natures de texte se melangeaient dans les preuves : ce qu'un extracteur a
+     * lu mot pour mot, et ce qu'un modele a resume apres lecture. Les deux
+     * portaient `observed` et une adresse source. Fujielectric citait ainsi
+     * « Integrateur d'automatisme industriel avec solutions IOT et maintenance
+     * predictive » — un resume, introuvable tel quel sur la page.
+     *
+     * La verification se fait sur les pages deja en main : elle ne coute aucune
+     * requete.
+     */
+    const texteDesPages = new Map<string, string>();
+    for (const pg of readPages.get(prospect.id) ?? []) {
+      texteDesPages.set(canonicalUrl(pg.url) ?? pg.url, readableText(pg.html));
+    }
+
+    /*
+     * Les preuves verbatim d'abord.
+     *
+     * Quand l'etape de selection a produit des citations, elles sont deja
+     * verifiees par construction : le texte vient du bloc, et le bloc a ete
+     * relu dans sa page. Les comparer a 80 % n'apprendrait rien -- une phrase
+     * comparee a elle-meme.
+     *
+     * Le chemin d'apres reste en place pour les preuves anciennes, ecrites en
+     * texte libre : celles-la doivent toujours se retrouver dans leur source.
+     */
+    const citations = verbatim.get(prospect.id) ?? [];
+    if (citations.length >= MIN_COMMERCIAL_FACTS) {
+      const parCitation = new Map(
+        repos.sales.evidenceFor(prospect.id).map((e) => [e.claim.trim(), e.id]),
+      );
+      /*
+       * L'interpretation voyage avec la citation.
+       *
+       * Elle etait ecrite dans `basis` deux lignes plus bas, puis oubliee ici :
+       * le generateur recevait des citations nues, ne trouvait aucune
+       * observation lisible, et refusait chaque brouillon. La donnee etait la,
+       * a portee de main, jamais transmise.
+       */
+      const factsVerbatim: OutreachFact[] = citations.map((f) => ({
+        evidenceId: parCitation.get(f.evidenceQuote.trim()) ?? '',
+        claim: f.evidenceQuote,
+        sourceUrl: f.sourceUrl,
+        nature: 'observed' as const,
+        // Relue au numero du passage : c'est la definition meme de ce chemin.
+        verbatim: true,
+        normalizedClaim: f.normalizedClaim,
+      })).filter((f) => f.evidenceId !== '');
+
+      if (factsVerbatim.length >= MIN_COMMERCIAL_FACTS) {
+        const sortie = buildOutreachDraft({
+          company: prospect.companyName,
+          website: prospect.website,
+          facts: factsVerbatim,
+          contact: prospect.contactEmail || prospect.contactPhone || prospect.contactPage
+            ? {
+                name: prospect.contactName, role: prospect.contactRole,
+                email: prospect.contactEmail, phone: prospect.contactPhone,
+                contactPage: prospect.contactPage, sourceUrl: prospect.contactSourceUrl,
+                confidence: prospect.contactConfidence ?? 0.5,
+                named: Boolean(prospect.contactName?.trim()),
+              }
+            : null,
+          whyThisCompany: prospect.whyFit ?? '',
+          senderName: config.sales.senderName,
+          offer: { priceEur: 49, deliveryHours: 24 },
+        });
+        /*
+         * Le controle d'humanisation, avant que le dossier soit relisible.
+         *
+         * La regle vit dans `docs/SALES_HUMANIZATION_POLICY.md` ; ce qui en est
+         * verifiable est applique ici. Il vient APRES la verification
+         * factuelle : un message chaleureux et faux reste faux, et aucune des
+         * gardes precedentes n'est assouplie par ce controle.
+         *
+         * Seul `BLOCKED` arrete -- ce qui se lit franchement comme une machine.
+         * `NEEDS_EDIT` laisse passer avec sa remarque : c'est le role
+         * d'Approvals de trancher le style, pas celui d'un lot nocturne.
+         */
+        const humain = sortie.draft
+          ? checkHumanization({ body: sortie.draft.messageEmail, kind: 'FIRST_TOUCH' })
+          : null;
+        if (humain && humain.verdict === 'BLOCKED') {
+          console.log(`    ${c.amber}·${c.reset} ${prospect.companyName.slice(0, 30)} — humanisation : ${humain.blockers[0]?.slice(0, 50)}`);
+          continue;
+        }
+        if (humain && humain.remarks.length > 0) {
+          console.log(`    ${c.dim}  humanisation NEEDS_EDIT : ${humain.remarks[0]?.slice(0, 60)}${c.reset}`);
+        }
+        if (sortie.draft) {
+          repos.sales.setOutreach(prospect.id, {
+            personalizationFactId: sortie.draft.personalizationFact.evidenceId,
+            messageShort: sortie.draft.messageShort,
+            messageEmail: sortie.draft.messageEmail,
+            sourceUrl: sortie.draft.sourceUsedForPersonalization,
+          });
+          /*
+           * L'objet, pose ici et sans appel de modele.
+           *
+           * Trois brouillons complets sont restes bloques faute d'une ligne de
+           * sujet : un courriel sans objet arrive comme un envoi automatique.
+           * Il se deduit de ce qui est deja verifie.
+           */
+          repos.sales.reviseOutreachText(prospect.id, {
+            // L'objet vient du brouillon : un seul generateur, un seul resultat.
+            subject: sortie.draft.subject,
+          });
+          repos.sales.setState(prospect.id, 'READY_FOR_REVIEW');
+          drafts++;
+          console.log(`    ${c.green}✓${c.reset} ${prospect.companyName.slice(0, 34)} ${c.dim}${citations.length} citation(s) verbatim${c.reset}`);
+          continue;
+        }
+        console.log(`    ${c.amber}·${c.reset} ${prospect.companyName.slice(0, 30)} — ${sortie.reason.slice(0, 50)}`);
+        continue;
+      }
+    }
+
     const facts: OutreachFact[] = repos.sales
       .evidenceFor(prospect.id)
+      /*
+       * Une preuve d'identite n'est pas un fait commercial.
+       *
+       * Cette exclusion existait dans l'audit, dans la vue d'approbation et
+       * dans le controle d'eligibilite ; elle manquait ici, au seul endroit qui
+       * ecrit le message. Sur igus.fr, le seul element verifie a 100 % etait
+       * `identite:entite_juridique` = « IGUS SAS » -- le courriel aurait annonce
+       * « j'ai releve ceci, publie sur votre site : IGUS SAS ».
+       *
+       * La regle est celle des autres chemins, mot pour mot.
+       */
+      .filter((e) => isCommercialEvidence(e))
       .filter((e) => e.sourceUrl)
-      .map((e) => ({
-        evidenceId: e.id, claim: e.claim, sourceUrl: e.sourceUrl!, nature: e.nature,
-      }));
+      .filter((e) => {
+        const texte = texteDesPages.get(canonicalUrl(e.sourceUrl!) ?? e.sourceUrl!);
+        // Page non relue dans ce cycle : on ne peut ni confirmer ni infirmer,
+        // et on ne cite pas ce qu'on ne peut pas verifier.
+        if (texte === undefined) return false;
+        return verifyClaimAgainstSource(e.claim, texte).verifiable;
+      })
+      // Le meme lecteur que partout ailleurs : l'interpretation rangee dans
+      // `basis` revient au generateur au lieu d'etre perdue.
+      .map((e) => outreachFactFrom(e));
 
     const outcome = buildOutreachDraft({
       company: prospect.companyName,
@@ -565,6 +1092,7 @@ async function main(): Promise<void> {
           }
         : null,
       whyThisCompany: prospect.whyFit ?? '',
+      senderName: config.sales.senderName,
       offer: { priceEur: 49, deliveryHours: 24 },
     });
 
@@ -600,6 +1128,36 @@ async function main(): Promise<void> {
   say(`  PRIORITY:    ${all.filter((p) => p.tier === 'PRIORITY').length}`);
   say();
 
+  // L'enrichissement, mesuré et non supposé. Le coût est lu dans le registre
+  // des appels, pas affirmé à zéro : si quelqu'un branche un modèle ici un
+  // jour, le chiffre le dira au lieu de mentir par construction.
+  if (enrichment.size > 0) {
+    say(`  ${c.bold}ENRICHISSEMENT PRIORITY${c.reset}`);
+    for (const [prospectId, outcome] of enrichment) {
+      const p = all.find((x) => x.id === prospectId);
+      const sourced = repos.sales
+        .evidenceFor(prospectId)
+        .filter((e) => e.nature === 'observed' && e.sourceUrl).length;
+      say(`    ${p?.companyName ?? prospectId}`);
+      say(`      FACTS_FOUND:       ${sourced} fait(s) constaté(s) et sourcé(s)`);
+      // Trois mesures distinctes plutôt qu'une ambiguë : « 0 page visitée »
+      // a décrit un prospect dont quatre pages avaient bien été lues, mais par
+      // l'étape précédente. Le total, la reprise et le coût réel se lisent
+      // maintenant séparément.
+      say(`      PAGES_VISITED:      ${outcome.pagesVisited}`);
+      say(`      PAGES_REUSED:       ${outcome.pagesReused} (déjà chargées par l'étape contacts)`);
+      say(`      PAGES_FETCHED_EXTRA:${String(outcome.pagesFetchedExtra).padStart(3)} (${outcome.fetchFailures} adresse(s) sans réponse)`);
+      say(`      EARLY_STOP_REASON: ${outcome.earlyStopReason}`);
+      for (const fact of outcome.facts) {
+        say(`      · « ${fact.claim.slice(0, 100)} »`);
+        say(`        ${fact.sourceUrl}`);
+      }
+    }
+    say(`    ENRICHMENT_COST:     ${enrichmentCost.toFixed(4)} $ ` +
+      `${enrichmentCost === 0 ? '(aucun appel de modèle : extraction déterministe)' : ''}`);
+    say();
+  }
+
   for (const p of ready) {
     const fact = repos.sales.evidenceFor(p.id).find((e) => e.id === p.personalizationFactId);
     say(`  ── ${p.companyName}`);
@@ -620,7 +1178,27 @@ async function main(): Promise<void> {
   say(`  COST / DISCOVERED: ${all.length ? (cost / all.length).toFixed(5) : '—'} $`);
   say(`  COST / QUALIFIED:  ${qualified.length ? (cost / qualified.length).toFixed(5) : '—'} $`);
   say(`  COST / PRIORITY:   ${priority.length ? (cost / priority.length).toFixed(5) : '—'} $`);
+  // Ce que la preuve verbatim a coute, distinct du reste : c'est la seule
+  // depense ajoutee par le nouveau chemin, et elle doit se lire seule.
+  say(`  MODEL CALLS:       ${llmCalls + verbatimCalls} (${llmCalls} qualification · ${verbatimCalls} preuve verbatim)`);
+  say(`  EVIDENCE COST:     ${verbatimCost.toFixed(5)} $`);
+  say(`  TOTAL DRAFT COST:  ${drafts > 0 ? (cost / drafts).toFixed(5) : '—'} $ par brouillon`);
   say(`  DURÉE:           ${formatDuration(Date.now() - started)}`);
+  say();
+  // ── Fiabilite du cycle ───────────────────────────────────────────────────
+  const contacts = all.filter((p) => p.contactObserved && (p.contactEmail || p.contactPhone || p.contactPage)).length;
+  const identites = all.filter((p) => (p.identityConfidence ?? 0) >= 0.75).length;
+  const faits2 = all.filter((p) => repos.sales.evidenceFor(p.id)
+    .filter((e) => e.nature === 'observed' && e.sourceUrl && !e.field.startsWith('identite:')).length >= 2).length;
+
+  say(`  DOMAIN_FETCH_ATTEMPTS:  ${reseau.attempts}`);
+  say(`  DOMAIN_FETCH_ABORTS:    ${reseau.aborts}${reseau.abortedHosts.length ? '  ' + reseau.abortedHosts.join(', ') : ''}`);
+  say(`  TIME_SAVED_ESTIMATE:    ${Math.round(reseau.timeSavedMs / 1000)} s`);
+  say(`  CONTACTS_FOUND:         ${contacts}`);
+  say(`  IDENTITIES_VERIFIED:    ${identites}`);
+  say(`  FACTS_VALID:            ${faits2}`);
+  say(`  DRAFT_ELIGIBLE:         ${priority.length}`);
+  say(`  READY_FOR_REVIEW_CREATED: ${drafts}`);
   say();
   say(`  HUMAN REVIEW:    PENDING`);
   say(`  READY TO CONTACT: ${drafts} prospect(s) — aucun message envoyé`);

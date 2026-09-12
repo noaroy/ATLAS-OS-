@@ -6,6 +6,7 @@
  * rien. Ce script lit, applique les nouvelles gardes, et dit ce qui serait
  * tombé si elles avaient existé au moment du lot.
  */
+import { loadAtlasEnv } from '../packages/core/src/index.ts';
 import Database from 'better-sqlite3';
 import {
   classifyPageType,
@@ -14,6 +15,11 @@ import {
   checkPriorityEligibility,
   SALES_TIER_THRESHOLDS,
 } from '../packages/departments/src/index.ts';
+
+// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
+// pas pour ce processus et la configuration parait absente sans qu'aucune
+// erreur ne le dise.
+loadAtlasEnv();
 
 const batchId = process.argv[2];
 if (!batchId) throw new Error('usage: reaudit-batch <batch-id>');

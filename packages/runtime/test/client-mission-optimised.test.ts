@@ -149,7 +149,7 @@ describe('le pays : une preuve écarte seule, une présomption va en revue', () 
     assert.equal(presume.stage, 'REVIEW_REQUIRED');
     assert.match(presume.reason ?? '', /concordance/);
     assert.equal((presume.detail as { triage: { priority: string } }).triage.priority, 'P3');
-    assert.equal(s.metrics?.filter.countryExcluded, 2);
+    assert.equal(s.metrics?.filter.countryExcluded, 1, 'la présomption est une revue, pas une exclusion');
   });
 });
 

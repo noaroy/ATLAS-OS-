@@ -326,6 +326,23 @@ export class LlmCallRepository {
     };
   }
 
+  /**
+   * Le coût d'une mission depuis un instant, en une somme SQL.
+   *
+   * `forMission` rend au plus N lignes : sommer côté application plafonne
+   * silencieusement le budget d'une mission longue — une garde qui compte
+   * moins que ce qui a été dépensé n'est plus une garde.
+   */
+  costSince(missionId: MissionId, sinceIso: string, taskRef?: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM llm_calls
+          WHERE mission_id = ? AND created_at >= ? AND (? IS NULL OR task_ref = ?)`,
+      )
+      .get(missionId, sinceIso, taskRef ?? null, taskRef ?? null) as { c: number } | undefined;
+    return round6(Number(row?.c ?? 0));
+  }
+
   /** Vrai dès qu'une mission possède une comptabilité par appel. */
   hasCalls(missionId: MissionId): boolean {
     const row = this.db

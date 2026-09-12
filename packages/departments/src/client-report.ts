@@ -429,9 +429,11 @@ export function buildClientReport(input: {
   status?: 'PARTIAL' | 'FINAL';
   criteriaLabels?: Array<{ key: string; label: string; kind: 'required' | 'preferred' | 'exclusion' }>;
   exclusions?: ReportExclusion[];
+  /** Des limites connues de l'appelant seul : sites injoignables, vérifications en attente. */
+  extraLimitations?: readonly string[];
 }): ClientReport {
   const prospects: ReportProspect[] = [];
-  const limitations: string[] = [];
+  const limitations: string[] = [...(input.extraLimitations ?? [])];
   const sources = new Set<string>();
 
   for (const entry of input.entries) {

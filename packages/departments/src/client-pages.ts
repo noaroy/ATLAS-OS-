@@ -144,6 +144,12 @@ export function planPages(input: PagePlanInput): Array<{ url: string; kind: Site
   if (input.relevanceHits < 2) prendre(produits[1], 'accueil peu explicite');
   prendre(service[0], 'service');
   prendre(identite[1], 'seconde page d’identité');
+  /*
+   * Un site dont aucun lien ne se classe — « Priser », « Referenser » — a
+   * quand même des pages : deux d'entre elles valent mieux qu'un chemin
+   * deviné, et qu'un verdict rendu sur le seul accueil.
+   */
+  if (choix.length < 2) for (const l of par('OTHER').slice(0, 2)) prendre(l, 'page du site, sans classement');
 
   if (choix.length === 0 || (!input.countryKnown && identite.length === 0)) {
     for (const chemin of input.fallbackIdentityPaths) {
@@ -174,12 +180,14 @@ function scoreIdentite(l: SiteLink): number {
  * large — un terme de trop coûte un appel modèle, un terme de moins coûte
  * une société.
  */
-const ROLE_TERMS = [
-  'distribut', 'aterforsalj', 'återförsälj', 'reseller', 'revendeur', 'grossist', 'wholesale',
-  'leverantor', 'leverantör', 'supplier', 'fournisseur', 'agent', 'representant', 'partner',
-  'integrat', 'oem', 'fabrikant', 'tillverk', 'manufactur', 'fabricant', 'hersteller', 'handler', 'händler',
-  'vertrieb', 'saljer', 'säljer', 'forsaljning', 'försäljning', 'vi erbjuder', 'we offer', 'we supply',
-];
+const ROLE_TERMS = [...new Set([
+  'distribut', 'återförsälj', 'reseller', 'revendeur', 'grossist', 'wholesale',
+  'leverantör', 'supplier', 'fournisseur', 'agent', 'representant', 'partner',
+  'integrat', 'oem', 'fabrikant', 'tillverk', 'manufactur', 'fabricant', 'hersteller', 'händler',
+  'vertrieb', 'säljer', 'försäljning', 'vi erbjuder', 'we offer', 'we supply',
+  // Repliés une fois pour toutes : « leverantör » et « leverantor » sont le
+  // même terme, et comptaient deux fois dans la pertinence.
+].map((t) => t.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()))];
 
 export interface RelevancePrecheck {
   /** Les termes du brief trouvés, distincts. */
@@ -213,20 +221,18 @@ export function relevancePrecheck(
   });
   const chercher = (termes: readonly string[]): Array<{ term: string; quote: string; url: string }> => {
     const out: Array<{ term: string; quote: string; url: string }> = [];
+    const vus = new Set<string>();
     for (const terme of termes) {
       const racine = stemOf(terme);
-      if (racine.length < 3) continue;
+      if (racine.length < 3 || vus.has(racine)) continue;
+      vus.add(racine);
+      // Un mot entier au début : « maskin » ne se lit pas dans « asmaskin » —
+      // mais « påsmaskiner/förpackningsmaskiner » se lit après la barre.
+      const motif = new RegExp(`(?<![a-z0-9])${racine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
       for (const t of textes) {
-        const i = t.plat.indexOf(racine);
-        if (i === -1) continue;
-        // Un mot entier au début : « maskin » ne se lit pas dans « asmaskin ».
-        if (i > 0 && /[a-z0-9]/.test(t.plat[i - 1]!)) {
-          const j = t.plat.indexOf(` ${racine}`);
-          if (j === -1) continue;
-          out.push({ term: terme, quote: t.text.slice(Math.max(0, j - 60), j + 100).trim(), url: t.url });
-        } else {
-          out.push({ term: terme, quote: t.text.slice(Math.max(0, i - 60), i + 100).trim(), url: t.url });
-        }
+        const m = motif.exec(t.plat);
+        if (!m) continue;
+        out.push({ term: terme, quote: t.text.slice(Math.max(0, m.index - 60), m.index + 100).trim(), url: t.url });
         break;
       }
     }
@@ -294,7 +300,8 @@ export function extractSiteFacts(
  * Ce qu'un passage ne dit jamais d'utile : cookies, connexion, panier,
  * droits réservés. Les envoyer coûte des jetons et dilue le reste.
  */
-const BRUIT = /cookie|integritet|privacy|gdpr|personuppgift|logga in|log in|sign in|varukorg|cart|checkout|kassa|alla rattigheter|alla rättigheter|all rights reserved|copyright|©|javascript|webbplats anvander|webbplatsen anvander|denna webbplats|this website uses|nyhetsbrev|newsletter|prenumerera|subscribe|läs mer\s*$|read more\s*$/i;
+// Les mots courts à la frontière du mot : « cart » écartait « carton sealing machines ».
+const BRUIT = /cookie|integritet|\bprivacy\b|\bgdpr\b|personuppgift|logga in|\blog in\b|\bsign in\b|varukorg|\bcart\b|\bcheckout\b|\bkassa\b|alla rattigheter|alla rättigheter|all rights reserved|copyright|©|\bjavascript\b|webbplats anvander|webbplatsen anvander|denna webbplats|this website uses|nyhetsbrev|newsletter|prenumerera|\bsubscribe\b|läs mer\s*$|read more\s*$/i;
 
 /**
  * Le catalogue réduit à ce qui peut fonder un critère : les passages qui
@@ -405,6 +412,8 @@ export interface RankedContact {
   sourceUrl: string | null;
   intent: string | null;
   confidence: ContactChannelConfidence;
+  /** Pour un courriel : porte-t-il le domaine du site ? `null` pour les autres canaux. */
+  sameDomain: boolean | null;
   /** Pourquoi ce canal, en un mot lisible dans la fiche. */
   why: string;
   /** Ce qui a été écarté, et pourquoi — un silence ne s'audite pas. */
@@ -454,14 +463,14 @@ export function rankContactChannels(input: {
       : meilleur.intent === 'EXPORT' ? 'boîte export'
       : meilleur.intent === 'SALES' ? 'boîte commerciale'
       : meilleur.intent === 'GENERAL' ? 'accueil général' : 'boîte sans intention lisible';
-    return { method: 'EMAIL', value: meilleur.value, sourceUrl: meilleur.sourceUrl, intent: meilleur.intent, confidence, why, rejected };
+    return { method: 'EMAIL', value: meilleur.value, sourceUrl: meilleur.sourceUrl, intent: meilleur.intent, confidence, sameDomain: meme, why, rejected };
   }
   if (input.form) {
-    return { method: 'FORM', value: input.form.value, sourceUrl: input.form.sourceUrl, intent: input.form.intent, confidence: 'MEDIUM', why: 'formulaire de contact publié', rejected };
+    return { method: 'FORM', value: input.form.value, sourceUrl: input.form.sourceUrl, intent: input.form.intent, confidence: 'MEDIUM', sameDomain: null, why: 'formulaire de contact publié', rejected };
   }
   const tel = input.phones[0];
   if (tel) {
-    return { method: 'PHONE', value: tel.value, sourceUrl: tel.sourceUrl, intent: tel.intent, confidence: 'LOW', why: 'téléphone seul', rejected };
+    return { method: 'PHONE', value: tel.value, sourceUrl: tel.sourceUrl, intent: tel.intent, confidence: 'LOW', sameDomain: null, why: 'téléphone seul', rejected };
   }
-  return { method: 'NONE', value: null, sourceUrl: null, intent: null, confidence: 'NONE', why: 'aucune coordonnée commerciale publiée', rejected };
+  return { method: 'NONE', value: null, sourceUrl: null, intent: null, confidence: 'NONE', sameDomain: null, why: 'aucune coordonnée commerciale publiée', rejected };
 }

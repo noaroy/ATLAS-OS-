@@ -17,6 +17,11 @@
  * localité, suffit aussi, quelle que soit la localité.
  */
 
+/*
+ * « Roma » (Gotland) est aussi Rome, « Ed », « Mark », « Vara », « Ale » sont
+ * des mots courants ailleurs : retirés. Une localité en moins coûte un pays
+ * « à vérifier » ; une localité ambiguë coûte un faux pays.
+ */
 const LOCALITES_SUEDOISES = [
   // Les grandes villes et leurs communes.
   'Stockholm', 'Göteborg', 'Malmö', 'Uppsala', 'Västerås', 'Örebro', 'Linköping', 'Helsingborg', 'Jönköping',
@@ -46,11 +51,11 @@ const LOCALITES_SUEDOISES = [
   'Johanneshov', 'Enskede', 'Bandhagen', 'Älvsjö', 'Vårby', 'Jordbro', 'Västerhaninge', 'Handen', 'Vega',
   // Göteborg et l'ouest.
   'Askim', 'Hisings Backa', 'Hisings Kärra', 'Torslanda', 'Västra Frölunda', 'Angered', 'Landvetter',
-  'Mölnlycke', 'Lindome', 'Billdal', 'Sävedalen', 'Jonsered', 'Floda', 'Nol', 'Surte', 'Bohus', 'Kode',
-  'Ytterby', 'Skärhamn', 'Henån', 'Munkedal', 'Tanumshede', 'Bengtsfors', 'Mellerud', 'Vara', 'Grästorp',
+  'Mölnlycke', 'Lindome', 'Billdal', 'Sävedalen', 'Jonsered', 'Floda', 'Surte', 'Bohus', 'Kode',
+  'Ytterby', 'Skärhamn', 'Henån', 'Munkedal', 'Tanumshede', 'Bengtsfors', 'Mellerud', 'Grästorp',
   'Herrljunga', 'Vårgårda', 'Tranemo', 'Svenljunga', 'Bollebygd', 'Habo', 'Mullsjö', 'Tibro', 'Hjo',
   'Karlsborg', 'Töreboda', 'Götene', 'Viskafors', 'Fristad', 'Dalsjöfors', 'Sandared', 'Skene', 'Horred',
-  'Kungshamn', 'Hunnebostrand', 'Ed', 'Färgelanda', 'Lilla Edet', 'Orust', 'Tjörn', 'Öckerö', 'Hönö',
+  'Kungshamn', 'Hunnebostrand', 'Färgelanda', 'Lilla Edet', 'Orust', 'Tjörn', 'Öckerö', 'Hönö',
   // Le sud.
   'Limhamn', 'Arlöv', 'Burlöv', 'Bjärred', 'Åkarp', 'Svedala', 'Skurup', 'Sjöbo', 'Tomelilla', 'Simrishamn',
   'Hörby', 'Höör', 'Kävlinge', 'Löddeköpinge', 'Ödåkra', 'Bjuv', 'Åstorp', 'Klippan', 'Perstorp', 'Örkelljunga',
@@ -66,12 +71,12 @@ const LOCALITES_SUEDOISES = [
   'Storvik', 'Valbo', 'Älvkarleby', 'Björklinge', 'Örbyhus', 'Gimo', 'Alunda', 'Öregrund', 'Östervåla',
   'Heby', 'Kolbäck', 'Ramnäs', 'Virsbo', 'Krylbo', 'Horndal', 'Långshyttan', 'Grängesberg', 'Fredriksberg',
   'Grycksbo', 'Bjursås', 'Svärdsjö', 'Djurås', 'Insjön', 'Orsa', 'Älvdalen', 'Vansbro', 'Sälen', 'Idre',
-  'Munkfors', 'Forshaga', 'Kil', 'Grums', 'Årjäng', 'Storfors', 'Hällefors', 'Kopparberg', 'Fjugesta',
+  'Munkfors', 'Forshaga', 'Grums', 'Årjäng', 'Storfors', 'Hällefors', 'Kopparberg', 'Fjugesta',
   'Frövi', 'Fellingsbro', 'Kumla', 'Hallsberg', 'Pålsboda', 'Laxå', 'Töreboda', 'Gullspång', 'Hova',
   'Malmköping', 'Sparreholm', 'Stigtomta', 'Vrena', 'Gnesta', 'Björnlunda', 'Vagnhärad', 'Hölö', 'Mölnbo',
   'Ljungsbro', 'Åby', 'Kolmården', 'Krokek', 'Skänninge', 'Mantorp', 'Borensberg', 'Vikingstad', 'Sturefors',
   'Rimforsa', 'Österbymo', 'Ankarsrum', 'Gamleby', 'Överum', 'Målilla', 'Virserum', 'Mariannelund',
-  'Kisa', 'Horn', 'Slite', 'Hemse', 'Klintehamn', 'Roma', 'Fårösund',
+  'Kisa', 'Slite', 'Hemse', 'Klintehamn', 'Fårösund',
 ];
 
 const aplatir = (s: string): string => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();

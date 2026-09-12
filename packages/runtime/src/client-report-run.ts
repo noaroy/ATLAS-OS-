@@ -36,8 +36,17 @@ export interface ClientRunReport {
   csv: string;
   exclusionsCsv: string;
   retained: ClientCandidate[];
+  /** À revoir, avec un dossier lu : présentes dans le rapport, marquées. */
   reviewRequired: ClientCandidate[];
+  /**
+   * À revoir avant toute lecture — pays présumé hors marché, seule page sans
+   * terme du brief : aucun dossier, donc aucune fiche. Elles sont dans la
+   * file de revue interne et comptées ici, pas dans « à revoir ».
+   */
+  pendingHumanCheck: ClientCandidate[];
   excluded: ClientCandidate[];
+  /** Injoignables après leurs tentatives : ni analysées, ni écartées. */
+  unreachable: ClientCandidate[];
   evidenceIds: string[];
   costUsd: number;
 }
@@ -150,8 +159,11 @@ export function buildClientRunReport(repos: Repositories, runId: string, input: 
   const mission = repos.missions.require(runId);
   const tous = repos.clientCandidates.forRun(runId);
   const retained = tous.filter((c) => c.stage === 'RETAINED');
-  const reviewRequired = tous.filter((c) => c.stage === 'REVIEW_REQUIRED');
+  const avecDossier = (c: ClientCandidate) => Boolean(c.companyId && c.opportunityId);
+  const reviewRequired = tous.filter((c) => c.stage === 'REVIEW_REQUIRED' && avecDossier(c));
+  const pendingHumanCheck = tous.filter((c) => c.stage === 'REVIEW_REQUIRED' && !avecDossier(c));
   const excluded = tous.filter((c) => c.stage === 'EXCLUDED');
+  const unreachable = tous.filter((c) => c.stage === 'FAILED_FINAL' || c.stage === 'FAILED_RETRYABLE');
   const listes = input.includeReviewRequired === false ? retained : [...retained, ...reviewRequired];
 
   const entries: ReportEntry[] = [];
@@ -183,7 +195,15 @@ export function buildClientRunReport(repos: Repositories, runId: string, input: 
   const sources = [...new Set(entries.flatMap((e) => e.evidence.map((x) => x.sourceRef)).filter((s): s is string => Boolean(s)))];
   const appels = repos.llmCalls.forMission(runId, 5000);
   const costUsd = appels.reduce((s, a) => s + (a.costUsd ?? 0), 0);
-  const analysed = tous.filter((c) => !['DISCOVERED', 'FILTERED', 'FETCHED'].includes(c.stage) && c.category !== 'DIRECTORY').length;
+  // Analysée : lue et jugée. Ni en attente, ni injoignable, ni un annuaire écarté d'office.
+  const analysed = tous.filter((c) => ['RETAINED', 'REVIEW_REQUIRED', 'EXCLUDED'].includes(c.stage) && c.category !== 'DIRECTORY').length;
+  const extraLimitations: string[] = [];
+  if (pendingHumanCheck.length > 0) {
+    extraLimitations.push(`${pendingHumanCheck.length} société(s) en attente d’une vérification humaine avant lecture (pays présumé hors marché, ou aucun terme du brief sur la seule page lisible) : ${pendingHumanCheck.map((c) => c.domain).join(', ')}.`);
+  }
+  if (unreachable.length > 0) {
+    extraLimitations.push(`${unreachable.length} site(s) injoignable(s) au moment de la lecture, non analysé(s) : ${unreachable.map((c) => c.domain).join(', ')}.`);
+  }
 
   const report = buildClientReport({
     clientName: brief.client.name,
@@ -206,10 +226,11 @@ export function buildClientRunReport(repos: Repositories, runId: string, input: 
     status: input.status,
     criteriaLabels: allCriteria(brief).map((c) => ({ key: c.key, label: c.label, kind: c.kind })),
     exclusions,
+    extraLimitations,
   });
 
   return {
     report, html: reportToHtml(report), csv: reportToCsv(report), exclusionsCsv: exclusionsToCsv(report),
-    retained, reviewRequired, excluded, evidenceIds, costUsd,
+    retained, reviewRequired, pendingHumanCheck, excluded, unreachable, evidenceIds, costUsd,
   };
 }

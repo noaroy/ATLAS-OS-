@@ -84,7 +84,19 @@ export class ClientCacheRepository {
 
   purgePages(olderThanMs = PAGE_CACHE_TTL_MS, now = nowIso()): number {
     const limite = new Date(Date.parse(now) - olderThanMs).toISOString();
-    return this.db.prepare('DELETE FROM page_cache WHERE fetched_at < ?').run(limite).changes;
+    const perimees = this.db.prepare('DELETE FROM page_cache WHERE fetched_at < ?').run(limite).changes;
+    // Un échec transitoire — panne serveur, délai, TLS — n'a rien à faire en
+    // mémoire, quelle que soit sa date : seuls un 404 et une adresse interdite
+    // ne changeront pas demain.
+    const transitoires = this.db.prepare(
+      "DELETE FROM page_cache WHERE ok = 0 AND (kind IS NULL OR kind NOT IN ('HTTP_4XX', 'BLOCKED'))",
+    ).run().changes;
+    return perimees + transitoires;
+  }
+
+  purgeQualifications(olderThanMs = QUALIFICATION_CACHE_TTL_MS, now = nowIso()): number {
+    const limite = new Date(Date.parse(now) - olderThanMs).toISOString();
+    return this.db.prepare('DELETE FROM qualification_cache WHERE created_at < ?').run(limite).changes;
   }
 
   qualificationKey(domain: string, briefHash: string, contentHash: string): string {

@@ -38,6 +38,14 @@ const c = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[32m'
 const arg = (n: string) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
 const flag = (n: string) => process.argv.includes(`--${n}`);
 const liste = (n: string) => (arg(n) ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+/** Un entier d'argument, borné — jamais NaN : `--concurrency=abc` donnait zéro travailleur et un lot muet. */
+const entier = (n: string, defaut: number, min: number, max: number): number => {
+  const brut = arg(n);
+  if (brut === undefined || brut === '') return defaut;
+  const v = Number(brut);
+  if (!Number.isInteger(v) || v < min || v > max) throw new Error(`--${n}=${brut} : un entier entre ${min} et ${max}`);
+  return v;
+};
 const commande = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'status';
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -114,7 +122,7 @@ async function main(): Promise<void> {
         if (!m) { console.log(`    ${c.dim}(lot écrit avant l’instrumentation : traités ${b.processed}, retenus ${b.retained}, à revoir ${b.reviewRequired}, écartés ${b.excluded}, ${b.costUsd.toFixed(4)} $)${c.reset}`); continue; }
         console.log(`    SEARCH      requêtes ${m.search.queries} · résultats bruts ${m.search.rawResults} · domaines uniques ${m.search.uniqueDomains} · rendement ${m.search.yields.join('/') || '—'} · ${m.search.stoppedBecause ?? ''}`);
         console.log(`    FILTER      annuaires ${m.filter.directoryExcluded} · sans texte ${m.filter.noTextExcluded} · hors sujet ${m.filter.relevanceExcluded} · pays ${m.filter.countryExcluded} · concurrents ${m.filter.competitorExcluded}`);
-        console.log(`    PROCESS     candidats ${m.process.candidates} · pages ${m.process.pagesFetched}/${m.process.pagesAttempted} (${(m.process.pagesFetched / Math.max(1, m.process.candidates)).toFixed(1)}/candidat, ${m.process.cacheHits} en mémoire) · appels ${m.process.llmCalls} (+${m.process.llmCached} en mémoire) · jetons ${m.process.inputTokens}→${m.process.outputTokens} · ${m.process.costUsd.toFixed(4)} $`);
+        console.log(`    PROCESS     candidats ${m.process.candidates} · pages lues ${m.process.pagesRead} (${(m.process.pagesRead / Math.max(1, m.process.candidates)).toFixed(1)}/candidat ; ${m.process.pagesFetched} réseau / ${m.process.pagesAttempted} tentées, ${m.process.cacheHits} en mémoire) · appels ${m.process.llmCalls} (+${m.process.llmCached} en mémoire) · jetons ${m.process.inputTokens}→${m.process.outputTokens} · ${m.process.costUsd.toFixed(4)} $`);
         console.log(`    QUALITY     retenus ${m.quality.retained} · à revoir ${m.quality.reviewRequired} · écartés ${m.quality.excluded} · échecs ${m.quality.failed} · approuvés seuls ${m.quality.autoApproved} · écartés seuls ${m.quality.autoExcluded} · à confirmer ${m.quality.toConfirmTotal} point(s)`);
         console.log(`    PERFORMANCE lot ${s(m.timing.batchMs)} · ${m.timing.concurrency} de front · ${s(m.timing.avgCandidateMs)}/candidat · fetch ${s(m.timing.fetch)} · modèle ${s(m.timing.llm)} · revue humaine estimée ${Math.round(m.quality.reviewRequired * 1.5 + m.quality.retained * 0.5)} min`);
       }
@@ -154,8 +162,9 @@ async function main(): Promise<void> {
 
     if (commande === 'batch') {
       const { brief, context } = loadClientRun(repos, runId);
-      const size = Number(arg('size') ?? CLIENT_BATCH_DEFAULTS.batchSize);
-      const queries = Number(arg('queries') ?? CLIENT_BATCH_DEFAULTS.maxQueries);
+      const size = entier('size', CLIENT_BATCH_DEFAULTS.batchSize, 1, 500);
+      const queries = entier('queries', CLIENT_BATCH_DEFAULTS.maxQueries, 0, 64);
+      const concurrency = entier('concurrency', 4, 1, 8);
       // Les plafonds viennent du même endroit que ceux que le preflight affiche.
       const plafonds = clientBudgetLimits(config.ai, { budget: arg('budget'), batchBudget: arg('batch-budget') });
       const runBudget = plafonds.mission.usd;
@@ -196,7 +205,7 @@ async function main(): Promise<void> {
       }, {
         runId, batchSize: size, maxQueries: queries, runBudgetUsd: runBudget, batchBudgetUsd: batchBudget,
         dailyBudgetUsd: daily, resumeOnly: resume || seedDomains.length > 0, exclude, seedDomains, createdBy: 'client-mission',
-        concurrency: Number(arg('concurrency') ?? 4), cache: !flag('no-cache'),
+        concurrency, cache: !flag('no-cache'),
       });
 
       console.log(`\n  ${c.bold}LOT #${summary.batch} TERMINÉ${c.reset} en ${((Date.now() - started) / 1000).toFixed(0)} s`);
@@ -206,7 +215,7 @@ async function main(): Promise<void> {
       if (summary.metrics) {
         const m = summary.metrics;
         const s = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
-        console.log(`  ${c.dim}mesures · recherche ${s(m.search.ms)} (${m.search.uniqueDomains} domaines uniques${m.search.stoppedBecause ? `, arrêt : ${m.search.stoppedBecause}` : ''}) · candidats ${m.process.candidates} (${m.timing.concurrency} de front) · pages ${m.process.pagesFetched}/${m.process.pagesAttempted} tentées (${m.process.pagesUseful} utiles, ${m.process.fetchTimeouts} timeouts, ${m.process.cacheHits} en mémoire) · appels ${m.process.llmCalls} (+${m.process.llmCached} en mémoire) · jetons ${m.process.inputTokens}→${m.process.outputTokens}${c.reset}`);
+        console.log(`  ${c.dim}mesures · recherche ${s(m.search.ms)} (${m.search.uniqueDomains} domaines uniques${m.search.stoppedBecause ? `, arrêt : ${m.search.stoppedBecause}` : ''}) · candidats ${m.process.candidates} (${m.timing.concurrency} de front) · pages lues ${m.process.pagesRead} (${m.process.pagesFetched} par le réseau sur ${m.process.pagesAttempted} tentées, ${m.process.cacheHits} en mémoire, ${m.process.pagesUseful} utiles, ${m.process.fetchTimeouts} timeouts) · appels ${m.process.llmCalls} (+${m.process.llmCached} en mémoire) · jetons ${m.process.inputTokens}→${m.process.outputTokens}${c.reset}`);
         console.log(`  ${c.dim}temps · fetch ${s(m.timing.fetch)} · parse ${s(m.timing.parse)} · pays ${s(m.timing.country)} · identité ${s(m.timing.identity)} · concurrents ${s(m.timing.competitors)} · modèle ${s(m.timing.llm)} · contacts ${s(m.timing.contacts)} · écriture ${s(m.timing.persist)} · moyenne ${s(m.timing.avgCandidateMs)}/candidat${c.reset}`);
         console.log(`  ${c.dim}filtre · annuaires ${m.filter.directoryExcluded} · sans texte ${m.filter.noTextExcluded} · hors sujet ${m.filter.relevanceExcluded} · pays ${m.filter.countryExcluded} · concurrents ${m.filter.competitorExcluded} · à confirmer ${m.quality.toConfirmTotal} point(s) sur ${m.quality.candidatesWithToConfirm} candidat(s)${c.reset}`);
         console.log(`  ${c.dim}tri · ${c.green}${m.quality.autoApproved} approuvés seuls${c.reset}${c.dim} · ${c.amber}${m.quality.humanReview} à revoir${c.reset}${c.dim} · ${m.quality.autoExcluded} écartés seuls${c.reset}`);

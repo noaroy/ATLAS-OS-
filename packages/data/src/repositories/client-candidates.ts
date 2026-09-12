@@ -180,7 +180,25 @@ export class ClientCandidateRepository {
   excludeByClient(runId: string, domain: string, reason: string, briefVersion: number): ClientCandidate | null {
     const c = this.byDomain(runId, domain);
     if (!c) return null;
-    return this.setStage(c.id, 'EXCLUDED', { category: 'CLIENT_EXCLUDED', reason, briefVersion });
+    return this.setStage(c.id, 'EXCLUDED', {
+      category: 'CLIENT_EXCLUDED', reason, briefVersion,
+      detail: { triage: { status: 'HUMAN_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: [reason] } },
+    });
+  }
+
+  /**
+   * L'inverse : le client — ou le fondateur en revue — garde cette société.
+   * Elle passe retenue, avec la raison, quel que soit le tri automatique ;
+   * ce que le tri avait relevé reste dans le détail, sous `triage.previous`.
+   */
+  keepByClient(runId: string, domain: string, reason: string, briefVersion: number): ClientCandidate | null {
+    const c = this.byDomain(runId, domain);
+    if (!c) return null;
+    const previous = (c.detail as { triage?: unknown }).triage ?? null;
+    return this.setStage(c.id, 'RETAINED', {
+      category: null, reason, briefVersion,
+      detail: { triage: { status: 'HUMAN_APPROVED', priority: null, recommendation: 'RETAIN', reasons: [reason], previous } },
+    });
   }
 
   counts(runId: string): Record<ClientCandidateStage, number> {

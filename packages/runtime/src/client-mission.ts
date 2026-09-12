@@ -80,8 +80,17 @@ export interface BatchMetrics {
   search: { queries: number; rawResults: number; uniqueDomains: number; ms: number; yields: number[]; stoppedBecause: string | null };
   filter: { directoryExcluded: number; noTextExcluded: number; relevanceExcluded: number; countryExcluded: number; competitorExcluded: number };
   process: {
-    candidates: number; pagesAttempted: number; pagesFetched: number; pagesUseful: number;
-    fetchFailures: number; fetchTimeouts: number; cacheHits: number;
+    candidates: number;
+    /** Requêtes réseau réellement faites, échecs compris. */
+    pagesAttempted: number;
+    /** Pages obtenues par le réseau. */
+    pagesFetched: number;
+    /** Pages lues au total, mémoire comprise — ce que les candidats ont eu sous les yeux. */
+    pagesRead: number;
+    pagesUseful: number;
+    fetchFailures: number; fetchTimeouts: number;
+    /** Entrées servies par la mémoire, pages et échecs confondus. */
+    cacheHits: number;
     llmCalls: number; llmCached: number; inputTokens: number; outputTokens: number; costUsd: number;
   };
   quality: {
@@ -282,7 +291,20 @@ export function adjustClientRun(repos: Repositories, runId: string, adjustment: 
   const check = parseClientBrief(suivant);
   if (!check.ok) throw new Error(`brief v${suivant.version} invalide : ${check.errors.join(' ; ')}`);
   for (const d of adjustment.excludeDomains ?? []) {
-    repos.clientCandidates.excludeByClient(runId, normaliseDomain(d), 'écartée par le client', suivant.version);
+    const c = repos.clientCandidates.excludeByClient(runId, normaliseDomain(d), 'écartée par le client', suivant.version);
+    if (c?.opportunityId) repos.opportunities.setStage(c.opportunityId, 'rejected');
+  }
+  /*
+   * `--keep` est la commande RETAIN de la file de revue : elle doit changer
+   * l'état du candidat, pas seulement une liste dans le brief. Une société
+   * gardée passe retenue, sauf si le même ajustement l'écarte.
+   */
+  const ecartes = new Set((adjustment.excludeDomains ?? []).map(normaliseDomain));
+  for (const d of adjustment.keepDomains ?? []) {
+    const domaine = normaliseDomain(d);
+    if (!domaine || ecartes.has(domaine)) continue;
+    const c = repos.clientCandidates.keepByClient(runId, domaine, 'conservée par le client', suivant.version);
+    if (c?.opportunityId) repos.opportunities.setStage(c.opportunityId, 'scored');
   }
   saveContext(repos, runId, { ...context, briefs: [...context.briefs, check.brief!] });
   return check.brief!;
@@ -309,9 +331,10 @@ interface SpendGuard {
 
 /** Ce que la mission, le lot et la journée ont déjà coûté — mesuré, pas estimé. */
 export function spendSoFar(repos: Repositories, guard: Pick<SpendGuard, 'runId' | 'batchStartedAt'>, now: string): { run: number; batch: number; day: number } {
-  const appels = repos.llmCalls.forMission(guard.runId, 5000);
-  const run = appels.reduce((s, a) => s + (a.costUsd ?? 0), 0);
-  const batch = appels.filter((a) => a.createdAt >= guard.batchStartedAt).reduce((s, a) => s + (a.costUsd ?? 0), 0);
+  // Des sommes en base, jamais une liste bornée : une mission de trois
+  // cents lots ne doit pas voir sa garde s'arrêter de compter.
+  const run = repos.llmCalls.totals(guard.runId).costUsd;
+  const batch = repos.llmCalls.costSince(guard.runId, guard.batchStartedAt);
   const day = repos.llmCalls.usageSince(startOfUtcDay(now)).knownCostUsd;
   return { run, batch, day };
 }
@@ -355,11 +378,13 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
   const metrics: BatchMetrics = {
     search: { queries: 0, rawResults: 0, uniqueDomains: 0, ms: 0, yields: [], stoppedBecause: null },
     filter: { directoryExcluded: 0, noTextExcluded: 0, relevanceExcluded: 0, countryExcluded: 0, competitorExcluded: 0 },
-    process: { candidates: 0, pagesAttempted: 0, pagesFetched: 0, pagesUseful: 0, fetchFailures: 0, fetchTimeouts: 0, cacheHits: 0, llmCalls: 0, llmCached: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 },
+    process: { candidates: 0, pagesAttempted: 0, pagesFetched: 0, pagesRead: 0, pagesUseful: 0, fetchFailures: 0, fetchTimeouts: 0, cacheHits: 0, llmCalls: 0, llmCached: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 },
     quality: { retained: 0, reviewRequired: 0, excluded: 0, failed: 0, toConfirmTotal: 0, candidatesWithToConfirm: 0, autoApproved: 0, humanReview: 0, autoExcluded: 0 },
     timing: { ...timingVide(), batchMs: 0, avgCandidateMs: 0, concurrency: 1, slowest: [] },
   };
   const domainesVus = new Set<string>();
+  // Les mémoires ont une durée de vie ; sans purge, elles n'ont pas de taille.
+  if (options.cache ?? true) { repos.clientCache.purgePages(); repos.clientCache.purgeQualifications(); }
 
   // ── Sociétés nommées : inscrites sans moteur ──────────────────────────────
   for (const brut of options.seedDomains ?? []) {
@@ -394,6 +419,12 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
         );
       } catch (err) {
         deps.logger.warn('requête en échec', { query: q.query, error: err instanceof Error ? err.message : String(err) });
+        // Une requête en échec ne rapporte rien : elle compte pour l'arrêt.
+        // Sans cela, un moteur mort faisait dérouler tout le plan, un délai
+        // complet par requête.
+        metrics.search.yields.push(0);
+        sansNouveau += 1;
+        if (sansNouveau >= QUERIES_SANS_RENDEMENT) { metrics.search.stoppedBecause = `${sansNouveau} requêtes de suite sans nouveau candidat`; break; }
         continue;
       }
       metrics.search.ms += Date.now() - tRecherche;
@@ -402,7 +433,11 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
       for (const r of results.results) { const d = normaliseHost(r.url); if (d) domainesVus.add(d); }
       if (results.outcome !== 'ok' && results.results.length === 0) {
         // Un moteur qui ne rend rien ne bloque pas le lot : les autres requêtes
-        // peuvent réussir, et le résumé dit ce qui s'est passé.
+        // peuvent réussir, et le résumé dit ce qui s'est passé. Mais il compte
+        // pour l'arrêt, comme une requête sans nouveau candidat.
+        metrics.search.yields.push(0);
+        sansNouveau += 1;
+        if (sansNouveau >= QUERIES_SANS_RENDEMENT) { metrics.search.stoppedBecause = `${sansNouveau} requêtes de suite sans nouveau candidat`; break; }
         continue;
       }
       const filtre = filterResults(results.results, { exclusions: [...exclus], maxCandidates: 50 });
@@ -459,7 +494,7 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
       if (!candidat) return;
       const arret = budgetStop(repos, guard, now());
       if (arret) { summary.stoppedBecause = arret; arrete = true; return; }
-      const mesure: CandidateMeasure = { timing: timingVide(), pagesAttempted: 0, pagesFetched: 0, pagesUseful: 0, fetchFailures: 0, fetchTimeouts: 0, cacheHits: 0, llmCalls: 0, llmCached: 0, inputTokens: 0, outputTokens: 0, toConfirm: 0, exclusion: null, triage: null };
+      const mesure: CandidateMeasure = { timing: timingVide(), pagesAttempted: 0, pagesFetched: 0, pagesRead: 0, pagesUseful: 0, fetchFailures: 0, fetchTimeouts: 0, cacheHits: 0, llmCalls: 0, llmCached: 0, inputTokens: 0, outputTokens: 0, toConfirm: 0, exclusion: null, triage: null };
       const tCandidat = Date.now();
       try {
         const verdict = await processCandidate(deps, brief, options.runId, candidat, guard, now, mesure, { cache });
@@ -509,7 +544,7 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
 /** Ce qu'un candidat a coûté en temps, pages et jetons — rempli au fil du traitement. */
 interface CandidateMeasure {
   timing: CandidateTiming;
-  pagesAttempted: number; pagesFetched: number; pagesUseful: number; fetchFailures: number; fetchTimeouts: number; cacheHits: number;
+  pagesAttempted: number; pagesFetched: number; pagesRead: number; pagesUseful: number; fetchFailures: number; fetchTimeouts: number; cacheHits: number;
   llmCalls: number; llmCached: number; inputTokens: number; outputTokens: number;
   toConfirm: number;
   exclusion: 'NO_TEXT' | 'COUNTRY' | 'COMPETITOR' | 'RELEVANCE' | null;
@@ -520,6 +555,7 @@ function accumuler(m: BatchMetrics, domain: string, c: CandidateMeasure): void {
   m.process.candidates += 1;
   m.process.pagesAttempted += c.pagesAttempted;
   m.process.pagesFetched += c.pagesFetched;
+  m.process.pagesRead += c.pagesRead;
   m.process.pagesUseful += c.pagesUseful;
   m.process.fetchFailures += c.fetchFailures;
   m.process.fetchTimeouts += c.fetchTimeouts;
@@ -552,6 +588,9 @@ type Verdict = CandidateDecision['outcome'] | 'FAILED';
 /** Un délai court d'abord ; un site qui n'a pas répondu a droit au long à la reprise. */
 const TIMEOUT_FIRST_MS = 10_000;
 const TIMEOUT_RETRY_MS = 20_000;
+/** Les pages secondaires, plus courtes encore — et allongées elles aussi à la reprise. */
+const TIMEOUT_PLAN_FIRST_MS = 8_000;
+const TIMEOUT_PLAN_RETRY_MS = 12_000;
 const DEFAULT_CONCURRENCY = 4;
 /** Deux pages d'un même site à la fois, jamais plus : on lit, on ne bombarde pas. */
 const PER_HOST_CONCURRENCY = 2;
@@ -582,19 +621,30 @@ async function lirePages(
     mesure.pagesAttempted += r.attempts;
     mesure.fetchFailures += r.failures.length;
     mesure.fetchTimeouts += r.failures.filter((f) => f.kind === 'TIMEOUT').length;
-    for (const p of r.pages) {
+    /*
+     * La page est rangée sous l'adresse demandée : c'est elle qu'on
+     * redemandera. Après redirection, l'adresse rendue diffère ; on retrouve
+     * la demandée par élimination des échecs, dans l'ordre — jamais par la
+     * position dans la liste complète, qui décale d'un cran dès qu'une
+     * adresse a échoué avant et rangeait la page du contact sous l'accueil.
+     */
+    const echouees = new Set(r.failures.map((f) => f.url.replace(/\/+$/, '').toLowerCase()));
+    const reussies = aLire.filter((u) => !echouees.has(u.replace(/\/+$/, '').toLowerCase()));
+    r.pages.forEach((p, i) => {
       pages.push(p);
-      // La page est rangée sous l'adresse demandée : c'est elle qu'on redemandera.
-      const demandee = aLire.find((u) => u.replace(/\/+$/, '').toLowerCase() === p.url.replace(/\/+$/, '').toLowerCase()) ?? aLire[r.pages.indexOf(p)] ?? p.url;
+      const demandee = reussies.find((u) => memeAdresse(u, p.url)) ?? reussies[i] ?? p.url;
       cache?.putPage({ url: demandee, finalUrl: p.url, domain, ok: true, html: p.html });
-    }
+    });
+    mesure.pagesFetched += r.pages.length;
     for (const f of r.failures) {
       failures.push(f);
-      // Un délai dépassé n'est pas mémorisé : le site peut répondre demain.
-      if (f.kind !== 'TIMEOUT' && f.kind !== 'CONNECTION_REFUSED') cache?.putPage({ url: f.url, domain, ok: false, kind: f.kind });
+      // Seul ce qui ne changera pas demain est mémorisé : une page qui
+      // n'existe pas, une adresse interdite. Un délai, une panne serveur ou
+      // une erreur inconnue se retentent.
+      if (f.kind === 'HTTP_4XX' || f.kind === 'BLOCKED') cache?.putPage({ url: f.url, domain, ok: false, kind: f.kind });
     }
   }
-  mesure.pagesFetched += pages.length;
+  mesure.pagesRead += pages.length;
   return { pages, attempts: mesure.pagesAttempted, failures };
 }
 
@@ -684,7 +734,9 @@ async function processCandidate(
 
   // ── 1. L'accueil, et la page trouvée si ce n'est pas lui ──────────────────
   let fin = chrono();
-  const premieres = [`${site}/`, candidat.url].filter((u, i, a) => a.findIndex((x) => memeAdresse(x, u)) === i);
+  // « https://www.x.se/ » et « https://x.se/ » sont la même page : une seule requête.
+  const sansWww = (u: string) => u.replace(/^https?:\/\/www\./i, 'https://').replace(/\/+$/, '').toLowerCase();
+  const premieres = [`${site}/`, candidat.url].filter((u, i, a) => a.findIndex((x) => sansWww(x) === sansWww(u)) === i);
   const lu1 = await lirePages(deps, candidat.domain, premieres, 2, timeoutMs, options.cache, mesure);
   T.fetch += fin();
   if (lu1.pages.length === 0) {
@@ -726,7 +778,7 @@ async function processCandidate(
     : plan;
   if (aLire.length > 0) {
     fin = chrono();
-    const lu2 = await lirePlan(deps, candidat.domain, aLire.map((p) => p.url), Math.min(timeoutMs, 8_000), options.cache, mesure);
+    const lu2 = await lirePlan(deps, candidat.domain, aLire.map((p) => p.url), candidat.attempts > 0 ? TIMEOUT_PLAN_RETRY_MS : TIMEOUT_PLAN_FIRST_MS, options.cache, mesure);
     T.fetch += fin();
     for (const p of lu2.pages) if (!pages.some((x) => memeAdresse(x.url, p.url))) pages.push(p);
     fin = chrono();
@@ -745,7 +797,6 @@ async function processCandidate(
   const paysDetail = paysEval.detail;
   T.country += fin();
   if (fit.fit === 'OUT_OF_SCOPE') {
-    mesure.exclusion = 'COUNTRY';
     const base = paysDetail.basis === 'OFFICIAL_ID' ? 'prouvé par identifiant national'
       : paysDetail.basis === 'DECLARED_METADATA' ? 'déclaré par le site'
       : paysDetail.basis === 'POSTAL_ADDRESS' ? 'établi par l’adresse publiée'
@@ -759,6 +810,7 @@ async function processCandidate(
      * modèle — un humain la confirme en trente secondes.
      */
     const prouve = paysDetail.basis !== 'CORROBORATION';
+    mesure.exclusion = prouve ? 'COUNTRY' : null;
     mesure.triage = prouve ? 'AUTO_EXCLUDED' : 'HUMAN_REVIEW';
     cc.setStage(candidat.id, prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
       name: titreDuSite(pages) ?? candidat.domain,
@@ -776,16 +828,31 @@ async function processCandidate(
 
   // ── RELEVANCE_PRECHECK : hors sujet, sans modèle ──────────────────────────
   if (precheck.hits.length === 0) {
-    mesure.exclusion = 'RELEVANCE';
     const termes = [...brief.productKeywords, ...brief.industries].slice(0, 8).join(', ');
-    cc.setStage(candidat.id, 'EXCLUDED', {
+    /*
+     * Deux pages sans aucun terme du brief : hors sujet, écartée seule. Une
+     * seule page lisible — un accueil rendu par script, un site sans lien —
+     * ne suffit pas à une exclusion « claire » : la société va en revue, P3,
+     * sans appel modèle, et un humain la ferme en dix secondes.
+     */
+    const clair = pages.length >= 2;
+    mesure.exclusion = clair ? 'RELEVANCE' : null;
+    mesure.triage = clair ? 'AUTO_EXCLUDED' : 'HUMAN_REVIEW';
+    const raison = clair
+      ? `aucun terme du brief sur ${pages.length} pages lues — cherchés : ${termes} et les mots de rôle`
+      : `aucun terme du brief sur la seule page lisible — cherchés : ${termes} ; site à vérifier à la main`;
+    cc.setStage(candidat.id, clair ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
       name: titreDuSite(pages) ?? candidat.domain, category: 'LOW_RELEVANCE',
-      reason: `aucun terme du brief sur ${pages.length} page(s) lue(s) — cherchés : ${termes} et les mots de rôle`,
+      reason: raison,
       evidenceUrl: accueil.url,
-      detail: { triage: { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: ['hors sujet : aucun terme du brief'] } },
+      detail: {
+        triage: clair
+          ? { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: ['hors sujet : aucun terme du brief'] }
+          : { status: 'HUMAN_REVIEW', priority: 'P3', recommendation: 'EXCLUDE', reasons: [raison] },
+        score: { total: 0, confidence: 0 },
+      },
     });
-    mesure.triage = 'AUTO_EXCLUDED';
-    return 'EXCLUDED';
+    return clair ? 'EXCLUDED' : 'REVIEW_REQUIRED';
   }
 
   // ── 5. Identité, concurrents, contacts : tout ce qui ne coûte rien ────────
@@ -826,7 +893,7 @@ async function processCandidate(
     email: canal.method === 'EMAIL' ? canal.value : null,
     emailSourceUrl: canal.method === 'EMAIL' ? canal.sourceUrl : null,
     emailIntent: canal.method === 'EMAIL' ? canal.intent : null,
-    emailDomainMatch: canal.method === 'EMAIL' && canal.confidence === 'LOW' ? 'CROSS_DOMAIN' : canal.method === 'EMAIL' ? 'SAME_DOMAIN' : null,
+    emailDomainMatch: canal.method === 'EMAIL' ? (canal.sameDomain ? 'SAME_DOMAIN' : 'CROSS_DOMAIN') : null,
     personalEmailsSeen: contacts.publicEmails.filter((e) => e.intent === 'PERSONAL').length,
     phone: contacts.publicPhones[0]?.value ?? null,
     formUrl: contacts.contactFormUrl?.value ?? null,
@@ -842,7 +909,8 @@ async function processCandidate(
     country: pays, countryBasis: paysDetail.basis, orgNr: facts.orgNr, vat: facts.vat, postalAddress: facts.postalAddress,
     emails: facts.emails, briefTermsSeen: facts.briefTermsSeen,
   });
-  const cleQualification = repos.clientCache.qualificationKey(candidat.domain, briefHash(brief), sha256(selection.text));
+  // La clé porte le prompt entier : mêmes passages ET mêmes faits en tête, sinon la question n'est pas la même.
+  const cleQualification = repos.clientCache.qualificationKey(candidat.domain, briefHash(brief), sha256(prompt));
   const enMemoire = options.cache ? repos.clientCache.getQualification(cleQualification) : null;
   let parsed: unknown;
   let coutAppel = 0;
@@ -853,7 +921,6 @@ async function processCandidate(
   } else {
     const arret = budgetStop(repos, guard, now());
     if (arret) throw new BudgetStopError(arret);
-    const avant = spendSoFar(repos, guard, now()).run;
     guard.inFlight += 1;
     let reponse;
     try {
@@ -873,15 +940,32 @@ async function processCandidate(
     } finally {
       guard.inFlight -= 1;
     }
-    const brut = textOf(reponse.content).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const a = brut.indexOf('{');
-    const b = brut.lastIndexOf('}');
-    parsed = a >= 0 && b > a ? JSON.parse(brut.slice(a, b + 1)) : {};
     mesure.llmCalls += 1;
     mesure.inputTokens += reponse.usage?.inputTokens ?? 0;
     mesure.outputTokens += reponse.usage?.outputTokens ?? 0;
-    coutAppel = Math.max(0, spendSoFar(repos, guard, now()).run - avant);
-    if (options.cache) repos.clientCache.putQualification({ key: cleQualification, domain: candidat.domain, briefHash: briefHash(brief), contentHash: sha256(selection.text), model: deps.model, output: parsed });
+    /*
+     * Le coût de CET appel : la somme du registre pour cette étape depuis le
+     * début du lot. Avec quatre candidats de front, « la dépense de la mission
+     * avant et après » attribuait à l'un les appels des trois autres.
+     */
+    coutAppel = Math.max(0, repos.llmCalls.costSince(runId, guard.batchStartedAt, `client-qualification:${candidat.domain}`));
+    const brut = textOf(reponse.content).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const a = brut.indexOf('{');
+    const b = brut.lastIndexOf('}');
+    try {
+      parsed = a >= 0 && b > a ? JSON.parse(brut.slice(a, b + 1)) : null;
+    } catch {
+      parsed = null;
+    }
+    /*
+     * Une sortie sans qualification n'est ni jugée ni mémorisée : la mémoire
+     * rendrait ensuite « critère non traité » à chaque lecture, pour rien.
+     * L'échec est reprenable ; la reprise repose la question.
+     */
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { criteria?: unknown }).criteria)) {
+      throw new Error('réponse du modèle illisible : aucune qualification exploitable');
+    }
+    if (options.cache) repos.clientCache.putQualification({ key: cleQualification, domain: candidat.domain, briefHash: briefHash(brief), contentHash: sha256(prompt), model: deps.model, output: parsed });
   }
   const qualification = resolveQualification(parsed, brief, catalogue);
   T.llm += fin();
@@ -893,7 +977,8 @@ async function processCandidate(
     criteria: qualification.criteria, specialisation: qualification.specialisation,
     competitors: [], preferSpecialist: brief.preferSpecialist, countryStatus: fit.fit,
   });
-  if (canal.method === 'EMAIL' && canal.confidence === 'LOW') decision.toConfirm.push('canal (adresse hors du domaine du site)');
+  if (canal.method === 'EMAIL' && canal.sameDomain === false) decision.toConfirm.push('canal (adresse hors du domaine du site)');
+  else if (canal.method === 'EMAIL' && canal.confidence === 'LOW') decision.toConfirm.push('canal (boîte sans intention lisible)');
   if (contradiction.length > 0) {
     const detail = `pays (signaux contradictoires : ${contradiction.join(', ')})`;
     const i = decision.toConfirm.indexOf('pays');

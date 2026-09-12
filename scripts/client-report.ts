@@ -119,7 +119,7 @@ async function main(): Promise<void> {
 
     console.log(`\n  ${c.bold}RAPPORT ${status}${c.reset}  ${row.id} · état ${etat}`);
     console.log(`  ${brief.client.name} · ${brief.market.countryLabel} · brief v${brief.version}`);
-    console.log(`  analysées ${built.report.analysedCount} · ${c.green}retenues ${built.retained.length}${c.reset} · ${c.amber}à revoir ${built.reviewRequired.length}${c.reset} · écartées ${built.excluded.length} · sources ${built.report.sources.length} · coût ${built.costUsd.toFixed(4)} $`);
+    console.log(`  analysées ${built.report.analysedCount} · ${c.green}retenues ${built.retained.length}${c.reset} · ${c.amber}à revoir ${built.reviewRequired.length}${c.reset}${built.pendingHumanCheck.length ? ` (+${built.pendingHumanCheck.length} à vérifier avant lecture)` : ''} · écartées ${built.excluded.length}${built.unreachable.length ? ` · injoignables ${built.unreachable.length}` : ''} · sources ${built.report.sources.length} · coût ${built.costUsd.toFixed(4)} $`);
     console.log(`  ${htmlPath}\n  ${csvPath}\n  ${exclusionsPath}`);
     if (revue.items.length > 0) console.log(`  ${c.amber}${revuePath}${c.reset} — ${revue.items.filter((i) => i.priority === 'P1').length} P1 · ${revue.items.filter((i) => i.priority === 'P2').length} P2 · ${revue.items.filter((i) => i.priority === 'P3').length} P3 (interne)`);
     if (status === 'PARTIAL') console.log(`  ${c.dim}Sélection intermédiaire : la mission reste ouverte. Après le retour du client : npm run client:mission -- adjust --run=${runId} …${c.reset}`);

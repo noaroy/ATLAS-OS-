@@ -53,6 +53,21 @@ export interface FilterReport {
  * passer ferait apparaître « Europages » en tête d'une shortlist commerciale —
  * ce qui est exactement le genre de résultat qui décrédibilise un livrable.
  */
+/**
+ * Un hôte de la liste, à sa frontière — jamais en sous-chaîne.
+ *
+ * `domain.includes('x.com')` écartait « nordix.com », « onyx.com »,
+ * « matrix.com » comme un réseau social ; `'reco.se'` écartait « greco.se ».
+ * Un motif se terminant par un point (« amazon. ») est un préfixe de label :
+ * il vaut pour « amazon.se » et « amazon.co.uk », pas pour « amazonas.se ».
+ */
+export function isNeverCandidate(domain: string): boolean {
+  const d = domain.toLowerCase().replace(/^www\./, '');
+  return NEVER_A_CANDIDATE.some((host) => host.endsWith('.')
+    ? d.startsWith(host) || d.includes(`.${host}`)
+    : d === host || d.endsWith(`.${host}`));
+}
+
 const NEVER_A_CANDIDATE = [
   'wikipedia.org',
   'wikimedia.org',
@@ -169,7 +184,7 @@ export function filterResults(results: SearchResult[], options: FilterOptions): 
       continue;
     }
 
-    if (NEVER_A_CANDIDATE.some((host) => domain.includes(host))) {
+    if (isNeverCandidate(domain)) {
       rejected.push({ url: result.url, reason: 'annuaire, réseau social ou agrégateur' });
       continue;
     }

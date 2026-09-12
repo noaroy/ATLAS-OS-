@@ -32,7 +32,14 @@ export interface BriefProposal {
   command: string;
 }
 
-const aplatir = (s: string): string => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const aplatir = (s: string): string => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+const MOTS_VIDES = new Set([
+  'pour', 'dans', 'avec', 'sans', 'sous', 'entre', 'vers', 'chez', 'leur', 'leurs', 'votre', 'notre', 'cette', 'cela',
+  'tout', 'toute', 'tous', 'toutes', 'moins', 'plus', 'ceux', 'celles', 'dont', 'mais', 'donc', 'ainsi', 'aussi',
+  'etre', 'sont', 'avoir', 'fait', 'faire', 'peut', 'doit', 'elle', 'elles', 'nous', 'vous', 'ceci', 'meme', 'autre', 'autres',
+  'moins', 'presence', 'present', 'presente', 'societe', 'entreprise', 'client', 'clients', 'exemple',
+]);
 
 export function proposeBriefAdjustment(brief: ClientBrief, feedback: string): BriefProposal {
   const phrases = feedback.split(/[;\n]|(?<=[.!])\s+/).map((p) => p.trim()).filter(Boolean);
@@ -53,9 +60,14 @@ export function proposeBriefAdjustment(brief: ClientBrief, feedback: string): Br
       lue = true;
     }
 
-    // « pas la marque X », « ne pas prendre X », « exclure X » → concurrent.
-    const marque = /(?:pas la marque|ne pas prendre|exclure|sans la marque|pas de)\s+([\p{L}][\p{L}\d&' .-]{1,40}?)(?:\s*[,.;]|$)/u.exec(phrase);
-    if (marque) {
+    /*
+     * « pas la marque X », « ne pas prendre X », « exclure X » → concurrent.
+     * Jamais « pas de X » : « pas de généralistes » n'est pas une marque, et
+     * le mot devenait une exclusion qui écartait toute page le citant. Un nom
+     * de marque commence par une majuscule, ou est un domaine.
+     */
+    const marque = /(?:pas la marque|ne pas prendre(?: la marque)?|exclure(?: la marque)?|sans la marque)\s+([\p{L}][\p{L}\d&' .-]{1,40}?)(?:\s*[,.;]|$)/u.exec(phrase);
+    if (marque && (/^\p{Lu}/u.test(marque[1]!.trim().replace(/^(?:la|le|les|the)\s+/i, '')) || marque[1]!.includes('.'))) {
       const nom = marque[1]!.trim().replace(/^(?:la|le|les|the)\s+/i, '');
       if (nom.includes('.') && normaliseDomain(nom)) {
         adjustment.excludeDomains.push(normaliseDomain(nom)!);
@@ -78,8 +90,12 @@ export function proposeBriefAdjustment(brief: ClientBrief, feedback: string): Br
     const preference = /prefer|privilegi|important|priorit|surtout|plutot/.test(plat);
     if (preference) {
       const criteres = [...brief.requiredCriteria, ...brief.preferredCriteria];
+      // Les mots-outils d'un libellé — « pour », « dans », « avec » — ne
+      // désignent aucun critère ; sans cette liste, « nous préférons ceux qui
+      // livrent dans la semaine » relevait le poids de tout critère écrit « dans ».
       const vises = criteres.filter((c) => {
-        const mots = aplatir(`${c.label} ${c.hint ?? ''} ${c.key}`).split(/[^a-z0-9]+/).filter((m) => m.length >= 4);
+        const mots = aplatir(`${c.label} ${c.hint ?? ''} ${c.key}`).split(/[^a-z0-9]+/)
+          .filter((m) => m.length >= 4 && !MOTS_VIDES.has(m));
         return mots.some((m) => plat.includes(m));
       });
       for (const c of vises) {

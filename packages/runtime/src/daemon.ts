@@ -180,8 +180,10 @@ export class AtlasDaemon {
    */
   boot(): { recovered: number; resumed: number; released: number } {
     this.runId = this.repos.tasks.startDaemonRun(hostname(), process.pid);
+    const unclosed = this.repos.tasks.closeStaleDaemonRuns(this.runId);
     this.logger.info('daemon démarré', {
       owner: this.owner, runId: this.runId, workerTypes: this.workerTypes.join(','),
+      ...(unclosed > 0 ? { previousRunsClosed: unclosed } : {}),
     });
 
     const recovered = this.repos.tasks.recoverStaleLeases(this.owner);
@@ -204,6 +206,7 @@ export class AtlasDaemon {
 
     while (!this.signal.aborted && this.stats.cycles < maxCycles) {
       this.stats.cycles += 1;
+      if (this.runId) this.repos.tasks.heartbeatDaemonRun(this.runId);
 
       // Chaque tour relève d'abord ce qui est redevenu éligible. Bon marché :
       // deux requêtes indexées, aucun appel externe.

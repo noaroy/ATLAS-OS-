@@ -305,7 +305,7 @@ function OpportunityDetailPanel({
           <h4 className="label">Compatibilité par rôle</h4>
           <ul className="space-y-1 text-xs">
             {[...opportunity.scoreDetail!.roleFits]
-              .sort((a, b) => b.value - a.value)
+              .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
               .map((fit) => (
                 <li key={fit.role} className="flex items-start gap-2">
                   <span className="chip shrink-0 border border-[--color-atlas]/40 text-[--color-atlas]">

@@ -43,6 +43,17 @@ export {
   type ClientCandidateStage,
 } from './repositories/client-candidates.ts';
 import { TaskRepository } from './repositories/tasks.ts';
+import { SalesEngineRepository } from './repositories/sales-engine.ts';
+export {
+  SalesEngineRepository,
+  SEGMENT_STATUSES, OUTCOME_KINDS, SUPPRESSION_KINDS, SUPPRESSION_REASONS, EXPERIMENT_DIMENSIONS,
+  RECOMMENDATION_KINDS, RECOMMENDATION_STATUSES, FRICTION_KINDS,
+  type SalesSegment, type SegmentStatus, type SalesAttribution, type SalesOutcome, type OutcomeKind,
+  type SuppressionEntry, type SuppressionKind, type SuppressionReason, type SalesExperiment,
+  type ExperimentDimension, type OptimizationRecommendation, type RecommendationKind,
+  type RecommendationStatus, type StrategyVersion, type EngineeringInsight, type FrictionEvent,
+  type FrictionKind,
+} from './repositories/sales-engine.ts';
 import { ToolCallRepository } from './repositories/tool-calls.ts';
 import { DecisionRepository } from './repositories/decisions.ts';
 
@@ -96,6 +107,7 @@ export interface Repositories {
   tasks: TaskRepository;
   toolCalls: ToolCallRepository;
   decisions: DecisionRepository;
+  salesEngine: SalesEngineRepository;
   close(): void;
 }
 
@@ -142,6 +154,7 @@ export function createRepositories(databaseFile: string, logger: Logger): Reposi
     tasks: new TaskRepository(db),
     toolCalls: new ToolCallRepository(db),
     decisions: new DecisionRepository(db),
+    salesEngine: new SalesEngineRepository(db),
     close() {
       // A WAL checkpoint on shutdown keeps the main file self-contained, so a
       // backup taken right after a stop is complete on its own.

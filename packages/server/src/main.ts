@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { ATLAS_VERSION } from '@atlas/contracts';
 import { loadConfig, bootLogger, describeError } from '@atlas/core';
 import { createSystem } from './bootstrap.ts';
@@ -12,7 +14,7 @@ import { createApp } from './app.ts';
  */
 async function main(): Promise<void> {
   const config = loadConfig();
-  const system = createSystem(config);
+  const system = createSystem(config, { daemon: true });
   const log = system.logger;
 
   log.info(`ATLAS OS ${ATLAS_VERSION} starting`, {
@@ -38,10 +40,23 @@ async function main(): Promise<void> {
   const app = await createApp(system);
   await app.listen({ host: config.server.host, port: config.server.port });
 
+  // Le fichier de pid : ce que `npm run atlas:stop` et `atlas:status` lisent
+  // pour trouver le processus sans deviner. Écrit après l'écoute, jamais avant.
+  const pidFile = join(config.paths.dataDir, 'atlas.pid');
+  try {
+    mkdirSync(config.paths.dataDir, { recursive: true });
+    writeFileSync(pidFile, String(process.pid), 'utf8');
+  } catch (err) {
+    log.warn('pid file not written', { error: describeError(err) });
+  }
+
   log.info('ATLAS OS is ready', {
     url: `http://${config.server.host === '0.0.0.0' ? 'localhost' : config.server.host}:${config.server.port}`,
     agents: system.repos.agents.listDefinitions(true).length,
     missionsResumed: resumed,
+    salesEngine: system.daemon ? 'embarqué' : 'coupé',
+    outbound: config.sales.outboundEnabled ? 'ACTIVE' : 'PAUSED',
+    engineMode: config.sales.engineMode,
   });
 
   system.events.publish({
@@ -62,6 +77,11 @@ async function main(): Promise<void> {
     // Stop accepting connections first so nothing new starts mid-teardown.
     await app.close().catch((err) => log.warn('http close failed', { error: describeError(err) }));
     await system.shutdown(signal);
+    try {
+      rmSync(pidFile, { force: true });
+    } catch {
+      /* un pid périmé se détecte au prochain démarrage */
+    }
     process.exit(0);
   };
 

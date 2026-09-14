@@ -9,9 +9,15 @@
  *
  *   npm run atlas:status
  */
-import { createLogger, loadConfig, canRunProvider } from '../packages/core/src/index.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createLogger, loadConfig, loadAtlasEnv, canRunProvider } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
-import { inspectRepo } from '../packages/runtime/src/index.ts';
+import { inspectRepo, buildSalesDashboard } from '../packages/runtime/src/index.ts';
+
+// L'environnement d'abord : sans lui, Gmail et l'interrupteur d'envoi
+// paraissent absents alors qu'ils sont dans .env.
+loadAtlasEnv();
 
 /** Un mot court pour la colonne de gauche, le détail allant en note. */
 const state_label = (note: string) =>
@@ -27,7 +33,7 @@ const flag = (name: string) =>
 
 const logger = createLogger({ level: 'error', pretty: false });
 const config = loadConfig(process.cwd());
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const repos = createRepositories(process.env.ATLAS_DB_PATH ?? config.paths.databaseFile, logger);
 const now = Date.now();
 const today = flag('today') ?? new Date().toISOString().slice(0, 10);
 
@@ -43,6 +49,54 @@ const human = (ms: number): string => {
   const h = Math.floor(m / 60);
   return `${h} h ${m % 60} min`;
 };
+
+// --- ATLAS ONLINE ? ---------------------------------------------------------
+//
+// Le résumé que l'opérateur lit en premier : le processus vit-il, chaque
+// service est-il prêt, l'envoi est-il ouvert, où est le tableau de bord. Les
+// feux viennent du même calcul que la page unique — un chiffre, un calcul.
+
+const pidFile = join(config.paths.dataDir, 'atlas.pid');
+const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8').trim()) : null;
+const alive = (() => {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const publicUrl = config.server.publicUrl || `http://localhost:${config.server.port}`;
+const health = await (async () => {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2_000);
+    const response = await fetch(`http://127.0.0.1:${config.server.port}/healthz`, { signal: controller.signal });
+    clearTimeout(timer);
+    return response.ok ? 'OK' : `HTTP ${response.status}`;
+  } catch {
+    return 'INJOIGNABLE';
+  }
+})();
+const board = buildSalesDashboard(repos, config, { range: '7d' });
+const feu = (state: 'ok' | 'warn' | 'down' | 'off'): string =>
+  state === 'ok' ? `${c.green}READY${c.reset}` : state === 'warn' ? `${c.amber}DEGRADED${c.reset}`
+  : state === 'down' ? `${c.red}DOWN${c.reset}` : `${c.dim}OFF${c.reset}`;
+const online = health === 'OK';
+console.log(`\n  ${c.bold}${online ? c.green : c.red}ATLAS ${online ? 'ONLINE' : 'OFFLINE'}${c.reset}  ${c.dim}${publicUrl} · healthz ${health}${pid ? ` · pid ${pid}${alive ? '' : ' (périmé)'}` : ''}${c.reset}`);
+console.log(`    ${'Daemon'.padEnd(14)}${feu(board.system.workers.state)}   ${c.dim}${board.system.workers.detail}${c.reset}`);
+console.log(`    ${'Workers'.padEnd(14)}${feu(board.system.workers.state)}   ${c.dim}${Object.keys(repos.tasks.countByStatus()).length ? 'file lue' : 'file vide'}${c.reset}`);
+console.log(`    ${'Search'.padEnd(14)}${feu(board.system.search.state)}   ${c.dim}${board.system.search.detail}${c.reset}`);
+console.log(`    ${'LLM'.padEnd(14)}${feu(board.system.llm.state)}   ${c.dim}${board.system.llm.detail}${c.reset}`);
+console.log(`    ${'Gmail'.padEnd(14)}${feu(board.system.gmail.state)}   ${c.dim}${board.system.gmail.detail}${c.reset}`);
+console.log(`    ${'Database'.padEnd(14)}${feu(board.system.database.state)}   ${c.dim}${config.paths.databaseFile}${c.reset}`);
+const outboundActive = board.system.outbound.enabled && !board.system.outbound.paused && board.system.outbound.mode === 'PRODUCTION';
+console.log(`    ${'Outbound'.padEnd(14)}${outboundActive ? `${c.green}ACTIVE` : `${c.amber}PAUSED`}${c.reset}   ${c.dim}${board.system.detail.join(' · ') || `fenêtre ${board.system.outbound.window}`}${c.reset}`);
+console.log(`    ${'Sales Engine'.padEnd(14)}${config.sales.engineEnabled ? `${c.green}ON` : `${c.dim}OFF`}${c.reset}   ${c.dim}${board.segments.length} segment(s) · ${board.hotLeadsTotal} réponse(s) chaude(s) · ${board.recommendations.length} recommandation(s)${board.system.lastCycleAt ? ` · dernier cycle ${board.system.lastCycleAt.slice(11, 16)} UTC` : ''}${c.reset}`);
+const clientRuns = repos.missions.list({ limit: 200, offset: 0 }).items.filter((m) => (m.context as { kind?: string } | null)?.kind === 'client-mission').length;
+console.log(`    ${'Client Engine'.padEnd(14)}${c.green}READY${c.reset}   ${c.dim}${clientRuns} mission(s) client · npm run client:auto${c.reset}`);
+console.log(`    ${'Dashboard'.padEnd(14)}${c.cyan}${publicUrl}/${c.reset}`);
 
 console.log(`\n  ${c.bold}${c.cyan}ATLAS — ÉTAT DU CŒUR${c.reset}  ${c.dim}au ${today}${c.reset}`);
 

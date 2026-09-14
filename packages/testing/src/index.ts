@@ -286,6 +286,22 @@ export function makeTestConfig(
       concurrency: 4,
       followUpAfterDays: 3,
       senderName: 'Test Sender',
+      // Le test est un banc d'essai : l'envoi reste coupe et le mode reste
+      // INTERNAL_TEST. Un test qui veut le contraire le dit.
+      outboundEnabled: false,
+      engineMode: 'INTERNAL_TEST',
+      engineEnabled: true,
+      discoveryEnabled: true,
+      dailyAiBudgetUsd: 0.5,
+      dailySearchBudget: 200,
+      hourlySendCap: 3,
+      minSendDelaySeconds: 120,
+      sendWindow: '09:00-17:30',
+      weekendEnabled: false,
+      timezone: 'Europe/Paris',
+      maxFollowUps: 1,
+      bouncePauseRate: 0.05,
+      bounceMinSample: 20,
     },
     ai: {
       // Le test ne dépense jamais : `live` reste faux, et un test qui aurait

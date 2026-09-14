@@ -203,3 +203,26 @@ export {
 
 export { buildClientRunReport, buildReviewQueue, renderReviewQueue, type ClientRunReport, type ClientRunReportInput } from './client-report-run.ts';
 export { proposeBriefAdjustment, type BriefProposal } from './client-feedback.ts';
+export { runClientPreflight, type PreflightVerdict, type PreflightDeps, type PreflightInput, type PreflightLine, type PreflightState } from './client-preflight.ts';
+export { writeClientReportFiles, type ReportFiles, type ReportFilesInput, type WriteFile } from './client-report-files.ts';
+export {
+  runAutopilot, nextAction, countsFor, assessBatchQuality, assessSearchYield, adaptBatchSize, estimateMission, transition, canTransition,
+  readAutopilot, briefKey, decisionJournal, snapshotOf, missionMetrics,
+  MISSION_STATES, MISSION_TRANSITIONS, HUMAN_STATES, NEXT_ACTIONS, DEFAULT_LIMITS, LEVEL_LABELS,
+  type MissionState, type AutopilotLevel, type AutopilotLimits, type AutopilotContext, type AutopilotDeps, type AutopilotOptions,
+  type AutopilotOutcome, type NextAction, type NextActionKind, type BatchQuality, type SearchYield, type MissionEstimate, type MissionMetrics, type MissionSnapshotCounts,
+} from './client-autopilot.ts';
+export {
+  syncSalesInbox, INBOX_SYNC_OVERLAP_MS, INBOX_FIRST_PASS_DAYS,
+  type InboxSyncReport, type InboxSyncLine, type InboxSyncOptions,
+} from './sales-inbox-sync.ts';
+export {
+  SALES_ENGINE_TASKS, SALES_SCHEDULE, SALES_SETTINGS,
+  readGlobalPause, setGlobalPause, readStrategy, sendPolicyOf, bounceCounts, replyReceivedFor, policyStateFor,
+  defaultOutbound, defaultDiscovery, segmentSupportedByBatch, pickSegmentForDiscovery,
+  cancelFollowUps, applyReplyConsequences, createSalesEngineHandlers, runSendCycle, scheduleSalesCycle,
+  gatherSalesStats, runOptimizationCycle, decideRecommendation, rollbackStrategy, recordSalesOutcome,
+  type GlobalPause, type DiscoveryResult, type SalesEngineDeps, type SendCycleReport, type ScheduleReport,
+  type RecommendationDecision,
+} from './sales-engine.ts';
+export { buildSalesDashboard, type SalesDashboard, type DashboardRange, type SystemLight } from './sales-dashboard.ts';

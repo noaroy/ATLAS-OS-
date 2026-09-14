@@ -159,6 +159,75 @@ devient `APPROVED_FOR_DELIVERY` autrement.
 npm run client:mission -- cost --run=<run>
 ```
 
+## Mode automatique — `client:auto`
+
+Le pilote enchaîne tout ce qui est certain et s'arrête exactement là où le
+jugement humain devient utile. Il n'invente rien du pipeline : il appelle le
+preflight, la création, les lots, le tri, les rapports — les mêmes briques,
+dans le même ordre. Rien n'est envoyé, soumis, contacté ni livré.
+
+```bash
+npm run client:auto -- --brief=briefs/<client>.json
+```
+
+Sans `--go` : le plan et l'estimation (candidats max, lots, minutes machine,
+minutes de revue, coût attendu, plafonds), aucune recherche, aucun appel,
+aucune mission créée. Même en automatique, le premier lancement exige `--go`.
+
+```bash
+npm run client:auto -- --brief=briefs/<client>.json --go --budget=3.00
+```
+
+Preflight (un NO-GO n'est jamais contourné) → mission → lots enchaînés, de
+taille adaptative (10–50, montée quand la qualité est bonne, descente au
+moindre signe) → reprise automatique des échecs reprenables avec attente →
+qualité de lot (GOOD / WARNING / BAD) → rendement de recherche → arrêt propre.
+Le pilote s'arrête, et le dit, quand :
+
+| État | Ce qui s'est passé | Votre commande |
+|---|---|---|
+| `HUMAN_REVIEW_REQUIRED` | plus de 40 % du lot à revoir, 10 dossiers en attente, ou qualité BAD | `npm run client:review -- --run=<run> --interactive` |
+| `WAITING_CLIENT_FEEDBACK` | un rapport PARTIAL est écrit (à partir de `--partial-at=10` retenues) | `npm run client:auto -- --run=<run> --feedback="…"` |
+| `BRIEF_UPDATE_REQUIRED` | une proposition de brief v(n+1) attend votre relecture | `npm run client:auto -- --run=<run> --approve-brief --go` |
+| `FINAL_REVIEW_REQUIRED` | objectif atteint, marché saturé (3 lots sans rien de neuf), ou plafond de lots | `npm run client:auto -- --run=<run> --final` |
+| `FINAL_READY` | le rapport FINAL est écrit — pas envoyé | `client:report --approve …` puis `client:auto -- --run=<run> --complete` |
+| `PAUSED_BUDGET` | le plafond a arrêté un lot ; rien de perdu | `--budget=<nouveau> --raise-budget --go` |
+| `PAUSED_INFRA` | aucun moteur ne répond | réparer, puis `--go` |
+
+Niveaux : `--level=0` MANUAL (recommande, ne lance rien) · `1` ASSISTED (nomme
+la prochaine action) · `2` SEMI_AUTO (défaut : lots, reprises, mesures ; pause
+pour revue et retour client) · `3` AUTO_MISSION (ne s'arrête que pour une
+revue critique, le client, le budget, l'infra).
+
+Ce qui reste toujours humain : la revue, le retour client, l'approbation d'un
+brief, un plafond relevé, le rapport final, la clôture, et tout geste
+commercial externe.
+
+Suivi, arrêt, reprise :
+
+```bash
+npm run client:status -- --run=<run>
+```
+
+```bash
+npm run client:pause -- --run=<run>
+```
+
+Le candidat en cours se termine, l'état est écrit ; `client:auto -- --run=<run>
+--go` reprend exactement là. Ctrl+C fait la même chose. Deux exécutants sur
+la même mission sont refusés (verrou `out/client/<run>/runner.lock`).
+
+Chaque transition est journalisée dans les événements de la mission ; chaque
+lot, revue, brief, PARTIAL et FINAL écrit un instantané dans
+`out/client/<run>/snapshots/` et régénère `decisions.jsonl` — une ligne par
+société : décision, raison, preuve, règle, version du brief. Bornes : 6 lots
+par lancement, 12 par mission, 45 minutes par lancement, 3 tentatives par
+candidat, l'objectif `maxCandidates` du brief.
+
+L'objectif du brief (`objective.targetRetained`, `targetRetainedMin`,
+`maxCandidates`) est une cible, pas une promesse : si le marché ne porte que
+douze bonnes sociétés, la mission s'arrête à douze.
+
 ## Dry-run gratuit
 
 ```bash

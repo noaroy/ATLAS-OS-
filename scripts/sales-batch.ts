@@ -50,6 +50,8 @@ import {
   buildOutreachDraft,
   SALES_SCORING_MODEL,
   planQueries,
+  SALES_QUERY_VOCABULARY,
+  type QueryVocabulary,
   whyNotACompanyName,
   checkHumanization,
   collectIdentitySignals,
@@ -248,7 +250,32 @@ async function main(): Promise<void> {
   const wave = Number(arg('wave') ?? repos.sales.batchIds().length);
   console.log(`  ${c.dim}vague ${wave}${c.reset}`);
 
-  for (const plan of planQueries(undefined, 8, wave)) {
+  /**
+   * Le segment, quand le moteur commercial en désigne un.
+   *
+   * Il ne change pas les gardes : même pipeline, même ICP, même marché (la
+   * France, que ce lot sait chercher). Il change le vocabulaire des requêtes —
+   * ses mots-clés deviennent les offres cherchées, ses secteurs les activités —
+   * et il signe l'attribution de chaque entreprise découverte, pour que le
+   * tableau de bord sache à quel marché elle doit son existence.
+   */
+  const segment = arg('segment') ? repos.salesEngine.segment(arg('segment')!) : null;
+  if (arg('segment') && !segment) {
+    console.error(`  ${c.red}Segment inconnu : ${arg('segment')}${c.reset}`);
+    await system.shutdown('segment inconnu');
+    process.exitCode = 1;
+    return;
+  }
+  const vocabulary: QueryVocabulary | undefined = segment
+    ? {
+        ...SALES_QUERY_VOCABULARY,
+        offerings: segment.keywords.length > 0 ? segment.keywords : SALES_QUERY_VOCABULARY.offerings,
+        activities: segment.sectors.length > 0 ? segment.sectors : SALES_QUERY_VOCABULARY.activities,
+      }
+    : undefined;
+  if (segment) console.log(`  ${c.dim}segment ${segment.name} (${segment.id})${c.reset}`);
+
+  for (const plan of planQueries(vocabulary, 8, wave)) {
     const query = plan.query;
     if (raw.length >= MAX_DISCOVERED * 2) break;
     try {
@@ -356,7 +383,7 @@ async function main(): Promise<void> {
 
   for (const { candidate, identity } of kept) {
     const source = raw.find((r) => r.sourceUrl === candidate.url);
-    repos.sales.discover({
+    const discovered = repos.sales.discover({
       batchId,
       companyName: identity.companyName,
       domain: identity.canonicalDomain,
@@ -372,6 +399,15 @@ async function main(): Promise<void> {
       identitySources: identity.identitySources,
       guardVersion: GUARD_VERSION,
     });
+    if (segment && identity.canonicalDomain) {
+      repos.salesEngine.attribute({
+        domain: identity.canonicalDomain,
+        prospectId: discovered.prospect.id,
+        segmentId: segment.id,
+        angle: segment.offerAngle,
+        discoveredAt: discovered.prospect.discoveredAt,
+      });
+    }
   }
 
   // ── Qualification : le modèle, sur les survivants seulement ──────────────

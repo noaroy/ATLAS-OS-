@@ -565,3 +565,27 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ─── La page unique du moteur commercial ──────────────────────────────── */
+.cc-filters { display: inline-flex; gap: var(--sp-1); align-items: center; margin-left: var(--sp-3); }
+.cc-select {
+  font: inherit; font-size: 0.78rem; color: var(--cc-text); background: var(--cc-panel);
+  border: 1px solid var(--cc-line); border-radius: var(--r-ui); padding: 4px 8px;
+}
+.cc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.cc-reco { display: flex; justify-content: space-between; gap: var(--sp-3); align-items: flex-start; padding: var(--sp-1) 0; border-bottom: 1px solid var(--cc-line-soft); }
+.cc-reco:last-child { border-bottom: none; }
+.cc-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.cc-excerpt { max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cc-faint); }
+.cc-muted { opacity: 0.55; }
+.cc-system-line { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; font-size: 0.85rem; margin: 0; }
+.cc-light { font-family: var(--font-mono); }
+.cc-light--ok { color: var(--cc-ok); }
+.cc-light--warn { color: var(--cc-warn); }
+.cc-light--bad { color: var(--cc-bad); }
+.cc-light--idle { color: var(--cc-faint); }
+@media (max-width: 900px) {
+  .cc-reco { flex-direction: column; }
+  .cc-excerpt { max-width: 24ch; }
+  .cc-filters { margin-left: 0; flex-wrap: wrap; }
+}

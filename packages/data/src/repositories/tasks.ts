@@ -1283,7 +1283,23 @@ export class TaskRepository {
       .run(nowIso(), reason, runId);
   }
 
-  lastDaemonRun(): { id: string; startedAt: string; stoppedAt: string | null; pid: number } | null {
+  /**
+   * Ferme les tours restés ouverts par un processus qui n'a pas pu le dire
+   * (coupure, kill). Appelé au démarrage suivant : l'historique dit alors
+   * « arrêt non consigné », jamais « toujours en marche ».
+   */
+  closeStaleDaemonRuns(exceptRunId: string, reason = 'arrêt non consigné : reprise par un nouveau daemon'): number {
+    return this.db
+      .prepare('UPDATE daemon_runs SET stopped_at = ?, stop_reason = ? WHERE stopped_at IS NULL AND id != ?')
+      .run(nowIso(), reason, exceptRunId).changes;
+  }
+
+  /** Le daemon date son tour : sans cette trace, un processus mort ressemble à un processus qui dort. */
+  heartbeatDaemonRun(runId: string): void {
+    this.db.prepare('UPDATE daemon_runs SET last_heartbeat_at = ? WHERE id = ?').run(nowIso(), runId);
+  }
+
+  lastDaemonRun(): { id: string; startedAt: string; stoppedAt: string | null; pid: number; host: string; lastHeartbeatAt: string | null } | null {
     const row = this.db
       .prepare('SELECT * FROM daemon_runs ORDER BY started_at DESC LIMIT 1')
       .get() as Record<string, unknown> | undefined;
@@ -1293,6 +1309,8 @@ export class TaskRepository {
           startedAt: row.started_at as string,
           stoppedAt: (row.stopped_at as string | null) ?? null,
           pid: row.pid as number,
+          host: row.host as string,
+          lastHeartbeatAt: (row.last_heartbeat_at as string | null) ?? null,
         }
       : null;
   }

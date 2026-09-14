@@ -171,7 +171,9 @@ describe('ce module n’envoie rien', () => {
         // partir quoi que ce soit, et c'est pour le vérifier que cette liste
         // est exhaustive.
         'advanceSyncCheckpoint',
-        'all', 'alreadyImported', 'byDomain', 'eventsFor', 'knownMessageIds',
+        // `eventsSince` lit les événements de toutes les conversations depuis
+        // une date : la matière du tableau de bord. Lecture seule.
+        'all', 'alreadyImported', 'byDomain', 'eventsFor', 'eventsSince', 'knownMessageIds',
         'knownThreadIds', 'ledgerFollowUpFor', 'logImport', 'open', 'recordInboundEvent',
         'syncCheckpoint',
       ],

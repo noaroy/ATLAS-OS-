@@ -44,7 +44,9 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths=/opt/atlas/data
+# `data/` porte la base, les sauvegardes et le fichier de pid ; `out/` les
+# rapports des missions client. Rien d'autre n'est écrit.
+ReadWritePaths=/opt/atlas/data /opt/atlas/out
 
 StandardOutput=journal
 StandardError=journal

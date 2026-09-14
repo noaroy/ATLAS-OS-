@@ -763,4 +763,72 @@ export const cc = {
   outreach: () => get<OutreachView>('/api/cc/outreach'),
   followUps: () => get<FollowUpsView>('/api/cc/follow-ups'),
   analytics: () => get<AnalyticsView>('/api/cc/analytics'),
+  dashboard: (range: DashboardRange, segment: string | null) =>
+    get<SalesDashboard>(`/api/cc/dashboard?range=${range}${segment ? `&segment=${encodeURIComponent(segment)}` : ''}`),
+};
+
+// ─── Le moteur commercial : la page unique et ses décisions ──────────────────
+
+export type DashboardRange = '7d' | '30d' | 'all';
+
+export interface SystemLight { state: 'ok' | 'warn' | 'down' | 'off'; detail: string }
+
+export interface SalesDashboard {
+  generatedAt: string;
+  range: DashboardRange;
+  since: string | null;
+  segmentId: string | null;
+  cards: {
+    meetingsThisWeek: number; clientsSigned: number; revenueSigned: number; currency: string;
+    pipelinePotential: number | null; pipelineExplanation: string[];
+  };
+  funnel: Array<{ stage: string; label: string; count: number; rate: number | null }>;
+  performance: {
+    positiveReplyRate: number | null; replyRate: number | null; meetingPerContact: number | null;
+    clientPerContact: number | null; cac: number | null; revenuePer100: number | null; spendUsd: number | null;
+  };
+  segments: Array<{
+    id: string; name: string; status: string; approvedForSend: boolean; contacted: number;
+    positiveReplies: number; meetings: number; clients: number; revenuePer100: number | null;
+    decision: string; decisionReason: string;
+  }>;
+  best: {
+    segment: { id: string; name: string; positiveRate: number } | null;
+    messageVariant: { key: string; positiveRate: number; contacted: number } | null;
+  };
+  recommendations: Array<{
+    id: string; kind: string; title: string; reason: string; sampleSize: number; expectedImpact: string | null;
+    risk: string; status: string; humanRequired: boolean; hasChange: boolean; createdAt: string;
+  }>;
+  insufficient: Array<{ subject: string; sample: number; needed: number }>;
+  hotLeads: Array<{
+    domain: string; companyName: string; intent: string; confidence: number; receivedAt: string;
+    subject: string | null; excerpt: string | null; status: 'OPEN' | 'HANDLED';
+  }>;
+  hotLeadsTotal: number;
+  system: {
+    search: SystemLight; llm: SystemLight; gmail: SystemLight; workers: SystemLight; database: SystemLight;
+    outbound: { enabled: boolean; mode: string; paused: boolean; pauseReason: string | null; window: string; windowOpen: boolean };
+    lastCycleAt: string | null;
+    openInsights: number;
+    detail: string[];
+  };
+}
+
+export const sales = {
+  pause: (reason: string) => post<{ paused: boolean }>('/api/sales/pause', { reason }),
+  resume: () => post<{ paused: boolean }>('/api/sales/resume'),
+  decide: (id: string, decision: 'test' | 'approve' | 'reject') =>
+    post<{ applied: boolean; reason: string }>(`/api/sales/recommendations/${id}/${decision}`),
+  outcome: (body: {
+    domain: string; kind: string; revenueAmount?: number | null; currency?: string; occurredAt?: string;
+    offer?: string | null; note?: string | null;
+  }) => post<{ id: string }>('/api/sales/outcomes', body),
+  segmentAction: (id: string, action: string, reason?: string) =>
+    post<unknown>(`/api/sales/segments/${id}/${action}`, reason ? { reason } : undefined),
+  suppress: (body: { kind: 'EMAIL' | 'DOMAIN' | 'COMPANY'; value: string; reason: string }) =>
+    post<{ created: boolean }>('/api/sales/suppress', body),
+  leadHandled: (domain: string, note?: string) =>
+    post<unknown>(`/api/sales/leads/${encodeURIComponent(domain)}/handled`, note ? { note } : undefined),
+  insights: () => get<Array<{ id: string; title: string; detail: string; frequency: number; status: string; lastSeenAt: string }>>('/api/sales/insights'),
 };

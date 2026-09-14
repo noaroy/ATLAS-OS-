@@ -18,9 +18,9 @@ import { join } from 'node:path';
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
 import {
-  BUSINESS_EXPANSION, PIPELINE_VERSION, evaluateApproval, parseDeclaredChecks, HUMAN_CHECKS,
+  BUSINESS_EXPANSION, evaluateApproval, parseDeclaredChecks, HUMAN_CHECKS,
 } from '../packages/departments/src/index.ts';
-import { buildClientRunReport, loadClientRun, renderReviewQueue } from '../packages/runtime/src/index.ts';
+import { buildClientRunReport, loadClientRun, writeClientReportFiles } from '../packages/runtime/src/index.ts';
 
 loadAtlasEnv();
 
@@ -85,43 +85,27 @@ async function main(): Promise<void> {
     const status = flag('final') ? 'FINAL' : flag('partial') ? 'PARTIAL' : null;
     if (!status) throw new Error('--partial ou --final requis');
     const generatedAt = new Date().toISOString();
-    const built = buildClientRunReport(repos, runId, {
+    // Écrit sous out/ : le même chemin, la même fonction que le pilote automatique.
+    const writeFile = (relative: string, content: string): string => {
+      const chemin = join('out', relative);
+      mkdirSync(join(chemin, '..'), { recursive: true });
+      writeFileSync(chemin, content, 'utf8');
+      return chemin;
+    };
+    const files = writeClientReportFiles(repos, runId, {
       status, generatedAt, scoringModel: BUSINESS_EXPANSION.scoringModel, executionMode: 'live',
-      sellingPriceEur: arg('price') ? Number(arg('price')) : null,
-    });
+      sellingPriceEur: arg('price') ? Number(arg('price')) : null, submit: flag('submit'),
+    }, writeFile);
+    const { built, htmlPath, csvPath, exclusionsPath } = files;
+    const revue = { items: { length: files.reviewCounts.P1 + files.reviewCounts.P2 + files.reviewCounts.P3 }, ...files.reviewCounts };
+    const revuePath = files.reviewPath ?? '';
+    const etat = files.state;
 
-    const dossier = join('out', 'client', runId);
-    mkdirSync(dossier, { recursive: true });
-    const stamp = generatedAt.slice(0, 16).replace(/[:T]/g, '-');
-    const base = `rapport-${status}-v${brief.version}-${stamp}`;
-    const htmlPath = join(dossier, `${base}.html`);
-    const csvPath = join(dossier, `${base}.csv`);
-    const exclusionsPath = join(dossier, `${base}-ecartees.csv`);
-    writeFileSync(htmlPath, built.html, 'utf8');
-    writeFileSync(csvPath, built.csv, 'utf8');
-    writeFileSync(exclusionsPath, built.exclusionsCsv, 'utf8');
-    // La file de revue, à côté : interne, jamais livrée.
-    const revue = renderReviewQueue(repos, runId, generatedAt);
-    const revuePath = join(dossier, `revue-v${brief.version}-${stamp}.html`);
-    if (revue.items.length > 0) {
-      writeFileSync(revuePath, revue.html, 'utf8');
-      writeFileSync(join(dossier, `revue-v${brief.version}-${stamp}.csv`), revue.csv, 'utf8');
-    }
-
-    const row = repos.orders.recordReport({
-      missionId: runId, htmlPath, csvPath, teaserPath: null,
-      pipelineVersion: PIPELINE_VERSION, scoringVersion: 'client-criteria-v1', executionMode: 'live',
-      evidenceIds: built.evidenceIds, sources: built.report.sources, costUsd: built.costUsd,
-      candidates: built.report.analysedCount, retained: built.retained.length, generatedAt,
-    });
-    let etat = row.state;
-    if (flag('submit')) etat = repos.orders.setReportState(row.id, 'PENDING_REVIEW').state;
-
-    console.log(`\n  ${c.bold}RAPPORT ${status}${c.reset}  ${row.id} · état ${etat}`);
+    console.log(`\n  ${c.bold}RAPPORT ${status}${c.reset}  ${files.reportId} · état ${etat}`);
     console.log(`  ${brief.client.name} · ${brief.market.countryLabel} · brief v${brief.version}`);
     console.log(`  analysées ${built.report.analysedCount} · ${c.green}retenues ${built.retained.length}${c.reset} · ${c.amber}à revoir ${built.reviewRequired.length}${c.reset}${built.pendingHumanCheck.length ? ` (+${built.pendingHumanCheck.length} à vérifier avant lecture)` : ''} · écartées ${built.excluded.length}${built.unreachable.length ? ` · injoignables ${built.unreachable.length}` : ''} · sources ${built.report.sources.length} · coût ${built.costUsd.toFixed(4)} $`);
     console.log(`  ${htmlPath}\n  ${csvPath}\n  ${exclusionsPath}`);
-    if (revue.items.length > 0) console.log(`  ${c.amber}${revuePath}${c.reset} — ${revue.items.filter((i) => i.priority === 'P1').length} P1 · ${revue.items.filter((i) => i.priority === 'P2').length} P2 · ${revue.items.filter((i) => i.priority === 'P3').length} P3 (interne)`);
+    if (revue.items.length > 0) console.log(`  ${c.amber}${revuePath}${c.reset} — ${revue.P1} P1 · ${revue.P2} P2 · ${revue.P3} P3 (interne)`);
     if (status === 'PARTIAL') console.log(`  ${c.dim}Sélection intermédiaire : la mission reste ouverte. Après le retour du client : npm run client:mission -- adjust --run=${runId} …${c.reset}`);
     if (!flag('submit')) console.log(`  ${c.dim}Pour la revue : ajouter --submit, puis --approve avec les quatre contrôles humains.${c.reset}`);
     console.log();

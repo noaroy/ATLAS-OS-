@@ -26,6 +26,7 @@ import {
 } from './views/Pipeline.tsx';
 import { SearchFabricScreen, MultiModelView } from './views/Search.tsx';
 import { OutreachScreen, FollowUpsScreen, AnalyticsScreen } from './views/Outreach.tsx';
+import { SalesView } from './views/Sales.tsx';
 
 /**
  * Application shell and routing.
@@ -67,9 +68,11 @@ export default function App() {
       <Route path="/village" element={<VillageView />} />
 
       <Route element={<Shell />}>
-        {/* L'ecran d'accueil : ce qui s'est passe, ce qui attend une decision.
-            L'ancien tableau de bord reste accessible pour le detail operationnel. */}
-        <Route path="/" element={<AtlasView />} />
+        {/* L'ecran d'accueil : la page unique du moteur commercial — ce que ca
+            rapporte, ou ca coince, ce qu'ATLAS propose. L'ancien accueil et le
+            tableau de bord restent accessibles pour le detail operationnel. */}
+        <Route path="/" element={<SalesView />} />
+        <Route path="/atlas" element={<AtlasView />} />
         <Route path="/dashboard" element={<DashboardView />} />
         <Route path="/missions" element={<MissionsView />} />
         <Route path="/missions/:id" element={<MissionDetailView />} />

@@ -104,6 +104,8 @@ export interface ClientRunContext {
   kind: 'client-mission';
   briefs: ClientBrief[];
   batches: BatchSummary[];
+  /** L'état du pilote automatique, s'il a été engagé sur cette mission. */
+  autopilot?: Record<string, unknown>;
 }
 
 export interface BatchSummary {
@@ -142,6 +144,11 @@ export interface BatchOptions {
   concurrency?: number;
   /** Lire et juger en passant par la mémoire des pages et des qualifications. Vrai par défaut. */
   cache?: boolean;
+  /**
+   * Le coupe-circuit : consulté avant chaque candidat. Vrai = finir le
+   * candidat en cours, écrire, et rendre la main — rien d'entamé n'est perdu.
+   */
+  shouldStop?: () => boolean;
   /** Domaines à ne pas retraiter, en plus de ceux du brief. */
   exclude?: string[];
   /**
@@ -274,7 +281,10 @@ export function loadClientRun(repos: Repositories, runId: string): { context: Cl
   const brief = context.briefs[context.briefs.length - 1]!;
   const check = parseClientBrief(brief);
   if (!check.ok) throw new Error(`brief invalide en base : ${check.errors.join(' ; ')}`);
-  return { context: { kind: 'client-mission', briefs: context.briefs, batches: context.batches ?? [] }, brief: check.brief! };
+  return {
+    context: { kind: 'client-mission', briefs: context.briefs, batches: context.batches ?? [], ...(context.autopilot ? { autopilot: context.autopilot } : {}) },
+    brief: check.brief!,
+  };
 }
 
 function saveContext(repos: Repositories, runId: string, context: ClientRunContext): void {
@@ -488,6 +498,7 @@ export async function runClientBatch(deps: ClientMissionDeps, options: BatchOpti
   const travailleur = async (): Promise<void> => {
     for (;;) {
       if (arrete) return;
+      if (options.shouldStop?.()) { summary.stoppedBecause = summary.stoppedBecause ?? 'arrêt demandé'; arrete = true; return; }
       const i = prochain;
       prochain += 1;
       const candidat = attente[i];

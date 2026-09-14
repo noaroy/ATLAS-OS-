@@ -36,6 +36,7 @@ import {
   buildAgents, buildOrganization, buildAiFabric, buildCosts, buildInbox, buildSystemHealth,
   buildSearchFabric, buildMultiModelTrace, buildOutreach, buildFollowUps, buildAnalytics,
 } from './command-center.ts';
+import { registerSalesRoutes } from './sales-routes.ts';
 
 /**
  * The complete REST surface.
@@ -120,6 +121,9 @@ export function registerRoutes(app: FastifyInstance, system: AtlasSystem, limite
   // qui pourrait contourner une approbation n'aurait plus rien d'un écran.
   app.get('/api/cc/war-room', async (_request, reply) =>
     sendOk(reply, buildWarRoom(repos, system.config)));
+
+  // La page unique du moteur commercial et ses décisions.
+  registerSalesRoutes(app, system);
 
   app.get('/api/cc/prospecting', async (_request, reply) =>
     sendOk(reply, buildProspecting(repos, system.config)));

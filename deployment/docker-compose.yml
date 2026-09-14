@@ -31,10 +31,10 @@ services:
       - atlas-data:/data
     networks: [atlas]
     depends_on:
-      n8n:
-        condition: service_started
       # ATLAS attend que le moteur réponde : démarrer une mission de découverte
       # sur un moteur qui n'écoute pas encore produirait un échec inutile.
+      # n8n n'est plus une dépendance : il est optionnel (profil `n8n`), et
+      # ATLAS_N8N_ENABLED reste faux tant qu'on ne l'active pas.
       searxng:
         condition: service_healthy
     # A generous stop window so the graceful shutdown can finish its backup.
@@ -43,9 +43,12 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
 
+  # Optionnel : `docker compose --profile n8n up -d`. Sans le profil, il ne
+  # démarre pas et ATLAS tourne sans lui.
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
+    profiles: ["n8n"]
     environment:
       N8N_HOST: n8n
       N8N_PORT: 5678

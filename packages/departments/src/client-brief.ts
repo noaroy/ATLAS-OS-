@@ -63,6 +63,18 @@ export const ClientBriefSchema = z.object({
   /** Domaines validés par le client : conservés tels quels d'une version à l'autre. */
   keepDomains: z.array(z.string().min(3).max(120)).default([]),
   notes: z.string().max(2000).optional(),
+  /**
+   * L'objectif de la mission — des cibles, jamais des promesses. Si le marché
+   * ne porte que douze bonnes sociétés, la mission s'arrête à douze.
+   */
+  objective: z.object({
+    /** Le nombre de sociétés retenues à partir duquel la recherche peut s'arrêter. */
+    targetRetained: z.number().int().min(1).max(500).default(15),
+    /** En dessous, le rapport final signale que l'objectif n'est pas atteint. */
+    targetRetainedMin: z.number().int().min(0).max(500).default(10),
+    /** Le nombre maximal de sociétés inspectées, tous lots confondus. */
+    maxCandidates: z.number().int().min(10).max(2000).default(200),
+  }).default({ targetRetained: 15, targetRetainedMin: 10, maxCandidates: 200 }),
 });
 
 export type ClientBrief = z.infer<typeof ClientBriefSchema>;

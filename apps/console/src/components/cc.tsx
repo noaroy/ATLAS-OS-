@@ -101,11 +101,14 @@ export function tone(state: string): 'ok' | 'warn' | 'bad' | 'idle' | 'run' {
     case 'RUNNING':
       return 'run';
     case 'HEALTHY': case 'READY': case 'DONE': case 'ok':
+    case 'VALIDATED': case 'SCALE': case 'APPROVED': case 'SUCCESS':
       return 'ok';
     case 'DEGRADED': case 'UNKNOWN': case 'QUEUED': case 'WAITING':
     case 'NEEDS_APPROVAL': case 'MANUAL_ACTION_REQUIRED':
+    case 'TESTING': case 'PROPOSED': case 'PAUSED': case 'warn':
       return 'warn';
     case 'OFFLINE': case 'BLOCKED': case 'FAILED': case 'UNAVAILABLE':
+    case 'STOPPED': case 'REJECTED': case 'ROLLED_BACK': case 'bad':
       return 'bad';
     default:
       return 'idle';

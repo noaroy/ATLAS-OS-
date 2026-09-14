@@ -33,6 +33,11 @@ import {
   VillageService,
   runBackup,
   recoverInterruptedMissions,
+  AtlasDaemon,
+  createWorkerRegistry,
+  createSalesEngineHandlers,
+  scheduleSalesCycle,
+  DEMO_HANDLERS,
   type RecoveryReport,
 } from '@atlas/runtime';
 
@@ -92,11 +97,26 @@ export interface AtlasSystem {
    */
   runtime: AgentRuntime;
   ledger: BudgetLedger;
+  /**
+   * Le daemon embarqué : le même `AtlasDaemon` que `npm run atlas:daemon`,
+   * avec les workers du moteur commercial enregistrés. Un seul processus sur
+   * le serveur, un seul service à surveiller. `null` quand le moteur est coupé.
+   */
+  daemon: AtlasDaemon | null;
   settings(): RuntimeSettings;
   shutdown(reason: string): Promise<void>;
 }
 
-export function createSystem(config: AtlasConfig): AtlasSystem {
+export interface CreateSystemOptions {
+  /**
+   * Embarquer le daemon et la cadence commerciale. Vrai pour le serveur, faux
+   * pour tous les scripts : une commande ponctuelle qui construit le système
+   * ne doit pas se mettre à prendre des tâches ni à poser des cycles.
+   */
+  daemon?: boolean;
+}
+
+export function createSystem(config: AtlasConfig, options: CreateSystemOptions = {}): AtlasSystem {
   const logger = createLogger({
     level: config.log.level,
     pretty: config.log.pretty,
@@ -304,6 +324,17 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   });
   const village = new VillageService(repos, events);
 
+  // Le moteur commercial : ses workers dans le daemon embarqué, sa cadence
+  // dans le superviseur. Les deux se coupent d'un seul réglage.
+  const salesEnabled = config.sales.engineEnabled && options.daemon === true;
+  const salesHandlers = createSalesEngineHandlers({ repos, config, logger, sourceRoot: process.cwd() });
+  const workers = createWorkerRegistry({
+    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers }, workspaceRoot: process.cwd(),
+  });
+  const daemon = salesEnabled
+    ? new AtlasDaemon({ repos, registry: workers.registry, logger, owner: `atlas-server#${process.pid}` })
+    : null;
+
   const supervisor = new RuntimeSupervisor({
     repos,
     events,
@@ -315,6 +346,7 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     memory,
     village,
     settings,
+    salesScheduler: salesEnabled ? (now) => scheduleSalesCycle(repos, config, now) : undefined,
   });
 
   seed(repos, config, logger);
@@ -325,6 +357,11 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
   // démarre — et elles y restent : reprendre une mission réelle est une
   // décision humaine, jamais un effet de bord du redémarrage.
   const recovery = recoverInterruptedMissions(repos, logger);
+
+  // Le daemon démarre avec le système : sa promesse est gardée pour l'arrêt.
+  const daemonRun: Promise<unknown> = daemon
+    ? daemon.run().catch((err) => logger.error('daemon embarqué arrêté sur erreur', { error: describeError(err) }))
+    : Promise.resolve();
 
   let shuttingDown = false;
   const shutdown = async (reason: string): Promise<void> => {
@@ -341,6 +378,12 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     });
 
     await supervisor.stop();
+    if (daemon) {
+      daemon.requestStop(reason);
+      // Le tour en cours se termine ; au-delà, le bail expirera et la tâche
+      // sera reprise au prochain démarrage — c'est correct, rien n'est consigné.
+      await Promise.race([daemonRun, new Promise((resolve) => setTimeout(resolve, 15_000).unref?.())]);
+    }
     await hermes.shutdown();
     await events.drain(5000);
 
@@ -375,6 +418,7 @@ export function createSystem(config: AtlasConfig): AtlasSystem {
     recovery,
     runtime,
     ledger,
+    daemon,
     settings,
     shutdown,
   };

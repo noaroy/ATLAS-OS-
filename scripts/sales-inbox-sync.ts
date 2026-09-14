@@ -18,7 +18,7 @@
  *   npm run sales:inbox-sync -- --fixture fixtures/inbox.json
  */
 import { readFileSync } from 'node:fs';
-import { createLogger, canonicalDomainOf, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
   GmailInboxProvider,
@@ -27,13 +27,7 @@ import {
   type MailInboxProvider,
   type MailMessage,
 } from '../packages/intelligence/src/index.ts';
-import {
-  classifyInbound,
-  matchIncoming,
-  directionOf,
-  type InboundKind,
-  type MatchCandidate,
-} from '../packages/departments/src/index.ts';
+import { syncSalesInbox, INBOX_FIRST_PASS_DAYS } from '../packages/runtime/src/index.ts';
 
 // Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
 // pas pour ce processus et la configuration parait absente sans qu'aucune
@@ -102,237 +96,56 @@ if (!status.configured) {
   process.exit(0);
 }
 
-// Les entreprises à qui l'on a écrit, avec ce qu'il faut pour rapprocher.
-const candidates: MatchCandidate[] = repos.conversations.all().map((conversation) => ({
-  canonicalDomain: conversation.canonicalDomain,
-  companyName: conversation.companyName,
-  outreachDestination: conversation.destination,
-  knownThreadIds: repos.conversations.knownThreadIds(conversation.id),
-  knownMessageIds: repos.conversations.knownMessageIds(conversation.id),
-}));
+/**
+ * Le cœur vit dans `syncSalesInbox` (runtime) : le daemon l'exécute à cadence
+ * fixe avec exactement les mêmes garanties. Ce script ne garde que ce qui
+ * s'imprime.
+ */
+const boiteSurveillee = process.env.GMAIL_USER?.trim() ?? status.detail.replace(/^bo[iî]te\s+/i, '').trim();
+const report = await syncSalesInbox(repos, provider, {
+  mailbox: boiteSurveillee || 'inconnue',
+  since: flag('since'),
+  max: Number(flag('max') ?? MAX_MESSAGES_PER_SYNC),
+});
 
-if (candidates.length === 0) {
-  console.log(`  ${c.amber}Aucune conversation ouverte.${c.reset} Lancez d'abord : npm run sales:inbox -- sync\n`);
+if (!report.ran) {
+  console.log(`  ${c.amber}${report.skipped}${c.reset}\n`);
+  if (report.skipped?.startsWith('aucune conversation')) {
+    console.log(`  Lancez d'abord : npm run sales:inbox -- sync\n`);
+  }
+  console.log('  MESSAGES SENT: 0\n');
   repos.close();
   process.exit(0);
 }
 
-/**
- * D'où reprendre.
- *
- * Le curseur est persisté par boîte : sans lui, chaque passage relisait les
- * cinquante messages les plus récents et une réponse arrivée en
- * cinquante-et-unième position n'était jamais lue — ni ce jour-là, ni jamais.
- *
- * Un recouvrement volontaire est retranché de la reprise. Deux raisons : les
- * horloges d'expédition ne sont pas les nôtres, et Gmail date un message à sa
- * réception, si bien qu'un courrier retardé peut apparaître avec un horodatage
- * antérieur au dernier traité. Relire un peu trop coûte quelques appels ; le
- * journal d'import écarte les doublons. Relire trop peu perd une réponse.
- */
-const OVERLAP_MS = 6 * 60 * 60 * 1000;
-
-/** Sans curseur, on remonte volontairement loin : « jamais lu » n'est pas « à jour ». */
-const PREMIER_PASSAGE_JOURS = 30;
-
-/**
- * L'identite de la boite, lue a la source.
- *
- * `GMAIL_USER` fait foi : c'est l'adresse dont le jeton porte les droits. Le
- * detail affiche par le fournisseur sert de repli, mais une garde de securite
- * ne doit pas dependre du formatage d'une phrase destinee a etre lue.
- */
-const boiteSurveillee = process.env.GMAIL_USER?.trim()
-  ?? status.detail.replace(/^bo[iî]te\s+/i, '').trim();
-const mailbox = boiteSurveillee || 'inconnue';
-const checkpoint = repos.conversations.syncCheckpoint(provider.id, mailbox);
-const depuis = flag('since')
-  ?? (checkpoint
-    ? new Date(Date.parse(checkpoint.lastReceivedAt) - OVERLAP_MS).toISOString()
-    : new Date(Date.now() - PREMIER_PASSAGE_JOURS * 86_400_000).toISOString());
-
 console.log(
-  `  reprise     : ${checkpoint ? `depuis ${depuis.slice(0, 16).replace('T', ' ')} `
-    + `(curseur ${checkpoint.lastReceivedAt.slice(0, 16).replace('T', ' ')}, recouvrement 6 h)`
-    : `aucun curseur — premier passage, ${PREMIER_PASSAGE_JOURS} derniers jours`}\n`,
+  `  reprise     : ${report.checkpoint ? `depuis ${(report.since ?? '').slice(0, 16).replace('T', ' ')} `
+    + `(curseur ${report.checkpoint.slice(0, 16).replace('T', ' ')}, recouvrement 6 h)`
+    : `aucun curseur — premier passage, ${INBOX_FIRST_PASS_DAYS} derniers jours`}\n`,
 );
 
-const messages = await provider.list({
-  since: depuis,
-  max: Number(flag('max') ?? MAX_MESSAGES_PER_SYNC),
-});
-
-let scanned = 0;
-let matched = 0;
-let newEvents = 0;
-let duplicates = 0;
-let unmatched = 0;
-let sortants = 0;
-const byClassification = new Map<string, number>();
-
-for (const message of messages) {
-  scanned += 1;
-
-  const seen = repos.conversations.alreadyImported(provider.id, message.messageId);
-  if (seen) {
-    duplicates += 1;
-    continue;
-  }
-
-  /**
-   * La direction, avant tout rapprochement.
-   *
-   * Placee ici et pas ailleurs : le rapprochement se fait par fil, et le fil
-   * nous est connu parce que *nous* l'avons ouvert. Nos propres courriers de
-   * prospection y correspondaient donc parfaitement, et revenaient classes
-   * REPLIED. Quatre entreprises figuraient au tableau des reponses a traiter
-   * alors que leur seul message etait le notre.
-   *
-   * Le message sortant est journalise comme ignore, jamais efface : le registre
-   * d'import doit dire qu'on l'a vu et pourquoi on l'a ecarte.
-   */
-  const sens = directionOf({
-    from: message.from, labels: message.labels, mailbox: boiteSurveillee,
-  });
-  if (sens.direction === 'OUTBOUND') {
-    sortants += 1;
-    repos.conversations.logImport({
-      provider: provider.id,
-      externalMessageId: message.messageId,
-      externalThreadId: message.threadId,
-      disposition: 'IGNORED',
-      matchMethod: 'DIRECTION',
-      conversationId: null,
-      eventId: null,
-      reason: `message sortant : ${sens.reason}`,
-      fromAddress: message.from,
-      subject: message.subject,
-      receivedAt: message.receivedAt,
-    });
-    continue;
-  }
-
-  const match = matchIncoming(
-    {
-      from: message.from, to: message.to, threadId: message.threadId,
-      headers: message.headers, bodyText: message.bodyText ?? message.snippet,
-    },
-    candidates,
-  );
-
-  if (!match.candidate) {
-    unmatched += 1;
-    repos.conversations.logImport({
-      provider: provider.id,
-      externalMessageId: message.messageId,
-      externalThreadId: message.threadId,
-      disposition: 'UNMATCHED',
-      matchMethod: null,
-      conversationId: null,
-      eventId: null,
-      reason: match.reason,
-      fromAddress: message.from,
-      toAddress: message.to.join(', '),
-      subject: message.subject,
-      receivedAt: message.receivedAt,
-    });
+for (const line of report.lines) {
+  if (line.kind === 'UNMATCHED') {
     console.log(
-      `  ${c.dim}non rattaché${c.reset} ${(message.subject ?? '(sans objet)').slice(0, 34).padEnd(36)}` +
-        `${c.dim}${match.reason.slice(0, 60)}${c.reset}`,
+      `  ${c.dim}non rattaché${c.reset} ${(line.subject ?? '(sans objet)').slice(0, 34).padEnd(36)}` +
+        `${c.dim}${line.detail.slice(0, 60)}${c.reset}`,
     );
-    continue;
+  } else if (line.kind === 'IMPORTED') {
+    const colour =
+      line.classification === 'BOUNCED' ? c.red
+      : line.classification === 'REPLIED' ? c.green
+      : c.amber;
+    console.log(
+      `  ${colour}${(line.classification ?? '').padEnd(13)}${c.reset}` +
+        `${(line.companyName ?? '').slice(0, 22).padEnd(24)}` +
+        `${c.dim}${line.detail} · ${(line.subject ?? '').slice(0, 40)}${c.reset}`,
+    );
   }
-
-  matched += 1;
-  const conversation = repos.conversations.byDomain(match.candidate.canonicalDomain)!;
-
-  // La classification est celle du Reply Intake : les mêmes règles pour un
-  // message lu dans Gmail que pour un message saisi à la main.
-  const verdict = classifyInbound({
-    kind: 'EMAIL_REPLY',
-    subject: message.subject,
-    sender: message.from,
-    body: message.bodyText ?? message.snippet,
-    receivedAt: message.receivedAt,
-  });
-
-  const event = repos.conversations.recordInboundEvent({
-    conversationId: conversation.id,
-    kind: (verdict.classification === 'BOUNCED'
-      ? 'BOUNCE'
-      : verdict.classification === 'AUTO_REPLY'
-        ? 'AUTO_REPLY'
-        : 'EMAIL_REPLY') as InboundKind,
-    classification: verdict.classification,
-    confidence: verdict.confidence,
-    occurredAt: message.receivedAt,
-    source: `${provider.id} (${match.method})`,
-    rawSubject: message.subject,
-    sender: message.from,
-    bodyExcerpt: message.bodyText ?? message.snippet,
-    signals: verdict.signals,
-    returnDate: verdict.returnDate,
-    // Jamais relu par un humain à ce stade, donc jamais d'état commercial.
-    humanReviewed: false,
-    declaredStatus: null,
-    externalMessageId: message.messageId,
-    externalThreadId: message.threadId,
-  });
-  newEvents += 1;
-  byClassification.set(
-    verdict.classification,
-    (byClassification.get(verdict.classification) ?? 0) + 1,
-  );
-
-  repos.conversations.logImport({
-    provider: provider.id,
-    externalMessageId: message.messageId,
-    externalThreadId: message.threadId,
-    disposition: 'IMPORTED',
-    matchMethod: match.method,
-    conversationId: conversation.id,
-    eventId: event.id,
-    reason: match.reason,
-    fromAddress: message.from,
-    toAddress: message.to.join(', '),
-    subject: message.subject,
-    receivedAt: message.receivedAt,
-  });
-
-  const colour =
-    verdict.classification === 'BOUNCED' ? c.red
-    : verdict.classification === 'REPLIED' ? c.green
-    : c.amber;
-  console.log(
-    `  ${colour}${verdict.classification.padEnd(13)}${c.reset}` +
-      `${conversation.companyName.slice(0, 22).padEnd(24)}` +
-      `${c.dim}${match.method} · ${(message.subject ?? '').slice(0, 40)}${c.reset}`,
-  );
 }
 
 console.log('');
-/**
- * Le curseur n'avance qu'ici — la boucle est terminée, tout a été traité.
- *
- * L'avancer message par message rendrait un plantage en cours de pagination
- * indiscernable d'une synchronisation réussie : le curseur serait au-delà de ce
- * qui a été traité, et les messages sautés ne seraient jamais relus. Un trou
- * permanent, et sans trace. Ici, un plantage laisse le curseur en place ; la
- * fenêtre est relue au passage suivant et le journal d'import écarte les
- * doublons.
- */
-if (messages.length > 0) {
-  const plusRecent = messages
-    .map((m) => m.receivedAt)
-    .reduce((a, b) => (a >= b ? a : b));
-  repos.conversations.advanceSyncCheckpoint({
-    provider: provider.id,
-    mailbox,
-    lastReceivedAt: plusRecent,
-    messagesSeen: scanned,
-  });
-}
-
+const { scanned, outbound: sortants, matched, newEvents, duplicates, unmatched, byClassification: classes } = report;
+const byClassification = new Map(Object.entries(classes));
 console.log(`  EMAILS SCANNED       ${scanned}`);
 console.log(`  NOS PROPRES ENVOIS   ${sortants}  ${c.dim}(ecartes : jamais des reponses)${c.reset}`);
 console.log(`  MATCHED TO OUTREACH  ${matched}`);

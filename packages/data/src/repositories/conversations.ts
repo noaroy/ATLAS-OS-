@@ -291,6 +291,24 @@ export class ConversationRepository {
   }
 
   /**
+   * Tous les événements entrants depuis une date, avec le domaine de leur
+   * conversation. C'est la matière du tableau de bord : taux de réponse,
+   * rebonds, réponses chaudes — lus une fois, jamais recopiés.
+   */
+  eventsSince(sinceIso: string | null): Array<ConversationEventRow & { domain: string; companyName: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT e.*, c.canonical_domain AS domain, c.company_name AS company_name
+           FROM sales_conversation_events e
+           JOIN sales_conversations c ON c.id = e.conversation_id
+          WHERE (? IS NULL OR e.occurred_at >= ?)
+          ORDER BY e.occurred_at ASC, e.rowid ASC`,
+      )
+      .all(sinceIso, sinceIso) as Array<EventRow & { domain: string; company_name: string }>;
+    return rows.map((row) => ({ ...toEvent(row), domain: row.domain, companyName: row.company_name }));
+  }
+
+  /**
    * La relance portée par le registre d'outreach, lue et non recopiée.
    *
    * Groupe JLF a une date de retour enregistrée au moment de l'envoi. La

@@ -257,6 +257,35 @@ const envSchema = z.object({
   // pire.
   ATLAS_SALES_SENDER_NAME: z.string().default('Noa Roy'),
 
+  // --- Le moteur commercial en production -----------------------------
+  // `ATLAS_OUTBOUND_ENABLED` est l'interrupteur general de l'envoi. Faux par
+  // defaut, et faux au premier deploiement : un serveur neuf qui tourne
+  // 24 h/24 decouvre et qualifie, mais n'ecrit a personne tant qu'une personne
+  // n'a pas leve cet interrupteur en connaissance de cause.
+  ATLAS_OUTBOUND_ENABLED: boolish(false),
+  // INTERNAL_TEST ne contacte jamais un vrai prospect, quel que soit l'etat
+  // des autres reglages. PRODUCTION est un choix explicite.
+  ATLAS_ENGINE_MODE: z.enum(['INTERNAL_TEST', 'PRODUCTION']).default('INTERNAL_TEST'),
+  // Le planificateur des cycles commerciaux (decouverte, relances, lecture de
+  // la boite, mesures, recommandations). Le couper arrete la cadence, pas
+  // les commandes manuelles.
+  ATLAS_SALES_ENGINE_ENABLED: boolish(true),
+  ATLAS_SALES_DISCOVERY_ENABLED: boolish(true),
+  ATLAS_SALES_DAILY_AI_BUDGET_USD: floatish(0.5, 0, 50),
+  ATLAS_SALES_DAILY_SEARCH_BUDGET: intish(200, 0, 5000),
+  ATLAS_SALES_HOURLY_SEND_CAP: intish(3, 0, 100),
+  ATLAS_SALES_MIN_SEND_DELAY_SECONDS: intish(120, 0, 86_400),
+  // Fenetre d'envoi, heure locale du fuseau ci-dessous : « 09:00-17:30 ».
+  ATLAS_SALES_SEND_WINDOW: z.string().regex(/^\d{2}:\d{2}-\d{2}:\d{2}$/).default('09:00-17:30'),
+  ATLAS_SALES_WEEKEND_ENABLED: boolish(false),
+  ATLAS_SALES_TIMEZONE: z.string().default('Europe/Paris'),
+  // Une seule relance par entreprise : c'est aussi la borne de `follow-up.ts`.
+  ATLAS_SALES_MAX_FOLLOWUPS: intish(1, 0, 1),
+  // Au-dela de ce taux de rebonds sur l'echantillon minimal, l'envoi se met
+  // en pause tout seul et le dit.
+  ATLAS_SALES_BOUNCE_PAUSE_RATE: floatish(0.05, 0, 1),
+  ATLAS_SALES_BOUNCE_MIN_SAMPLE: intish(20, 1, 1000),
+
   // --- Les workers IA ---------------------------------------------------
   // `live` est le seul reglage dont la valeur par defaut engage de l'argent.
   // Il vaut `false` : tant qu'il n'est pas leve explicitement, aucun appel
@@ -376,6 +405,23 @@ export interface AtlasConfig {
     followUpAfterDays: number;
     /** Le nom qui signe les messages sortants. Vide = aucune signature. */
     senderName: string;
+    /** L'interrupteur general de l'envoi. Faux tant qu'une personne ne l'a pas leve. */
+    outboundEnabled: boolean;
+    /** INTERNAL_TEST n'ecrit jamais a un vrai prospect. */
+    engineMode: 'INTERNAL_TEST' | 'PRODUCTION';
+    engineEnabled: boolean;
+    discoveryEnabled: boolean;
+    dailyAiBudgetUsd: number;
+    dailySearchBudget: number;
+    hourlySendCap: number;
+    minSendDelaySeconds: number;
+    /** « HH:MM-HH:MM », heure locale de `timezone`. */
+    sendWindow: string;
+    weekendEnabled: boolean;
+    timezone: string;
+    maxFollowUps: number;
+    bouncePauseRate: number;
+    bounceMinSample: number;
   };
   /**
    * Les workers de modele, et les bornes qui les empechent de s'emballer.
@@ -601,6 +647,20 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       concurrency: e.ATLAS_SALES_CONCURRENCY,
       followUpAfterDays: e.ATLAS_SALES_FOLLOW_UP_AFTER_DAYS,
       senderName: e.ATLAS_SALES_SENDER_NAME.trim(),
+      outboundEnabled: e.ATLAS_OUTBOUND_ENABLED,
+      engineMode: e.ATLAS_ENGINE_MODE,
+      engineEnabled: e.ATLAS_SALES_ENGINE_ENABLED,
+      discoveryEnabled: e.ATLAS_SALES_DISCOVERY_ENABLED,
+      dailyAiBudgetUsd: e.ATLAS_SALES_DAILY_AI_BUDGET_USD,
+      dailySearchBudget: e.ATLAS_SALES_DAILY_SEARCH_BUDGET,
+      hourlySendCap: e.ATLAS_SALES_HOURLY_SEND_CAP,
+      minSendDelaySeconds: e.ATLAS_SALES_MIN_SEND_DELAY_SECONDS,
+      sendWindow: e.ATLAS_SALES_SEND_WINDOW,
+      weekendEnabled: e.ATLAS_SALES_WEEKEND_ENABLED,
+      timezone: e.ATLAS_SALES_TIMEZONE,
+      maxFollowUps: e.ATLAS_SALES_MAX_FOLLOWUPS,
+      bouncePauseRate: e.ATLAS_SALES_BOUNCE_PAUSE_RATE,
+      bounceMinSample: e.ATLAS_SALES_BOUNCE_MIN_SAMPLE,
     },
     ai: {
       live: e.ATLAS_AI_LIVE,

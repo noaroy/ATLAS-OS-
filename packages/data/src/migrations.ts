@@ -2209,4 +2209,172 @@ CREATE INDEX IF NOT EXISTS idx_qualification_cache_domain ON qualification_cache
 ALTER TABLE page_cache ADD COLUMN final_url TEXT;
 `,
   },
+  {
+    version: 36,
+    name: 'sales-engine-production',
+    sql: `
+-- --- Le moteur commercial en production ------------------------------------
+--
+-- Ce que la boucle commerciale savait faire existait en pieces : prospects,
+-- brouillons, envois exactement-une-fois, conversations, registre. Ce qui lui
+-- manquait pour tourner seule et s'ameliorer, c'est la memoire de ce qu'elle
+-- essaie et de ce que cela rapporte :
+--
+--   sales_segments                 un marche cible, avec son statut de vie
+--   sales_attributions             a quel segment / persona / angle / variante
+--                                  chaque entreprise contactee doit son message
+--   sales_outcomes                 rendez-vous, proposition, gagne, perdu, CA —
+--                                  toujours saisis par une personne
+--   suppression_list               qui ne doit plus jamais etre ecrit, et pourquoi
+--   sales_experiments              les variantes en test et leur allocation
+--   optimization_recommendations   ce qu'ATLAS propose, et ce qu'on en a fait
+--   strategy_versions              chaque reglage commercial change, avant/apres
+--   engineering_insights           les frictions repetees, pour l'ingenierie
+--   sales_friction_events          la matiere premiere des insights
+--   sales_lead_reviews             les reponses chaudes deja traitees
+--
+-- Aucune de ces tables ne decide d'un envoi : la porte reste outbound_sends
+-- et le registre outreach_ledger. Elles rendent la boucle mesurable.
+CREATE TABLE IF NOT EXISTS sales_segments (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL UNIQUE,
+  countries           TEXT NOT NULL DEFAULT '[]',
+  sectors             TEXT NOT NULL DEFAULT '[]',
+  company_size        TEXT,
+  keywords            TEXT NOT NULL DEFAULT '[]',
+  exclusions          TEXT NOT NULL DEFAULT '[]',
+  target_personas     TEXT NOT NULL DEFAULT '[]',
+  buying_signals      TEXT NOT NULL DEFAULT '[]',
+  offer_angle         TEXT,
+  status              TEXT NOT NULL DEFAULT 'TESTING',
+  exploration_weight  REAL NOT NULL DEFAULT 1.0,
+  approved_for_send   INTEGER NOT NULL DEFAULT 0,
+  approved_by         TEXT,
+  approved_at         TEXT,
+  notes               TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sales_attributions (
+  domain              TEXT PRIMARY KEY,
+  prospect_id         TEXT,
+  segment_id          TEXT REFERENCES sales_segments(id),
+  persona             TEXT,
+  angle               TEXT,
+  message_variant     TEXT,
+  subject_variant     TEXT,
+  followup_variant    TEXT,
+  experiment_id       TEXT,
+  discovered_at       TEXT,
+  contacted_at        TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_attributions_segment ON sales_attributions(segment_id);
+CREATE TABLE IF NOT EXISTS sales_outcomes (
+  id                  TEXT PRIMARY KEY,
+  domain              TEXT NOT NULL,
+  kind                TEXT NOT NULL,
+  revenue_amount      REAL,
+  currency            TEXT,
+  occurred_at         TEXT NOT NULL,
+  offer               TEXT,
+  segment_id          TEXT,
+  recorded_by         TEXT NOT NULL,
+  note                TEXT,
+  created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_outcomes_domain ON sales_outcomes(domain);
+CREATE INDEX IF NOT EXISTS idx_sales_outcomes_kind ON sales_outcomes(kind, occurred_at);
+CREATE TABLE IF NOT EXISTS suppression_list (
+  id                  TEXT PRIMARY KEY,
+  kind                TEXT NOT NULL,
+  value               TEXT NOT NULL,
+  reason              TEXT NOT NULL,
+  source              TEXT,
+  evidence            TEXT,
+  created_by          TEXT NOT NULL,
+  created_at          TEXT NOT NULL,
+  UNIQUE (kind, value)
+);
+CREATE TABLE IF NOT EXISTS sales_experiments (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  dimension           TEXT NOT NULL,
+  variants            TEXT NOT NULL,
+  segment_id          TEXT,
+  status              TEXT NOT NULL DEFAULT 'ACTIVE',
+  winner              TEXT,
+  created_at          TEXT NOT NULL,
+  concluded_at        TEXT
+);
+CREATE TABLE IF NOT EXISTS optimization_recommendations (
+  id                  TEXT PRIMARY KEY,
+  kind                TEXT NOT NULL,
+  title               TEXT NOT NULL,
+  reason              TEXT NOT NULL,
+  evidence            TEXT NOT NULL DEFAULT '{}',
+  sample_size         INTEGER NOT NULL DEFAULT 0,
+  expected_impact     TEXT,
+  risk                TEXT NOT NULL DEFAULT 'low',
+  status              TEXT NOT NULL DEFAULT 'PROPOSED',
+  change              TEXT,
+  human_required      INTEGER NOT NULL DEFAULT 1,
+  fingerprint         TEXT NOT NULL,
+  strategy_version_id TEXT,
+  decided_by          TEXT,
+  decided_at          TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_optimization_open
+  ON optimization_recommendations(fingerprint)
+  WHERE status IN ('PROPOSED', 'TESTING', 'APPROVED');
+CREATE TABLE IF NOT EXISTS strategy_versions (
+  id                  TEXT PRIMARY KEY,
+  version             INTEGER NOT NULL,
+  before_json         TEXT NOT NULL,
+  after_json          TEXT NOT NULL,
+  reason              TEXT NOT NULL,
+  recommendation_id   TEXT,
+  metrics_before      TEXT,
+  created_by          TEXT NOT NULL,
+  created_at          TEXT NOT NULL,
+  rolled_back_at      TEXT,
+  rollback_of         TEXT
+);
+CREATE TABLE IF NOT EXISTS engineering_insights (
+  id                  TEXT PRIMARY KEY,
+  title               TEXT NOT NULL,
+  detail              TEXT NOT NULL,
+  evidence            TEXT NOT NULL DEFAULT '{}',
+  frequency           INTEGER NOT NULL DEFAULT 1,
+  status              TEXT NOT NULL DEFAULT 'OPEN',
+  fingerprint         TEXT NOT NULL UNIQUE,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  last_seen_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sales_friction_events (
+  id                  TEXT PRIMARY KEY,
+  kind                TEXT NOT NULL,
+  domain              TEXT,
+  segment_id          TEXT,
+  detail              TEXT,
+  created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_friction_kind ON sales_friction_events(kind, created_at);
+-- Le daemon date ses tours : un tableau de bord qui lit cette colonne sait
+-- distinguer « en marche » de « mort sans avoir pu le dire ».
+ALTER TABLE daemon_runs ADD COLUMN last_heartbeat_at TEXT;
+CREATE TABLE IF NOT EXISTS sales_lead_reviews (
+  domain              TEXT PRIMARY KEY,
+  status              TEXT NOT NULL DEFAULT 'OPEN',
+  handled_by          TEXT,
+  handled_at          TEXT,
+  note                TEXT,
+  updated_at          TEXT NOT NULL
+);
+`,
+  },
 ];

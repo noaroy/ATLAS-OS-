@@ -23,6 +23,12 @@ export interface SupervisorDeps {
   memory: MemoryService;
   village: VillageService;
   settings: () => { memoryRetention: MemoryRetention };
+  /**
+   * Le planificateur du moteur commercial, quand le système l'embarque. Il
+   * ne fait que poser des tâches à clés de période ; le daemon les exécute.
+   * Absent, aucun cycle commercial n'est cadencé — c'est le cas des tests.
+   */
+  salesScheduler?: (now: Date) => { created: string[]; existing: string[] };
 }
 
 /**
@@ -197,6 +203,23 @@ export class RuntimeSupervisor {
         };
       },
     );
+
+    if (this.deps.salesScheduler) {
+      const schedule = this.deps.salesScheduler;
+      automation.registerInternal(
+        'atlas.sales-scheduler',
+        {
+          name: 'Sales engine scheduler',
+          description:
+            'Pose les cycles du moteur commercial (lecture de la boîte, envois approuvés, relances, découverte, mesures, recommandations) avec des clés de période : rien n’est créé deux fois.',
+          trigger: { type: 'schedule', cron: '*/5 * * * *', timezone: 'UTC' },
+        },
+        async () => {
+          const report = schedule(new Date());
+          return { created: report.created.length, existing: report.existing.length };
+        },
+      );
+    }
 
     automation.registerInternal(
       'atlas.housekeeping',

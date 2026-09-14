@@ -108,7 +108,7 @@ export function AtlasView() {
       {/* Ce qui attend une personne, avant tout le reste. */}
       <Panel title={`Il faut vous — ${needsYou.length}`}>
         {needsYou.length === 0 && (
-          <Empty>Rien à décider. ATLAS continue seul.</Empty>
+          <Empty title="Rien à décider." hint="ATLAS continue seul." />
         )}
         <ul className="needs-list">
           {needsYou.map((item, index) => (

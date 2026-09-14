@@ -339,6 +339,18 @@ export class SalesRepository {
     ).map(toProspect);
   }
 
+  /** Les prospects découverts depuis une date (null = depuis toujours). */
+  discoveredSince(sinceIso: string | null): SalesProspect[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM sales_prospects WHERE (? IS NULL OR discovered_at >= ?)
+            ORDER BY discovered_at ASC`,
+        )
+        .all(sinceIso, sinceIso) as Row[]
+    ).map(toProspect);
+  }
+
   latestBatchId(): string | null {
     const row = this.db
       .prepare('SELECT batch_id FROM sales_prospects ORDER BY created_at DESC LIMIT 1')

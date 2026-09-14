@@ -11,7 +11,8 @@ import { relativeTime } from './ui.tsx';
  * casserait des habitudes pour un gain d'esthétique.
  */
 const NAV = [
-  { to: '/', label: 'ATLAS', glyph: '◈', end: true },
+  { to: '/', label: 'Ventes', glyph: '◈', end: true },
+  { to: '/atlas', label: 'ATLAS', glyph: '◇' },
 
   { to: '/cc/war-room', label: 'War Room', glyph: '◆' },
   { to: '/cc/prospecting', label: 'Prospecting', glyph: '⟳' },
@@ -48,6 +49,9 @@ export function Shell() {
     useAtlas();
   const navigate = useNavigate();
   const [alertsOpen, setAlertesOpen] = useState(false);
+  // Sur un écran étroit, le rail se replie derrière un bouton : la page unique
+  // doit se lire d'un téléphone, et treize centimètres de menu l'en empêchaient.
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     connect(['event', 'stats']);
@@ -79,7 +83,10 @@ export function Shell() {
   return (
     <div className="flex h-full bg-[--color-void]">
       {/* ── Rail ─────────────────────────────────────────────────────────── */}
-      <aside className="flex w-[13.5rem] shrink-0 flex-col border-r border-[--color-border] bg-[--color-abyss]">
+      {navOpen ? (
+        <button type="button" aria-label="Fermer le menu" className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setNavOpen(false)} />
+      ) : null}
+      <aside className={`${navOpen ? 'flex' : 'hidden'} fixed inset-y-0 left-0 z-40 w-[13.5rem] shrink-0 flex-col border-r border-[--color-border] bg-[--color-abyss] md:static md:flex`}>
         <div className="flex items-center gap-2.5 px-4 py-3">
           <div className="grid size-7 place-items-center rounded border border-[--color-border-bright] bg-[--color-surface] text-[--color-muted]">
             <span className="text-sm font-semibold">A</span>
@@ -98,6 +105,7 @@ export function Shell() {
               key={item.to}
               to={item.to}
               end={item.end}
+              onClick={() => setNavOpen(false)}
               className={({ isActive }) =>
                 // L'etat actif se marque par un liseret et le texte, pas par
                 // un aplat : quinze entrees dont une pleine attire l'oeil sur
@@ -150,6 +158,14 @@ export function Shell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-9 items-center justify-between gap-4 border-b border-[--color-border] bg-[--color-abyss] px-4">
           <div className="flex items-center gap-3 text-[0.72rem]">
+            <button
+              type="button"
+              aria-label="Menu"
+              className="rounded border border-[--color-border] px-2 py-0.5 text-[--color-muted] md:hidden"
+              onClick={() => setNavOpen((open) => !open)}
+            >
+              ☰
+            </button>
             <span className="flex items-center gap-1.5">
               <span
                 className={`size-2 rounded-full ${

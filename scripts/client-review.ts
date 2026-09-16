@@ -25,7 +25,7 @@ function fiche(i: Item, n: number, total: number): string {
   const lignes = [
     ``,
     `  ${c.dim}[${n}/${total}]${c.reset} ${couleur}${i.priority}${c.reset} ${c.bold}${i.company}${c.reset} · ${i.url}`,
-    `  Décision suggérée : ${c.bold}${i.recommendationLabel}${c.reset} · note ${i.score}/100${i.country ? ` · ${i.country}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}`,
+    `  Décision suggérée : ${c.bold}${i.recommendationLabel}${c.reset} · note ${i.score}/100${i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` (pertinence ${i.relevance ?? i.score}, preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} : ${i.evidenceLevel.missing.join(', ')})` : ''}${i.country ? ` · ${i.country}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}`,
     `  Pourquoi :`,
     ...i.reasons.map((r) => `    ⚠ ${r}`),
     ...(i.evidence.length ? [`  Preuves :`, ...i.evidence.slice(0, 3).map((e) => `    « ${e.quote.slice(0, 140)} » ${c.dim}— ${e.label} · ${e.url}${c.reset}`)] : []),

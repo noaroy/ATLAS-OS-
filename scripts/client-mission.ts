@@ -75,21 +75,28 @@ async function main(): Promise<void> {
 
     if (commande === 'status' || commande === 'cost') {
       const { context, brief } = loadClientRun(repos, runId);
-      const counts = repos.clientCandidates.counts(runId);
+      const resume = repos.clientCandidates.summary(runId);
+      const counts = resume.byStage;
       const spend = spendSoFar(repos, { runId, batchStartedAt: '1970-01-01T00:00:00.000Z' }, new Date().toISOString());
       console.log(`\n  ${c.bold}MISSION ${runId}${c.reset}  ${brief.client.name} · ${brief.market.countryLabel} · brief v${brief.version}${brief.client.internalTest ? ` · ${c.amber}INTERNAL_TEST${c.reset}` : ''}`);
       console.log(`  lots : ${context.batches.length}`);
       for (const b of context.batches) {
-        console.log(`    ${c.dim}#${b.batch} v${b.briefVersion} · ${b.queriesRun} requête(s), ${b.rawResults} résultat(s) bruts, ${b.discovered} nouveaux, ${b.filteredOut} annuaires · traités ${b.processed} : ${b.retained} retenus, ${b.reviewRequired} à revoir, ${b.excluded} écartés, ${b.failed} en échec · ${b.costUsd.toFixed(4)} $${b.stoppedBecause ? ` · arrêt : ${b.stoppedBecause}` : ''}${c.reset}`);
+        console.log(`    ${c.dim}#${b.batch} v${b.briefVersion} · ${b.queriesRun} requête(s), ${b.rawResults} résultat(s) bruts, ${b.discovered + b.filteredOut} inscrits (${b.discovered} nouveaux + ${b.filteredOut} annuaires écartés) · traités ${b.processed} : ${b.retained} retenus, ${b.reviewRequired} à revoir, ${b.excluded} écartés, ${b.failed} en échec · ${b.costUsd.toFixed(4)} $${b.stoppedBecause ? ` · arrêt : ${b.stoppedBecause}` : ''}${c.reset}`);
       }
-      console.log(`  candidats :`);
+      // Une ligne par domaine, un état par ligne : la somme des états est le
+      // nombre d'inscrits, annuaires écartés compris. « Nouveaux » ne compte
+      // que les lus ; l'écart entre les deux est nommé ici, pas deviné.
+      console.log(`  candidats : ${resume.total} inscrit(s) = ${resume.candidates} candidat(s) lu(s) ou à lire + ${resume.prefiltered} écarté(s) avant lecture (annuaires)${resume.consistent ? '' : `  ${c.red}INCOHÉRENCE : états ${Object.values(counts).reduce((a, b) => a + b, 0)} · lignes ${resume.total} · domaines ${resume.distinctDomains}${c.reset}`}`);
       for (const [stage, n] of Object.entries(counts)) if (n > 0) console.log(`    ${stage.padEnd(18)} ${n}`);
       console.log(`  coût modèle : ${spend.run.toFixed(4)} $ (mission) · ${spend.day.toFixed(4)} $ (aujourd’hui, toutes missions)`);
       if (commande === 'status') {
         const prets = repos.clientCandidates.forRun(runId).filter((x) => x.stage === 'RETAINED' || x.stage === 'REVIEW_REQUIRED');
         for (const x of prets) {
-          const d = x.detail as { score?: { total: number; confidence: number }; toConfirm?: string[]; contacts?: { email?: string | null; formUrl?: string | null } };
-          console.log(`    ${x.stage === 'RETAINED' ? c.green : c.amber}${x.stage.padEnd(16)}${c.reset} ${(x.name ?? x.domain).slice(0, 34).padEnd(36)} ${String(d.score?.total ?? '—').padStart(3)}/100 ${c.dim}${d.contacts?.email ?? d.contacts?.formUrl ?? 'sans canal'}${d.toConfirm?.length ? ` · à confirmer : ${d.toConfirm.join(', ')}` : ''}${c.reset}`);
+          const d = x.detail as { score?: { total: number; confidence: number; relevance?: number; evidence?: { level: string; missing: string[] } }; toConfirm?: string[]; contacts?: { email?: string | null; formUrl?: string | null } };
+          const preuve = d.score?.evidence && d.score.evidence.level !== 'COMPLETE'
+            ? ` · pertinence ${d.score.relevance ?? d.score.total} · preuve ${d.score.evidence.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} (${d.score.evidence.missing.join(', ')})`
+            : '';
+          console.log(`    ${x.stage === 'RETAINED' ? c.green : c.amber}${x.stage.padEnd(16)}${c.reset} ${(x.name ?? x.domain).slice(0, 34).padEnd(36)} ${String(d.score?.total ?? '—').padStart(3)}/100 ${c.dim}${d.contacts?.email ?? d.contacts?.formUrl ?? 'sans canal'}${preuve}${d.toConfirm?.length ? ` · à confirmer : ${d.toConfirm.join(', ')}` : ''}${c.reset}`);
         }
       }
       console.log();

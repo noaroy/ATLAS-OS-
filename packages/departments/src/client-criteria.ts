@@ -116,6 +116,8 @@ export interface PromptFacts {
   postalAddress: string | null;
   emails: readonly string[];
   briefTermsSeen: readonly string[];
+  /** L'implantation sur le marché visé, quand elle est établie ou probable — un fait, pas une question. */
+  marketPresence?: string | null;
 }
 
 export function criteriaPrompt(
@@ -130,6 +132,7 @@ export function criteriaPrompt(
     ``,
     `# Faits déjà relevés (acquis)`,
     `Pays : ${facts.country ? `${facts.country} (${facts.countryBasis ?? 'prouvé'})` : 'non prouvé — ne pas conclure'}`,
+    ...(facts.marketPresence ? [`Implantation sur le marché visé : ${facts.marketPresence}`] : []),
     ...(facts.orgNr ? [`Organisationsnummer : ${facts.orgNr}`] : []),
     ...(facts.vat ? [`TVA : ${facts.vat}`] : []),
     ...(facts.postalAddress ? [`Adresse : ${facts.postalAddress}`] : []),
@@ -391,6 +394,70 @@ export function scoreCriteria(criteria: readonly CriterionResult[]): CriteriaSco
     };
   });
   return { total, confidence, components };
+}
+
+// ─── La note et la preuve, distinguées ──────────────────────────────────────
+
+export type EvidenceLevelKind = 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT';
+
+export interface EvidenceLevel {
+  level: EvidenceLevelKind;
+  /** Ce qui manque pour que la note vaille ce qu'elle dit. Vide quand tout est établi. */
+  missing: string[];
+}
+
+/**
+ * Ce que les pages ont réellement établi, indépendamment de la pertinence.
+ *
+ * Le benchmark suédois a montré une société à 100/100 dont le pays n'était pas
+ * prouvé : la note mesurait la pertinence des critères, et rien d'autre. Or
+ * « 100 » se lit comme « tout est là ». Le niveau de preuve dit ce qui manque
+ * — le pays, un critère requis à confirmer — et la note en tient compte.
+ *
+ *   COMPLETE      pays dans le marché, chaque critère requis établi et relu
+ *   PARTIAL       un manque nommé : le pays, ou un critère requis à confirmer
+ *   INSUFFICIENT  aucun critère requis établi
+ */
+export function evidenceLevelOf(input: {
+  criteria: readonly CriterionResult[];
+  countryStatus: 'IN_SCOPE' | 'OUT_OF_SCOPE' | 'NEEDS_VERIFICATION';
+}): EvidenceLevel {
+  const missing: string[] = [];
+  if (input.countryStatus !== 'IN_SCOPE') missing.push('pays');
+  const requis = input.criteria.filter((c) => c.kind === 'required');
+  for (const c of requis) {
+    if (c.verdict === 'TO_CONFIRM') missing.push(c.label);
+    else if (c.verdict === 'ESTABLISHED' && c.evidence.length === 0) missing.push(`${c.label} (sans passage relu)`);
+  }
+  const etablis = requis.filter((c) => c.verdict === 'ESTABLISHED' && c.evidence.length > 0).length;
+  const level: EvidenceLevelKind = missing.length === 0 ? 'COMPLETE' : (requis.length > 0 && etablis === 0) ? 'INSUFFICIENT' : 'PARTIAL';
+  return { level, missing };
+}
+
+/** Ce que la note perd quand la preuve n'est pas complète : nommé, pas deviné. */
+export const EVIDENCE_FACTOR: Record<EvidenceLevelKind, number> = { COMPLETE: 1, PARTIAL: 0.85, INSUFFICIENT: 0.6 };
+
+export interface QualificationScore extends CriteriaScore {
+  /** La pertinence brute des critères, avant la preuve. */
+  relevance: number;
+  evidence: EvidenceLevel;
+}
+
+/**
+ * La note affichée : la pertinence, pondérée par le niveau de preuve.
+ *
+ * 100/100 n'apparaît que si tout ce qui est nécessaire est établi. Une société
+ * dont les critères sont tous établis mais dont le pays reste à prouver garde
+ * sa pertinence visible (100) et une note qui dit le manque (85).
+ */
+export function qualificationScore(
+  criteria: readonly CriterionResult[],
+  countryStatus: 'IN_SCOPE' | 'OUT_OF_SCOPE' | 'NEEDS_VERIFICATION',
+): QualificationScore {
+  const base = scoreCriteria(criteria);
+  const evidence = evidenceLevelOf({ criteria, countryStatus });
+  const total = Math.round(base.total * EVIDENCE_FACTOR[evidence.level]);
+  return { ...base, relevance: base.total, total, evidence };
 }
 
 export type { ClientCriterion };

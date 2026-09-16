@@ -116,10 +116,132 @@ const NON_NOMS = [
   'start', 'startsida', 'hem', 'kontakt', 'om oss', 'valkommen', 'startseite', 'impressum',
 ];
 
+/**
+ * Les noms qui désignent un gabarit, un thème ou un moteur de site — jamais
+ * une entreprise.
+ *
+ * Relevé sur angloscand.eu : le JSON-LD généré par une extension SEO déclarait
+ * une Organization nommée « seodr. theme », le nom du thème WordPress laissé
+ * par défaut. Le nom l'emportait sur « Angloscand », pourtant déclaré en
+ * `og:site_name`. Un mot de cette liste, entier, disqualifie le nom.
+ */
+const NOMS_PARASITES = [
+  'theme', 'thème', 'template', 'wordpress', 'wp', 'demo', 'elementor', 'divi', 'astra', 'oceanwp',
+  'generatepress', 'kadence', 'wix', 'squarespace', 'webflow', 'shopify', 'joomla', 'drupal', 'typo3',
+  'site title', 'sitename', 'site name', 'default', 'untitled', 'sample', 'lorem ipsum', 'seodr',
+  'just another wordpress site', 'my blog', 'coming soon', 'under construction',
+];
+
+/** Vrai quand le nom est un gabarit, un thème ou un moteur — pas une entreprise. */
+export function isParasiteName(name: string): boolean {
+  const plat = normalizeCompanyName(name);
+  if (!plat) return true;
+  const mots = plat.split(' ');
+  return NOMS_PARASITES.some((p) => plat === p || (p.includes(' ') ? plat.includes(p) : mots.includes(p)));
+}
+
+/**
+ * Le nom qu'un domaine porte, quand aucune page ne le déclare mieux :
+ * « angloscand.se » → « Angloscand ». Un repli lisible, jamais une preuve.
+ */
+export function companyNameFromDomain(domain: string): string {
+  const racine = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0]!.split('.')[0] ?? '';
+  if (!racine) return domain;
+  return racine.split(/[-_]+/).filter(Boolean).map((m) => m.charAt(0).toUpperCase() + m.slice(1)).join(' ') || domain;
+}
+
+/**
+ * Les nœuds d'un JSON-LD, un par accolade fermée au même niveau.
+ *
+ * Le `@graph` de Rank Math met dans un seul script une Organization, un
+ * WebSite, une WebPage — chacun avec son `name`. Lire « le premier name du
+ * script » attribuait à l'entreprise le nom du premier nœud venu. On isole
+ * chaque objet, et l'on ne lit son nom que s'il est une organisation.
+ */
+export function jsonLdNodes(body: string): string[] {
+  const nodes: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        nodes.push(body.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return nodes;
+}
+
+/**
+ * Les objets « organisation » d'un JSON-LD, où qu'ils soient : à la racine,
+ * dans un `@graph`, imbriqués. Chaque nœud rendu ne contient que ses propres
+ * clés de premier niveau — le `name` d'un WebPage voisin n'y entre pas.
+ */
+function organisationNodes(body: string): string[] {
+  const out: string[] = [];
+  const visiter = (texte: string) => {
+    for (const node of jsonLdNodes(texte)) {
+      const propre = topLevelOnly(node);
+      if (/"@type"\s*:\s*(?:"(?:Organization|LocalBusiness|Corporation|Store)"|\[[^\]]*"(?:Organization|LocalBusiness|Corporation|Store)")/i.test(propre)) out.push(propre);
+      // Les enfants : un `@graph`, un `publisher`, un `author`…
+      const interieur = node.slice(1, -1);
+      if (/\{/.test(interieur)) visiter(interieur);
+    }
+  };
+  visiter(body);
+  return out;
+}
+
+/** Un objet JSON réduit à son premier niveau : les sous-objets sont remplacés par `{}`. */
+function topLevelOnly(node: string): string {
+  let out = '';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (const ch of node) {
+    if (inString) {
+      if (depth <= 1) out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; if (depth <= 1) out += ch; continue; }
+    if (ch === '{' || ch === '[') {
+      depth += 1;
+      if (depth <= 1) out += ch;
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      if (depth <= 1) out += ch;
+      depth -= 1;
+      continue;
+    }
+    if (depth <= 1) out += ch;
+  }
+  return out;
+}
+
 function retenirNom(brut: string): string | null {
   const n = nettoyer(brut);
   if (!plausible(n)) return null;
   if (NON_NOMS.includes(normalizeCompanyName(n))) return null;
+  if (isParasiteName(n)) return null;
   /*
    * Une annee n'est pas une raison sociale.
    *
@@ -171,9 +293,9 @@ export function collectIdentitySignals(
       // Analyse textuelle plutôt que JSON.parse : beaucoup de sites publient un
       // JSON-LD légèrement invalide, et le rejeter en bloc perdrait un signal
       // fort pour une virgule.
-      if (/"@type"\s*:\s*"(?:Organization|LocalBusiness|Corporation|Store)"/i.test(corps)) {
-        pousser(out, /"legalName"\s*:\s*"([^"]{2,80})"/i.exec(corps)?.[1], 'SCHEMA_LEGAL_NAME', url);
-        pousser(out, /"name"\s*:\s*"([^"]{2,80})"/i.exec(corps)?.[1], 'JSONLD_ORGANIZATION', url);
+      for (const node of organisationNodes(corps)) {
+        pousser(out, /"legalName"\s*:\s*"([^"]{2,80})"/i.exec(node)?.[1], 'SCHEMA_LEGAL_NAME', url);
+        pousser(out, /"name"\s*:\s*"([^"]{2,80})"/i.exec(node)?.[1], 'JSONLD_ORGANIZATION', url);
       }
     }
     pousser(out, /itemprop=["']legalName["'][^>]*content=["']([^"']{2,80})["']/i.exec(html)?.[1], 'SCHEMA_LEGAL_NAME', url);

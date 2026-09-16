@@ -136,7 +136,11 @@ export interface ReportVerification {
   statusLabel: string;
   verifiedAt: string | null;
   toConfirm: string[];
-  country: { value: string | null; basis: string; quote: string | null; url: string | null };
+  country: {
+    value: string | null; basis: string; quote: string | null; url: string | null;
+    /** L'implantation sur le marché visé quand elle fonde l'entrée (siège ailleurs) : « implantation Suède établie : … ». */
+    presence?: string | null;
+  };
 }
 
 /** Une société écartée, avec la raison et sa preuve : le client voit le tri, pas seulement le résultat. */
@@ -230,6 +234,9 @@ export interface ReviewQueueItem {
   recommendationLabel: string;
   generalistRisk: number | null;
   country: string | null;
+  /** La pertinence brute et ce qui manque à la preuve, quand la note en tient compte. */
+  relevance?: number;
+  evidenceLevel?: { level: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT'; missing: string[] } | null;
   /** Les commandes qui appliquent la décision — copiables telles quelles. */
   commands: { retain: string; exclude: string };
 }
@@ -242,7 +249,7 @@ export function buildSynthesis(p: Pick<ReportProspect, 'company' | 'criteria' | 
   const etablis = (p.criteria ?? []).filter((c) => c.verdict === 'ESTABLISHED');
   const why = etablis.map((c) => c.quotes[0] ? `${c.label} — « ${c.quotes[0].quote} »` : c.label);
   if (p.verification?.country.value) {
-    why.push(`Basée en ${p.verification.country.value}${p.verification.country.quote ? ` — « ${p.verification.country.quote} »` : ''}`);
+    why.push(`Basée en ${p.verification.country.value}${p.verification.country.quote ? ` — « ${p.verification.country.quote} »` : ''}${p.verification.country.presence ? ` ; ${p.verification.country.presence}` : ''}`);
   }
   const canal = p.channel;
   const contact = canal && canal.method !== 'NONE' && canal.value

@@ -65,10 +65,14 @@ interface CandidateDetail {
   };
   toConfirm?: string[];
   verifiedAt?: string; activity?: string;
-  country?: { country?: string | null; basis?: string; quote?: string | null; sourceUrl?: string | null };
+  country?: {
+    country?: string | null; basis?: string; quote?: string | null; sourceUrl?: string | null;
+    marketFitBasis?: 'SEAT' | 'LOCAL_PRESENCE' | 'PRESENCE_LIKELY' | null; fitReason?: string;
+    presence?: { level: string; quote: string | null; sourceUrl: string | null; signals: string[] };
+  };
   generalistRisk?: { score: number; signals: Array<{ signal: string; detail: string; weight: number }> };
   triage?: { status: string; priority: 'P1' | 'P2' | 'P3' | null; recommendation: 'RETAIN' | 'EXCLUDE' | 'TO_CONFIRM'; reasons: string[] };
-  score?: { total: number; confidence: number };
+  score?: { total: number; confidence: number; relevance?: number; evidence?: { level: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT'; missing: string[] } };
   specialisation?: { verdict: string; note: string; evidence: Array<{ quote: string; url: string }> };
 }
 
@@ -101,6 +105,8 @@ function extrasFor(c: ClientCandidate): ProspectExtras {
       country: {
         value: d.country?.country ?? null, basis: d.country?.basis ?? 'NONE',
         quote: d.country?.quote ?? null, url: d.country?.sourceUrl ?? null,
+        // Le siège est ailleurs mais l'implantation locale fonde l'entrée : le client doit le lire.
+        presence: d.country?.marketFitBasis === 'LOCAL_PRESENCE' || d.country?.marketFitBasis === 'PRESENCE_LIKELY' ? d.country.fitReason ?? null : null,
       },
     },
     activity: d.activity ?? null,
@@ -139,6 +145,8 @@ export function buildReviewQueue(repos: Repositories, runId: string): ReviewQueu
       recommendation, recommendationLabel: RECOMMENDATION_LABELS[recommendation],
       generalistRisk: d.generalistRisk?.score ?? null,
       country: d.country?.country ?? null,
+      relevance: d.score?.relevance ?? d.score?.total ?? 0,
+      evidenceLevel: d.score?.evidence ?? null,
       commands: {
         retain: `npm run client:mission -- adjust --run=${runId} --keep=${c.domain}`,
         exclude: `npm run client:mission -- adjust --run=${runId} --exclude=${c.domain}`,

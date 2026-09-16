@@ -142,17 +142,24 @@ describe('une mission client suédoise, de bout en bout', () => {
     assert.ok(!repos.companies.contactsFor(c.companyId!).some((k) => k.email?.startsWith('per.')));
   });
 
-  test('un pays déclaré contredit par un téléphone étranger devient « à vérifier »', async () => {
-    // Vu sur kafekonordic.se : addressCountry = SE, téléphone +358. Une société
-    // d'Helsinki avec un site suédois — la fiche partait « Suède » sans réserve.
+  test('un pays déclaré n’est plus contredit par un téléphone étranger : le signal reste lisible, le pays tient', async () => {
+    /*
+     * Vu sur kafekonordic.se : addressCountry = SE, téléphone +358. La règle
+     * précédente annulait la déclaration ; le benchmark VPS a montré son coût
+     * — Angloscand et PPS, suédoises prouvées, « contredites » par les
+     * numéros de leurs agents. Un indicatif est un signal faible : il ne
+     * contredit jamais une preuve de rang supérieur. Il reste écrit dans
+     * `foreignSignals`, pour que la revue le voie sans qu'il décide.
+     */
     const runId = createClientRun(repos, brief(), 'test');
     await runClientBatch(deps({ search: searchFixture([{ domain: 'kafekolik.se', title: 'Kafekolik' }]) }), options(runId));
     const c = repos.clientCandidates.byDomain(runId, 'kafekolik.se')!;
-    assert.equal(c.stage, 'REVIEW_REQUIRED');
-    const d = c.detail as { country: { country: string | null; contradiction: string[] }; toConfirm: string[] };
-    assert.equal(d.country.country, null);
-    assert.ok(d.country.contradiction.some((x) => /Finlande/.test(x)));
-    assert.ok(d.toConfirm.some((x) => /pays/.test(x)));
+    const d = c.detail as { country: { country: string | null; basis: string; contradiction: string[]; foreignSignals: string[] }; toConfirm: string[] };
+    assert.equal(d.country.country, 'Suède');
+    assert.equal(d.country.basis, 'DECLARED_METADATA');
+    assert.deepEqual(d.country.contradiction, []);
+    assert.ok(d.country.foreignSignals.some((x) => /Finlande \(PHONE_PREFIX/.test(x)));
+    assert.ok(!d.toConfirm.some((x) => /pays/.test(x)));
   });
 
   test('un site sans matière est écarté pour preuves insuffisantes, pas retenu par défaut', async () => {

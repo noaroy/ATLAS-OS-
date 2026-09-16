@@ -326,11 +326,16 @@ function paysDeLAdresse(texte: string): { pays: string; extrait: string } | null
  * qui prime sur une adresse. Deux preuves de même rang qui se contredisent
  * annulent la conclusion — un site qui affiche deux sièges n'en désigne aucun.
  */
-export function extractCountryEvidence(
-  pages: ReadonlyArray<{ url: string; html: string }>,
-): CountryVerdict {
-  if (pages.length === 0) return AUCUN('aucune page lue');
+/** Les preuves fortes publiées, rangées par pays et par rang — la matière brute des deux lectures (siège, présence). */
+export interface StrongCountryEvidence {
+  ids: Map<string, { url: string; extrait: string }>;
+  metadata: Map<string, { url: string; extrait: string }>;
+  addresses: Map<string, { url: string; extrait: string }>;
+}
 
+export function collectStrongCountryEvidence(
+  pages: ReadonlyArray<{ url: string; html: string }>,
+): StrongCountryEvidence {
   const parIdentifiant = new Map<string, { url: string; extrait: string }>();
   const parMetadonnee = new Map<string, { url: string; extrait: string }>();
   const parAdresse = new Map<string, { url: string; extrait: string }>();
@@ -356,6 +361,14 @@ export function extractCountryEvidence(
     const suedoise = swedishPostalAddresses(horsSectionsTierces(texte))[0];
     if (suedoise) parAdresse.set('Suède', { url: page.url, extrait: suedoise.extrait });
   }
+  return { ids: parIdentifiant, metadata: parMetadonnee, addresses: parAdresse };
+}
+
+export function extractCountryEvidence(
+  pages: ReadonlyArray<{ url: string; html: string }>,
+): CountryVerdict {
+  if (pages.length === 0) return AUCUN('aucune page lue');
+  const { ids: parIdentifiant, metadata: parMetadonnee, addresses: parAdresse } = collectStrongCountryEvidence(pages);
 
   const rangs: Array<[CountryVerdict['basis'], Map<string, { url: string; extrait: string }>, string]> = [
     ['OFFICIAL_ID', parIdentifiant, 'identifiant national'],
@@ -578,5 +591,241 @@ export function corroborateCountry(signals: readonly CountrySignal[]): Corrobora
     signals: premier.liste,
     reason: `${premier.forts} preuve(s) directe(s) et ${premier.faibles} corroboration(s) : `
       + [...new Set(premier.liste.map((s) => s.type))].join(', '),
+  };
+}
+
+// ─── LA HIÉRARCHIE DES PREUVES ──────────────────────────────────────────────
+
+/**
+ * Ce que vaut chaque signal quand il s'agit d'en contredire un autre.
+ *
+ * Le benchmark suédois a montré le coût d'une hiérarchie plate : Angloscand,
+ * dont la page de contact porte l'Org.nr, l'adresse de Saltsjöbaden et les
+ * numéros de ses agents en Norvège, Finlande, Belgique et Allemagne, sortait
+ * « pays contredit ». Un indicatif trouvé dans une page est un signal faible :
+ * il conforte, il ne contredit jamais un registre ni une adresse. Seule une
+ * preuve d'au moins même rang en contredit une autre.
+ *
+ *   3  registre national, TVA          — un identifiant ne s'achète pas ailleurs
+ *   2  métadonnée déclarée, adresse    — le site le publie de lui-même
+ *   1  concordance de signaux faibles  — une présomption
+ *   0  indicatif, mention              — jamais seul, jamais contre
+ */
+export const COUNTRY_SIGNAL_RANK: Record<CountrySignalType, 0 | 2 | 3> = {
+  OFFICIAL_ID: 3,
+  VAT_PREFIX: 3,
+  DECLARED_METADATA: 2,
+  POSTAL_ADDRESS: 2,
+  PHONE_PREFIX: 0,
+  MENTION_IN_IDENTITY_PAGE: 0,
+};
+
+/** Ce qu'il faut savoir d'un marché pour y reconnaître une implantation. */
+export interface MarketProfile {
+  country: string;
+  iso: string;
+  tld: string;
+  phonePrefix: string;
+  langs: string[];
+}
+
+const MARKET_PROFILES: Record<string, MarketProfile> = {
+  suede: { country: 'Suède', iso: 'SE', tld: 'se', phonePrefix: '+46', langs: ['sv'] },
+  france: { country: 'France', iso: 'FR', tld: 'fr', phonePrefix: '+33', langs: ['fr'] },
+  belgique: { country: 'Belgique', iso: 'BE', tld: 'be', phonePrefix: '+32', langs: ['nl', 'fr'] },
+  suisse: { country: 'Suisse', iso: 'CH', tld: 'ch', phonePrefix: '+41', langs: ['de', 'fr', 'it'] },
+  luxembourg: { country: 'Luxembourg', iso: 'LU', tld: 'lu', phonePrefix: '+352', langs: ['fr', 'de'] },
+  allemagne: { country: 'Allemagne', iso: 'DE', tld: 'de', phonePrefix: '+49', langs: ['de'] },
+  norvege: { country: 'Norvège', iso: 'NO', tld: 'no', phonePrefix: '+47', langs: ['no', 'nb'] },
+  danemark: { country: 'Danemark', iso: 'DK', tld: 'dk', phonePrefix: '+45', langs: ['da'] },
+  finlande: { country: 'Finlande', iso: 'FI', tld: 'fi', phonePrefix: '+358', langs: ['fi'] },
+  'pays-bas': { country: 'Pays-Bas', iso: 'NL', tld: 'nl', phonePrefix: '+31', langs: ['nl'] },
+};
+
+export function marketProfileOf(label: string): MarketProfile | null {
+  const cle = aplatir(label).replace(/\s+/g, '-');
+  if (MARKET_PROFILES[cle]) return MARKET_PROFILES[cle]!;
+  const parNom = Object.values(MARKET_PROFILES).find((p) => aplatir(p.country) === aplatir(label) || p.iso.toLowerCase() === label.trim().toLowerCase());
+  return parNom ?? null;
+}
+
+export type PresenceLevel = 'ESTABLISHED' | 'LIKELY' | 'WEAK' | 'NONE';
+export type PresenceSignalType =
+  | 'LOCAL_ID' | 'LOCAL_METADATA' | 'LOCAL_ADDRESS'
+  | 'LOCAL_PHONE' | 'LOCAL_EMAIL_DOMAIN' | 'LOCAL_LANGUAGE_VERSION' | 'LOCAL_TLD';
+
+export interface MarketPresence {
+  country: string;
+  level: PresenceLevel;
+  signals: Array<{ type: PresenceSignalType; rawValue: string; sourceUrl: string }>;
+  /** La preuve forte, quand il y en a une : c'est elle qui fait l'implantation. */
+  quote: string | null;
+  sourceUrl: string | null;
+  reason: string;
+}
+
+const PRESENCE_NONE = (country: string, reason: string): MarketPresence =>
+  ({ country, level: 'NONE', signals: [], quote: null, sourceUrl: null, reason });
+
+/**
+ * L'implantation d'une société sur le marché visé, distincte de son siège.
+ *
+ * Cyklop est un groupe dont le pied de page nomme Milan et l'en-tête un numéro
+ * de Cologne — et qui sert la Suède depuis Cyklop AB, avec info@cyklop.se, un
+ * +46 et une version suédoise du site. Le siège est ailleurs ; la présence est
+ * réelle. Une société danoise implantée en Suède est pertinente pour la Suède.
+ *
+ * Trois niveaux, et ce qu'ils exigent :
+ *
+ *   ESTABLISHED  une preuve forte locale — Org.nr, adresse postale, métadonnée
+ *   LIKELY       au moins deux signaux faibles distincts — téléphone local,
+ *                adresse courriel locale, version linguistique, domaine national
+ *   WEAK         un seul signal faible
+ *
+ * Les signaux faibles se lisent dans le HTML entier, attributs compris : le
+ * sélecteur de pays de cyklop.com porte le téléphone et le courriel suédois
+ * dans des `data-*`, jamais dans le texte visible.
+ */
+export function assessMarketPresence(
+  pages: ReadonlyArray<{ url: string; html: string }>,
+  targetCountryLabel: string,
+): MarketPresence {
+  const profil = marketProfileOf(targetCountryLabel);
+  if (!profil) return PRESENCE_NONE(targetCountryLabel, `marché ${targetCountryLabel} sans profil : présence non évaluée`);
+  if (pages.length === 0) return PRESENCE_NONE(profil.country, 'aucune page lue');
+
+  const strong = collectStrongCountryEvidence(pages);
+  const signals: MarketPresence['signals'] = [];
+  const id = strong.ids.get(profil.country);
+  if (id) signals.push({ type: 'LOCAL_ID', rawValue: id.extrait, sourceUrl: id.url });
+  const meta = strong.metadata.get(profil.country);
+  if (meta) signals.push({ type: 'LOCAL_METADATA', rawValue: meta.extrait, sourceUrl: meta.url });
+  const adresse = strong.addresses.get(profil.country);
+  if (adresse) signals.push({ type: 'LOCAL_ADDRESS', rawValue: adresse.extrait, sourceUrl: adresse.url });
+
+  const vus = new Set<PresenceSignalType>();
+  const faible = (type: PresenceSignalType, rawValue: string, sourceUrl: string) => {
+    if (vus.has(type)) return;
+    vus.add(type);
+    signals.push({ type, rawValue, sourceUrl });
+  };
+  const prefixe = profil.phonePrefix.replace('+', '\\+');
+  const telephone = new RegExp(`(?:^|[^0-9])(${prefixe}\\s?\\(?0?\\)?[\\s.\\-]?[1-9][0-9\\s.\\-()]{5,14})`);
+  const courriel = new RegExp(`[a-z0-9._%+-]+@[a-z0-9.-]+\\.${profil.tld}\\b`, 'i');
+  const langues = profil.langs.map((l) => l.toLowerCase());
+  for (const page of pages) {
+    const html = page.html;
+    const m = telephone.exec(html);
+    if (m) faible('LOCAL_PHONE', m[1]!.trim().slice(0, 24), page.url);
+    const e = courriel.exec(html);
+    if (e) faible('LOCAL_EMAIL_DOMAIN', e[0].toLowerCase(), page.url);
+    const hreflang = new RegExp(`hreflang=["'](${langues.join('|')})(?:-${profil.iso})?["']`, 'i').exec(html);
+    const langHtml = new RegExp(`<html[^>]*\\slang=["'](${langues.join('|')})(?:-${profil.iso})?["']`, 'i').exec(html);
+    const chemin = new RegExp(`href=["'][^"']*/(${langues.join('|')})(?:-${profil.iso.toLowerCase()})?/(?:[^"']*)?["']`, 'i').exec(html);
+    if (hreflang || langHtml || chemin) faible('LOCAL_LANGUAGE_VERSION', (hreflang ?? langHtml ?? chemin)![0].slice(0, 60), page.url);
+    try {
+      const hote = new URL(page.url).hostname.toLowerCase();
+      if (hote.endsWith(`.${profil.tld}`)) faible('LOCAL_TLD', hote, page.url);
+    } catch { /* URL illisible : pas de signal */ }
+  }
+
+  const fort = signals.find((x) => x.type === 'LOCAL_ID' || x.type === 'LOCAL_METADATA' || x.type === 'LOCAL_ADDRESS');
+  const faibles = signals.filter((x) => !['LOCAL_ID', 'LOCAL_METADATA', 'LOCAL_ADDRESS'].includes(x.type));
+  if (fort) {
+    return {
+      country: profil.country, level: 'ESTABLISHED', signals, quote: fort.rawValue, sourceUrl: fort.sourceUrl,
+      reason: `implantation ${profil.country} établie : ${fort.type} — ${fort.rawValue}`,
+    };
+  }
+  if (faibles.length >= 2) {
+    return {
+      country: profil.country, level: 'LIKELY', signals, quote: null, sourceUrl: null,
+      reason: `présence ${profil.country} probable : ${faibles.map((x) => `${x.type} ${x.rawValue}`).join(' · ')}`,
+    };
+  }
+  if (faibles.length === 1) {
+    return {
+      country: profil.country, level: 'WEAK', signals, quote: null, sourceUrl: null,
+      reason: `un seul signal ${profil.country} (${faibles[0]!.type} ${faibles[0]!.rawValue}) : insuffisant`,
+    };
+  }
+  return PRESENCE_NONE(profil.country, `aucun signal ${profil.country}`);
+}
+
+export interface CountryDecision {
+  /** Le siège, ou null quand rien ne le prouve ni ne le laisse présumer. */
+  country: string | null;
+  basis: CountryVerdict['basis'] | 'CORROBORATION';
+  quote: string | null;
+  sourceUrl: string | null;
+  fit: CountryFit;
+  fitReason: string;
+  /** Ce qui fonde l'entrée dans le marché : le siège, une implantation établie, ou une présence à confirmer. */
+  marketFitBasis: 'SEAT' | 'LOCAL_PRESENCE' | 'PRESENCE_LIKELY' | null;
+  /** Les seules contradictions qui comptent : une preuve d'au moins même rang, d'un autre pays. */
+  contradiction: string[];
+  /** Les signaux étrangers faibles — indicatifs, mentions — gardés pour la lecture, jamais contre. */
+  foreignSignals: string[];
+  presence: MarketPresence | null;
+}
+
+/**
+ * Le pays d'un candidat et son entrée dans le marché, d'après la hiérarchie.
+ *
+ *   · le siège est la preuve forte, sinon la concordance ;
+ *   · une preuve forte n'est contredite que par une preuve d'au moins même
+ *     rang ; un indicatif ou une mention n'y change rien ;
+ *   · une contradiction de même rang sur une preuve de rang 2 rend le pays
+ *     incertain — deux adresses, deux déclarations : on ne tire pas au sort ;
+ *     un identifiant national, lui, tient, et la contradiction reste écrite ;
+ *   · une implantation établie sur le marché visé y fait entrer la société,
+ *     siège ou pas ; une présence probable en fait une vérification, jamais
+ *     une exclusion.
+ */
+export function decideCountry(input: {
+  strong: CountryVerdict;
+  signals: readonly CountrySignal[];
+  corroboration: CorroboratedCountry;
+  presence: MarketPresence | null;
+  accepted: readonly string[];
+}): CountryDecision {
+  const { strong, signals, corroboration, presence } = input;
+  let country = strong.country ?? corroboration.country;
+  const basis: CountryDecision['basis'] = strong.country ? strong.basis : country ? 'CORROBORATION' : 'NONE';
+  const basisRank = strong.country ? COUNTRY_SIGNAL_RANK[strong.basis as CountrySignalType] : 1;
+
+  const etrangers = country ? signals.filter((x) => x.country !== country) : [];
+  const libelle = (x: CountrySignal) => `${x.country} (${x.type} ${x.rawValue})`;
+  const contradiction = [...new Set(etrangers.filter((x) => COUNTRY_SIGNAL_RANK[x.type] >= 2 && COUNTRY_SIGNAL_RANK[x.type] >= basisRank).map(libelle))];
+  const foreignSignals = [...new Set(etrangers.filter((x) => COUNTRY_SIGNAL_RANK[x.type] < 2).map(libelle))];
+
+  // Deux preuves de rang 2 qui se contredisent : le siège devient une question.
+  // Un identifiant national (rang 3) tient — la contradiction reste écrite.
+  if (country && contradiction.length > 0 && basisRank <= 2) country = null;
+
+  let fit = countryFit(country, input.accepted);
+  let marketFitBasis: CountryDecision['marketFitBasis'] = fit.fit === 'IN_SCOPE' ? 'SEAT' : null;
+  let fitReason = fit.reason;
+  if (presence && fit.fit !== 'IN_SCOPE' && presence.level === 'ESTABLISHED') {
+    fit = { fit: 'IN_SCOPE', reason: presence.reason };
+    marketFitBasis = 'LOCAL_PRESENCE';
+    fitReason = `${presence.reason}${country ? ` — siège ${country}` : ' — siège non prouvé'}`;
+  } else if (presence && presence.level === 'LIKELY' && fit.fit !== 'IN_SCOPE') {
+    fit = { fit: 'NEEDS_VERIFICATION', reason: presence.reason };
+    marketFitBasis = 'PRESENCE_LIKELY';
+    fitReason = `${country ? `siège ${country} (${basis})` : 'siège non prouvé'} ; ${presence.reason} — à confirmer, pas à écarter`;
+  }
+
+  return {
+    country,
+    basis: country ? basis : 'NONE',
+    quote: country ? (strong.country ? strong.quote : corroboration.signals.map((x) => x.rawValue).join(' · ') || null) : null,
+    sourceUrl: country ? (strong.country ? strong.sourceUrl : corroboration.signals[0]?.sourceUrl ?? null) : null,
+    fit: fit.fit,
+    fitReason,
+    marketFitBasis,
+    contradiction,
+    foreignSignals,
+    presence,
   };
 }

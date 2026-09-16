@@ -23,7 +23,7 @@
  * Réduire la revue ne se fait jamais en assouplissant l'approbation : une
  * société n'est approuvée seule que si un humain n'aurait rien à vérifier.
  */
-import type { CandidateDecision, CriterionResult, SpecialisationResult } from './client-criteria.ts';
+import type { CandidateDecision, CriterionResult, SpecialisationResult, EvidenceLevel } from './client-criteria.ts';
 import type { ContactChannelConfidence } from './client-pages.ts';
 
 export type TriageStatus = 'AUTO_APPROVED' | 'HUMAN_REVIEW' | 'AUTO_EXCLUDED';
@@ -42,6 +42,12 @@ export interface TriageInput {
   preferSpecialist: boolean;
   /** Combien de termes du brief les pages portaient. */
   relevanceHits: number;
+  /**
+   * Le niveau de preuve, quand l'appelant l'a calculé. Une approbation
+   * automatique exige COMPLETE : une note haute avec un manque nommé est une
+   * revue, quelle que soit la note.
+   */
+  evidence?: EvidenceLevel;
 }
 
 export interface Triage {
@@ -116,6 +122,10 @@ export function triageCandidate(input: TriageInput): Triage {
   if (input.contact.method === 'NONE') reasons.push('aucune coordonnée commerciale publiée');
   if (input.contact.confidence === 'LOW') reasons.push('canal de contact faible (hors domaine, ou téléphone seul)');
   if (requisEtablis.some((c) => c.evidence.length === 0)) reasons.push('un critère requis établi sans passage relu');
+  if (input.evidence && input.evidence.level !== 'COMPLETE') {
+    const manque = input.evidence.missing.filter((m) => !reasons.some((r) => r.includes(m)));
+    if (manque.length > 0) reasons.push(`preuve ${input.evidence.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} : ${manque.join(', ')}`);
+  }
 
   if (reasons.length === 0) {
     return { status: 'AUTO_APPROVED', priority: null, recommendation: 'RETAIN', reasons: [] };

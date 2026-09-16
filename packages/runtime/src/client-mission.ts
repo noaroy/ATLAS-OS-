@@ -10,10 +10,10 @@ import {
 import {
   type ClientBrief, parseClientBrief, adjustBrief, normaliseDomain, allCriteria,
   buildBlockCatalogue, pageTitle, resolveContacts,
-  extractCountryEvidence, collectCountrySignals, corroborateCountry, countryFit,
-  collectIdentitySignals, corroborateIdentity,
+  extractCountryEvidence, collectCountrySignals, corroborateCountry, assessMarketPresence, decideCountry,
+  collectIdentitySignals, corroborateIdentity, isParasiteName, companyNameFromDomain,
   criteriaSchema, criteriaPrompt, CRITERIA_SYSTEM, resolveQualification, scanCompetitors,
-  decideCandidate, scoreCriteria,
+  decideCandidate, qualificationScore,
   siteLinks, planPages, relevancePrecheck, extractSiteFacts, selectBlocksForModel, generalistRisk, rankContactChannels,
   triageCandidate,
   type CriterionResult, type CompetitorHit, type SpecialisationResult, type CandidateDecision, type TriageStatus,
@@ -684,34 +684,40 @@ async function lirePlan(
 
 const memeAdresse = (a: string, b: string): boolean => a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase();
 
-/** Le pays d'après ces pages : preuve forte, sinon concordance, sinon rien — et ce qui le contredit. */
+/**
+ * Le pays d'après ces pages, et l'entrée dans le marché visé.
+ *
+ * La hiérarchie vit dans `decideCountry` : une preuve forte (registre,
+ * adresse, métadonnée) n'est contredite que par une preuve d'au moins même
+ * rang ; un indicatif étranger trouvé dans une page est un signal faible,
+ * gardé pour la lecture, jamais retenu contre. L'implantation locale est lue à
+ * part : un groupe au siège allemand avec une filiale suédoise entre dans le
+ * marché suédois par sa filiale, et une présence probable est une
+ * vérification — pas une exclusion.
+ */
 function evaluerPays(pages: ReadonlyArray<{ url: string; html: string }>, brief: ClientBrief) {
   const fort = extractCountryEvidence(pages);
   const signaux = collectCountrySignals(pages);
   const concordance = corroborateCountry(signaux);
-  let pays = fort.country ?? concordance.country;
-  /*
-   * Une preuve forte contredite par un identifiant concret d'un autre pays
-   * — téléphone, TVA — n'est plus une preuve : c'est une question. Une
-   * simple mention d'un voisin sur une page d'identité ne contredit rien :
-   * trinex.se cite la Norvège et le Danemark, ses marchés. Kafeko Nordic,
-   * lui, déclare SE et publie un +358.
-   */
-  const contradiction = pays
-    ? [...new Set(signaux.filter((x) => x.country !== pays && x.type !== 'MENTION_IN_IDENTITY_PAGE').map((x) => `${x.country} (${x.type} ${x.rawValue})`))]
-    : [];
-  if (pays && contradiction.length > 0 && !(fort.basis === 'OFFICIAL_ID')) pays = null;
-  const fit = countryFit(pays, [brief.market.countryLabel]);
-  const citationConcordance = concordance.country ? concordance.signals.map((x) => x.rawValue).join(' · ') : null;
+  const presence = assessMarketPresence(pages, brief.market.countryLabel);
+  const decision = decideCountry({ strong: fort, signals: signaux, corroboration: concordance, presence, accepted: [brief.market.countryLabel] });
+  const fit = { fit: decision.fit, reason: decision.fitReason };
   return {
-    pays, fort, contradiction, fit,
+    pays: decision.country, fort, contradiction: decision.contradiction, fit, presence,
     detail: {
-      country: pays,
-      basis: fort.country && pays ? fort.basis : pays ? 'CORROBORATION' : 'NONE',
-      quote: pays ? (fort.quote ?? citationConcordance) : null,
-      sourceUrl: pays ? (fort.sourceUrl ?? concordance.signals[0]?.sourceUrl ?? null) : null,
-      fit: fit.fit,
-      contradiction,
+      country: decision.country,
+      basis: decision.basis,
+      quote: decision.quote,
+      sourceUrl: decision.sourceUrl,
+      fit: decision.fit,
+      fitReason: decision.fitReason,
+      marketFitBasis: decision.marketFitBasis,
+      contradiction: decision.contradiction,
+      foreignSignals: decision.foreignSignals,
+      presence: {
+        country: presence.country, level: presence.level, quote: presence.quote, sourceUrl: presence.sourceUrl,
+        signals: presence.signals.map((x) => `${x.type} ${x.rawValue}`),
+      },
     },
   };
 }
@@ -812,7 +818,7 @@ async function processCandidate(
       : paysDetail.basis === 'DECLARED_METADATA' ? 'déclaré par le site'
       : paysDetail.basis === 'POSTAL_ADDRESS' ? 'établi par l’adresse publiée'
       : 'établi par concordance (téléphone, mention)';
-    const raison = `pays ${base} : ${pays}`;
+    const raison = `pays ${base} : ${pays}${paysEval.presence.level === 'WEAK' ? ` — un seul signal ${paysEval.presence.country} (${paysEval.presence.signals[0] ?? ''}), insuffisant` : ''}`;
     /*
      * Une preuve — identifiant, métadonnée, adresse — écarte seule. Une
      * concordance de signaux faibles (un indicatif, une mention) ne fait
@@ -824,7 +830,7 @@ async function processCandidate(
     mesure.exclusion = prouve ? 'COUNTRY' : null;
     mesure.triage = prouve ? 'AUTO_EXCLUDED' : 'HUMAN_REVIEW';
     cc.setStage(candidat.id, prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
-      name: titreDuSite(pages) ?? candidat.domain,
+      name: titreDuSite(pages) ?? companyNameFromDomain(candidat.domain),
       category: 'WRONG_COUNTRY', reason: raison, evidenceQuote: paysDetail.quote, evidenceUrl: paysDetail.sourceUrl,
       detail: {
         country: paysDetail,
@@ -853,7 +859,7 @@ async function processCandidate(
       ? `aucun terme du brief sur ${pages.length} pages lues — cherchés : ${termes} et les mots de rôle`
       : `aucun terme du brief sur la seule page lisible — cherchés : ${termes} ; site à vérifier à la main`;
     cc.setStage(candidat.id, clair ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
-      name: titreDuSite(pages) ?? candidat.domain, category: 'LOW_RELEVANCE',
+      name: titreDuSite(pages) ?? companyNameFromDomain(candidat.domain), category: 'LOW_RELEVANCE',
       reason: raison,
       evidenceUrl: accueil.url,
       detail: {
@@ -869,7 +875,8 @@ async function processCandidate(
   // ── 5. Identité, concurrents, contacts : tout ce qui ne coûte rien ────────
   fin = chrono();
   const identite = corroborateIdentity(collectIdentitySignals(pages), candidat.domain);
-  const nom = identite.name ?? titreDuSite(pages) ?? candidat.domain;
+  // Déclaré par le site, sinon le titre de l'accueil, sinon le domaine mis en forme — jamais un thème.
+  const nom = identite.name ?? titreDuSite(pages) ?? companyNameFromDomain(candidat.domain);
   T.identity += fin();
 
   fin = chrono();
@@ -919,6 +926,7 @@ async function processCandidate(
   const prompt = criteriaPrompt(brief, { name: nom, url: candidat.url }, { text: selection.text }, {
     country: pays, countryBasis: paysDetail.basis, orgNr: facts.orgNr, vat: facts.vat, postalAddress: facts.postalAddress,
     emails: facts.emails, briefTermsSeen: facts.briefTermsSeen,
+    ...(paysEval.presence.level === 'ESTABLISHED' || paysEval.presence.level === 'LIKELY' ? { marketPresence: paysEval.presence.reason } : {}),
   });
   // La clé porte le prompt entier : mêmes passages ET mêmes faits en tête, sinon la question n'est pas la même.
   const cleQualification = repos.clientCache.qualificationKey(candidat.domain, briefHash(brief), sha256(prompt));
@@ -995,12 +1003,16 @@ async function processCandidate(
     const i = decision.toConfirm.indexOf('pays');
     if (i >= 0) decision.toConfirm[i] = detail; else decision.toConfirm.push(detail);
   }
-  const score = scoreCriteria(qualification.criteria);
+  /*
+   * La note est la pertinence pondérée par la preuve : 100 exige tout établi.
+   * La pertinence brute reste écrite à côté, pour que le lecteur voie les deux.
+   */
+  const score = qualificationScore(qualification.criteria, fit.fit);
   const triage = triageCandidate({
     decision, criteria: qualification.criteria, specialisation: qualification.specialisation,
     countryStatus: fit.fit, contradiction, score: { total: score.total, confidence: score.confidence },
     generalistRisk: risque.score, contact: { method: canal.method, confidence: canal.confidence },
-    preferSpecialist: brief.preferSpecialist, relevanceHits: precheck.hits.length,
+    preferSpecialist: brief.preferSpecialist, relevanceHits: precheck.hits.length, evidence: score.evidence,
   });
   mesure.toConfirm = decision.toConfirm.length;
   mesure.triage = triage.status;
@@ -1075,7 +1087,7 @@ async function processCandidate(
       specialisation: summariseSpecialisation(qualification.specialisation),
       generalistRisk: risque,
       toConfirm: decision.toConfirm,
-      score: { total: score.total, confidence: score.confidence },
+      score: { total: score.total, confidence: score.confidence, relevance: score.relevance, evidence: score.evidence },
       triage,
       decision: { outcome: decision.outcome, category: decision.category, reason: decision.reason },
       verifiedAt: now(),
@@ -1095,7 +1107,8 @@ export function titreDuSite(pages: ReadonlyArray<{ url: string; html: string }>)
   // « Rörkopplingar, manometrar & säkerhetsventiler |&nbsp[iTEMS » : le
   // séparateur n'est pas toujours entouré d'espaces, et une entité peut y
   // coller. On coupe au premier séparateur, espaces ou pas, puis on nettoie.
-  const segments = brut.replace(/\u00a0/g, ' ').split(/\s*[|–—]\s*|\s+-\s+/).map((t) => t.replace(/[\[\]]/g, '').trim()).filter((t) => t.length >= 2 && t.length <= 60);
+  // « Angloscand | seodr. theme » : un nom de thème n'est jamais celui d'une société.
+  const segments = brut.replace(/\u00a0/g, ' ').split(/\s*[|–—]\s*|\s+-\s+/).map((t) => t.replace(/[\[\]]/g, '').trim()).filter((t) => t.length >= 2 && t.length <= 60 && !isParasiteName(t));
   if (segments.length === 0) return null;
   // « Start | Svenska kraftnät » : le premier segment est le nom de la page, pas celui de la société.
   const generique = /^(?:start|startsida|hem|home|homepage|accueil|welcome|välkommen|valkommen|index|startseite|willkommen)$/i;

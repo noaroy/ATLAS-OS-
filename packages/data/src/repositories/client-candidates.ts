@@ -209,6 +209,44 @@ export class ClientCandidateRepository {
     return out;
   }
 
+  /**
+   * L'invariant de comptage d'une mission, vérifié plutôt que supposé.
+   *
+   * Le benchmark suédois affichait « 20 nouveaux / 20 traités » puis des états
+   * qui sommaient à 21. Le vingt-et-unième était un annuaire écarté avant
+   * lecture : inscrit — pour ne jamais être redécouvert — mais compté nulle
+   * part comme « nouveau ». Une ligne par domaine, un état par ligne : la
+   * somme des états est le nombre de lignes, et le nombre de lignes est celui
+   * des domaines distincts. Ce qui manquait, c'est de le dire : combien de
+   * candidats lus, combien écartés au filtre.
+   */
+  summary(runId: string): {
+    byStage: Record<ClientCandidateStage, number>;
+    /** Toutes les lignes de la mission : chaque domaine, une fois. */
+    total: number;
+    distinctDomains: number;
+    /** Écartés avant toute lecture (annuaires, marchés, agrégateurs). */
+    prefiltered: number;
+    /** Les candidats réellement lus ou à lire : total − préfiltrés. */
+    candidates: number;
+    /** Vrai quand la somme des états vaut le total et qu'aucun domaine n'est en double. */
+    consistent: boolean;
+  } {
+    const byStage = this.counts(runId);
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS total, COUNT(DISTINCT domain) AS domains,
+              SUM(CASE WHEN category = 'DIRECTORY' THEN 1 ELSE 0 END) AS prefiltered
+         FROM client_candidates WHERE run_id = ?`,
+    ).get(runId) as { total: number; domains: number; prefiltered: number | null };
+    const somme = Object.values(byStage).reduce((a, b) => a + b, 0);
+    const prefiltered = Number(row.prefiltered ?? 0);
+    return {
+      byStage, total: row.total, distinctDomains: row.domains, prefiltered,
+      candidates: row.total - prefiltered,
+      consistent: somme === row.total && row.total === row.domains,
+    };
+  }
+
   totalCost(runId: string): number {
     const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS c FROM client_candidates WHERE run_id = ?').get(runId) as { c: number };
     return row.c;

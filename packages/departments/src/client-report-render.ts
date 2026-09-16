@@ -383,7 +383,7 @@ const verificationHtml = (p: ReportProspect): string => {
     <h4>Vérification</h4>
     <dl class="prov-inline">
       <dt>Statut</dt><dd><span class="${v.status === 'VERIFIED' ? 'badge-named' : 'badge-generic'}">${esc(v.statusLabel)}</span></dd>
-      <dt>Pays</dt><dd>${esc(v.country.value ?? 'non prouvé')}${v.country.quote ? ` — « ${esc(v.country.quote)} » ${link(v.country.url)}` : ''}</dd>
+      <dt>Pays</dt><dd>${esc(v.country.value ?? 'non prouvé')}${v.country.quote ? ` — « ${esc(v.country.quote)} » ${link(v.country.url)}` : ''}${v.country.presence ? ` · ${esc(v.country.presence)}` : ''}</dd>
       <dt>Vérifié le</dt><dd>${esc(v.verifiedAt?.slice(0, 10) ?? '—')}</dd>
       ${v.toConfirm.length ? `<dt>À confirmer</dt><dd>${esc(v.toConfirm.join(', '))}</dd>` : ''}
     </dl>`;
@@ -611,7 +611,7 @@ export function reviewQueueToHtml(items: readonly ReviewQueueItem[], context: { 
         <h3>${badge(i.priority)} ${esc(i.company)}</h3>
         <div class="sub">${link(i.url)}${i.country ? ` · ${esc(i.country)}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}</div>
       </div>
-      <div class="score"><div class="v">${i.score}<span>/100</span></div><div class="c">confiance ${i.confidence.toFixed(2)}</div></div>
+      <div class="score"><div class="v">${i.score}<span>/100</span></div><div class="c">confiance ${i.confidence.toFixed(2)}${i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` · pertinence ${i.relevance ?? i.score} · preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} (${esc(i.evidenceLevel.missing.join(', '))})` : ''}</div></div>
     </header>
     <h4>Pourquoi en revue</h4>
     <ul class="claims">${i.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>

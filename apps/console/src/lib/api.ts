@@ -779,9 +779,10 @@ export interface SalesDashboard {
   since: string | null;
   segmentId: string | null;
   cards: {
-    meetingsThisWeek: number; clientsSigned: number; revenueSigned: number; currency: string;
+    meetings: number; meetingsThisWeek: number; clientsSigned: number; revenueSigned: number; currency: string;
     pipelinePotential: number | null; pipelineExplanation: string[];
   };
+  todo: { hotLeads: number; approvals: number; followUps: number; recommendations: number; segmentsToApprove: number; total: number };
   funnel: Array<{ stage: string; label: string; count: number; rate: number | null }>;
   performance: {
     positiveReplyRate: number | null; replyRate: number | null; meetingPerContact: number | null;
@@ -798,12 +799,12 @@ export interface SalesDashboard {
   };
   recommendations: Array<{
     id: string; kind: string; title: string; reason: string; sampleSize: number; expectedImpact: string | null;
-    risk: string; status: string; humanRequired: boolean; hasChange: boolean; createdAt: string;
+    risk: string; status: string; humanRequired: boolean; hasChange: boolean; evidence: Record<string, unknown>; createdAt: string;
   }>;
   insufficient: Array<{ subject: string; sample: number; needed: number }>;
   hotLeads: Array<{
-    domain: string; companyName: string; intent: string; confidence: number; receivedAt: string;
-    subject: string | null; excerpt: string | null; status: 'OPEN' | 'HANDLED';
+    domain: string; companyName: string; contact: string | null; sender: string | null; intent: string; confidence: number;
+    receivedAt: string; subject: string | null; excerpt: string | null; status: 'OPEN' | 'HANDLED';
   }>;
   hotLeadsTotal: number;
   system: {

@@ -11,29 +11,12 @@ import { relativeTime } from './ui.tsx';
  * casserait des habitudes pour un gain d'esthétique.
  */
 const NAV = [
-  { to: '/', label: 'Ventes', glyph: '◈', end: true },
-  { to: '/atlas', label: 'ATLAS', glyph: '◇' },
-
-  { to: '/cc/war-room', label: 'War Room', glyph: '◆' },
-  { to: '/cc/prospecting', label: 'Prospecting', glyph: '⟳' },
-  { to: '/cc/companies', label: 'Companies', glyph: '▤' },
-  { to: '/cc/outreach', label: 'Outreach', glyph: '↗' },
-  { to: '/cc/inbox', label: 'Inbox', glyph: '✉' },
-  { to: '/cc/follow-ups', label: 'Follow-ups', glyph: '↺' },
-  { to: '/cc/approvals', label: 'Approvals', glyph: '⚑' },
-
-  { to: '/cc/agents', label: 'Agents', glyph: '◇' },
-  { to: '/cc/organization', label: 'Organization', glyph: '▫' },
-  { to: '/cc/ai-fabric', label: 'AI Fabric', glyph: '◉' },
-  { to: '/cc/multi-model', label: 'Multi-model', glyph: '⑂' },
-  { to: '/cc/search-fabric', label: 'Search Fabric', glyph: '⌕' },
-  { to: '/cc/costs', label: 'Costs', glyph: '$' },
-  { to: '/cc/analytics', label: 'Analytics', glyph: '≡' },
-  { to: '/cc/system', label: 'System', glyph: '⬢' },
-
-  { to: '/missions', label: 'Missions', glyph: '▶' },
-  { to: '/logs', label: 'Activité', glyph: '☷' },
-  { to: '/dashboard', label: 'Détail', glyph: '▦' },
+  // Quatre entrees, pas quinze : le tableau de bord repond aux questions du
+  // jour ; les trois autres sont les endroits ou l'on agit. Le detail
+  // technique reste accessible par lien (/cc/system) et par URL.
+  { to: '/', label: 'Dashboard', glyph: '◈', end: true },
+  { to: '/cc/prospecting', label: 'Prospects', glyph: '⟳' },
+  { to: '/cc/inbox', label: 'Messages', glyph: '✉' },
   { to: '/settings', label: 'Settings', glyph: '⚙' },
 ];
 

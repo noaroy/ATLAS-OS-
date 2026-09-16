@@ -27,6 +27,7 @@ import {
 import { SearchFabricScreen, MultiModelView } from './views/Search.tsx';
 import { OutreachScreen, FollowUpsScreen, AnalyticsScreen } from './views/Outreach.tsx';
 import { SalesView } from './views/Sales.tsx';
+import { HomeView } from './views/Home.tsx';
 
 /**
  * Application shell and routing.
@@ -67,12 +68,17 @@ export default function App() {
       {/* The village is full-bleed: it gets the whole viewport, not a content column. */}
       <Route path="/village" element={<VillageView />} />
 
+      {/* L'accueil : trois questions, sans cadre ni rail. Tout le detail vit
+          dans les ecrans du centre de commande, accessibles depuis la page. */}
+      <Route path="/" element={<HomeView />} />
+
       <Route element={<Shell />}>
         {/* L'ecran d'accueil : la page unique du moteur commercial — ce que ca
             rapporte, ou ca coince, ce qu'ATLAS propose. L'ancien accueil et le
             tableau de bord restent accessibles pour le detail operationnel. */}
-        <Route path="/" element={<SalesView />} />
+        <Route path="/cc/sales" element={<SalesView />} />
         <Route path="/atlas" element={<AtlasView />} />
+        <Route path="/system" element={<SystemHealthView />} />
         <Route path="/dashboard" element={<DashboardView />} />
         <Route path="/missions" element={<MissionsView />} />
         <Route path="/missions/:id" element={<MissionDetailView />} />

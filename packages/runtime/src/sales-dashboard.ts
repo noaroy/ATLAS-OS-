@@ -8,6 +8,7 @@ import {
   POSITIVE_REPLY_INTENTS,
   HOT_LEAD_INTENTS,
   isWithinSendWindow,
+  sameMailbox,
   type ReplyIntent,
   type SalesFunnelCounts,
 } from '@atlas/departments';
@@ -32,12 +33,27 @@ export interface SalesDashboard {
   since: string | null;
   segmentId: string | null;
   cards: {
+    /** Rendez-vous sur la période choisie (entreprises distinctes). */
+    meetings: number;
     meetingsThisWeek: number;
     clientsSigned: number;
     revenueSigned: number;
     currency: string;
     pipelinePotential: number | null;
     pipelineExplanation: string[];
+  };
+  /**
+   * Ce qu'une personne doit faire maintenant. Chaque compteur vient d'une
+   * file réelle : réponses chaudes ouvertes, dossiers à relire, relances dues,
+   * recommandations proposées, campagnes à approuver (en PRODUCTION seulement).
+   */
+  todo: {
+    hotLeads: number;
+    approvals: number;
+    followUps: number;
+    recommendations: number;
+    segmentsToApprove: number;
+    total: number;
   };
   funnel: Array<{ stage: string; label: string; count: number; rate: number | null }>;
   performance: {
@@ -77,12 +93,17 @@ export interface SalesDashboard {
     status: string;
     humanRequired: boolean;
     hasChange: boolean;
+    /** Les chiffres qui portent la recommandation, pour la dire en clair. */
+    evidence: Record<string, unknown>;
     createdAt: string;
   }>;
   insufficient: Array<{ subject: string; sample: number; needed: number }>;
   hotLeads: Array<{
     domain: string;
     companyName: string;
+    /** La personne qui a écrit, telle que le prospect ou l'expéditeur la nomme. */
+    contact: string | null;
+    sender: string | null;
     intent: ReplyIntent;
     confidence: number;
     receivedAt: string;
@@ -115,12 +136,17 @@ const rangeSince = (range: DashboardRange, now: Date): string | null =>
 const minutesAgo = (iso: string | null, now: Date): number | null =>
   iso ? Math.round((now.getTime() - Date.parse(iso)) / 60_000) : null;
 
+/** « 4 min », « 3 h », « 2 j » — un âge qui se lit sans calculer. */
+const humanMinutes = (minutes: number | null): string =>
+  minutes === null ? '—' : minutes < 60 ? `${minutes} min` : minutes < 48 * 60 ? `${Math.round(minutes / 60)} h` : `${Math.round(minutes / 1440)} j`;
+
 export function buildSalesDashboard(
   repos: Repositories,
   config: AtlasConfig,
-  options: { range?: DashboardRange; segmentId?: string | null; now?: Date; gmailConfigured?: boolean | null } = {},
+  options: { range?: DashboardRange; segmentId?: string | null; now?: Date; gmailConfigured?: boolean | null; mailbox?: string | null } = {},
 ): SalesDashboard {
   const now = options.now ?? new Date();
+  const mailbox = (options.mailbox ?? process.env.GMAIL_USER ?? '').trim();
   const range = options.range ?? '30d';
   const since = rangeSince(range, now);
   const segmentId = options.segmentId ?? null;
@@ -137,17 +163,24 @@ export function buildSalesDashboard(
   const contactsFound = scopedProspects.filter((p) => Boolean(p.contactEmail || p.contactPage)).length;
 
   // Le registre fait foi pour « contacté » : c'est lui que chaque envoi écrit.
-  const ledger = repos.sales.ledgerDomains().filter((row) => row.kind === 'CONTACTED' && (!since || row.recordedAt >= since) && inScope(row.domain));
+  // Une entrée de simulation (expéditeur à blanc, INTERNAL_TEST) n'est pas un
+  // contact : elle reste au registre pour l'audit, pas dans le chiffre.
+  const isSimulated = (note: string | null): boolean => /^simulation\b/i.test(note ?? '');
+  const ledger = repos.sales.ledgerDomains().filter((row) =>
+    row.kind === 'CONTACTED' && !isSimulated(row.note) && (!since || row.recordedAt >= since) && inScope(row.domain));
   const contactedDomains = new Set(ledger.map((r) => r.domain));
   const contacted = contactedDomains.size;
 
   const events = repos.conversations.eventsSince(since).filter((e) => inScope(e.domain));
-  const intentByDomain = new Map<string, Array<{ intent: ReplyIntent; confidence: number; at: string; subject: string | null; excerpt: string | null; companyName: string }>>();
+  const intentByDomain = new Map<string, Array<{ intent: ReplyIntent; confidence: number; at: string; subject: string | null; excerpt: string | null; companyName: string; sender: string | null }>>();
   for (const e of events) {
     if (e.classification !== 'REPLIED' && e.classification !== 'NEEDS_REVIEW') continue;
+    // Nos propres courriers, importés comme réponses avant la garde de
+    // direction, ne sont pas des réponses : ils restent en base, pas ici.
+    if (mailbox && e.sender && sameMailbox(e.sender, mailbox)) continue;
     const verdict = classifyReplyIntent({ subject: e.rawSubject, body: e.bodyExcerpt, sender: e.sender, classification: e.classification as 'REPLIED' | 'NEEDS_REVIEW' });
     const list = intentByDomain.get(e.domain) ?? [];
-    list.push({ intent: verdict.intent, confidence: verdict.confidence, at: e.occurredAt, subject: e.rawSubject, excerpt: e.bodyExcerpt ? e.bodyExcerpt.slice(0, 180) : null, companyName: e.companyName });
+    list.push({ intent: verdict.intent, confidence: verdict.confidence, at: e.occurredAt, subject: e.rawSubject, excerpt: e.bodyExcerpt ? e.bodyExcerpt.slice(0, 180) : null, companyName: e.companyName, sender: e.sender });
     intentByDomain.set(e.domain, list);
   }
   const replied = intentByDomain.size;
@@ -181,6 +214,7 @@ export function buildSalesDashboard(
   // ── Les cartes ──────────────────────────────────────────────────────────
   const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
   const allOutcomes = repos.salesEngine.outcomes({ segmentId });
+  const allProspects = repos.sales.discoveredSince(null);
   const meetingsThisWeek = new Set(allOutcomes.filter((o) => (o.kind === 'MEETING_BOOKED' || o.kind === 'MEETING_DONE') && o.occurredAt >= weekAgo).map((o) => o.domain)).size;
   const allWon = allOutcomes.filter((o) => o.kind === 'WON' && (!since || o.occurredAt >= since));
   const averageDeal = allWon.length > 0 ? allWon.reduce((s, o) => s + (o.revenueAmount ?? 0), 0) / allWon.length : null;
@@ -190,6 +224,9 @@ export function buildSalesDashboard(
   const meetingToClientRate = meetingDomainsAll.size >= 3 ? wonFromMeetings / meetingDomainsAll.size : null;
 
   // ── Les réponses chaudes ────────────────────────────────────────────────
+  // Le contact affiché vient du prospect quand on l'a établi (nom, rôle lus
+  // sur le site), sinon du nom d'expéditeur. Jamais inventé.
+  const prospectByDomain = new Map(repos.sales.discoveredSince(null).filter((p) => p.domain).map((p) => [p.domain!, p]));
   const hot = [...intentByDomain.entries()]
     .map(([domain, list]) => {
       const last = [...list].sort((a, b) => b.at.localeCompare(a.at))[0]!;
@@ -202,6 +239,8 @@ export function buildSalesDashboard(
       return {
         domain: h.domain,
         companyName: h.last.companyName,
+        contact: contactLabel(prospectByDomain.get(h.domain), h.last.sender),
+        sender: h.last.sender,
         intent: h.hottest!.intent,
         confidence: h.hottest!.confidence,
         receivedAt: h.last.at,
@@ -246,9 +285,26 @@ export function buildSalesDashboard(
     .map((r) => ({
       id: r.id, kind: r.kind, title: r.title, reason: r.reason, sampleSize: r.sampleSize,
       expectedImpact: r.expectedImpact, risk: r.risk, status: r.status, humanRequired: r.humanRequired,
-      hasChange: r.change !== null, createdAt: r.createdAt,
+      hasChange: r.change !== null, evidence: r.evidence, createdAt: r.createdAt,
     }));
   const lastOptimization = repos.settings.get<{ insufficient?: Array<{ subject: string; sample: number; needed: number }> }>(SALES_SETTINGS.LAST_OPTIMIZATION, {});
+
+  // ── À faire ─────────────────────────────────────────────────────────────
+  const approvals = repos.salesLoop.draftsInState('READY_FOR_APPROVAL').length
+    + allProspects.filter((p) => p.state === 'READY_FOR_REVIEW').length;
+  const followUpsDue = repos.salesLoop.domainsInState('FOLLOW_UP_REQUIRED').length;
+  const proposedRecommendations = repos.salesEngine.recommendations({ status: 'PROPOSED', limit: 100 }).length;
+  const segmentsToApprove = config.sales.engineMode === 'PRODUCTION'
+    ? repos.salesEngine.segments({ status: ['TESTING', 'VALIDATED', 'SCALE'] }).filter((s) => !s.approvedForSend).length
+    : 0;
+  const todo: SalesDashboard['todo'] = {
+    hotLeads: openHot.length,
+    approvals,
+    followUps: followUpsDue,
+    recommendations: proposedRecommendations,
+    segmentsToApprove,
+    total: openHot.length + approvals + followUpsDue + proposedRecommendations + segmentsToApprove,
+  };
 
   // ── Le système ──────────────────────────────────────────────────────────
   const frictions = repos.salesEngine.frictions({ since: new Date(now.getTime() - 3_600_000).toISOString(), limit: 500 });
@@ -260,7 +316,7 @@ export function buildSalesDashboard(
   const daemonAge = daemon && !daemon.stoppedAt ? minutesAgo(daemon.lastHeartbeatAt ?? daemon.startedAt, now) : null;
   const lastCycle = repos.settings.get<{ at: string } | null>(SALES_SETTINGS.LAST_CYCLES, null);
   const gmailConfigured = options.gmailConfigured ?? new GmailInboxProvider({ logger: silentLogger }).status().configured;
-  const checkpoint = repos.conversations.syncCheckpoint('gmail', process.env.GMAIL_USER?.trim() ?? '');
+  const checkpoint = repos.conversations.syncCheckpoint('gmail', mailbox);
   const detail: string[] = [];
 
   const search: SystemLight = config.search.provider === 'none'
@@ -278,13 +334,13 @@ export function buildSalesDashboard(
     : recent('GMAIL_UNAVAILABLE') > 0
       ? { state: 'down', detail: 'synchronisation impossible dans l’heure' }
       : checkpoint && (minutesAgo(checkpoint.lastSyncedAt, now) ?? 0) > 90
-        ? { state: 'warn', detail: `dernière lecture il y a ${minutesAgo(checkpoint.lastSyncedAt, now)} min` }
-        : { state: 'ok', detail: checkpoint ? `lu il y a ${minutesAgo(checkpoint.lastSyncedAt, now)} min` : 'prêt, jamais lu' };
+        ? { state: 'warn', detail: `dernière lecture il y a ${humanMinutes(minutesAgo(checkpoint.lastSyncedAt, now))}` }
+        : { state: 'ok', detail: checkpoint ? `lu il y a ${humanMinutes(minutesAgo(checkpoint.lastSyncedAt, now))}` : 'prêt, jamais lu' };
   const workers: SystemLight = !daemon || daemon.stoppedAt
     ? { state: 'down', detail: daemon ? `daemon arrêté ${daemon.stoppedAt?.slice(0, 16)}` : 'aucun daemon n’a jamais tourné' }
     : daemonAge !== null && daemonAge > 5
-      ? { state: 'warn', detail: `dernier battement il y a ${daemonAge} min` }
-      : { state: 'ok', detail: `battement il y a ${daemonAge ?? 0} min` };
+      ? { state: 'warn', detail: `dernier battement il y a ${humanMinutes(daemonAge)}` }
+      : { state: 'ok', detail: `battement il y a ${humanMinutes(daemonAge ?? 0)}` };
   const database: SystemLight = { state: 'ok', detail: 'lecture réussie' };
   if (pause.paused) detail.push(`PAUSE — ${pause.reason ?? 'sans motif'} (${pause.by ?? '?'})`);
   if (!config.sales.outboundEnabled) detail.push('ATLAS_OUTBOUND_ENABLED=false : aucun envoi réel');
@@ -296,6 +352,7 @@ export function buildSalesDashboard(
     since,
     segmentId,
     cards: {
+      meetings: meetingDomains.size,
       meetingsThisWeek,
       clientsSigned: clientDomains.size,
       revenueSigned: revenueWon,
@@ -304,6 +361,7 @@ export function buildSalesDashboard(
       pipelineExplanation: potential.explanation,
     },
     funnel,
+    todo,
     performance: {
       positiveReplyRate: rates.positiveReplyRate,
       replyRate: rates.replyRate,
@@ -330,6 +388,18 @@ export function buildSalesDashboard(
       detail,
     },
   };
+}
+
+/** « Prénom Nom · rôle », ou le nom d'expéditeur, ou rien — jamais une invention. */
+function contactLabel(prospect: { contactName: string | null; contactRole: string | null } | undefined, sender: string | null): string | null {
+  const name = prospect?.contactName?.trim() || null;
+  const role = prospect?.contactRole?.trim() || null;
+  if (name && role) return `${name} · ${role}`;
+  if (name) return name;
+  if (role) return role;
+  if (!sender) return null;
+  const display = /^\s*"?([^"<]+?)"?\s*<[^>]+>/.exec(sender)?.[1]?.trim();
+  return display && !display.includes('@') ? display : null;
 }
 
 const silentLogger = {

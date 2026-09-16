@@ -1,0 +1,153 @@
+/*
+ * La page d'accueil : compréhensible en cinq secondes.
+ *
+ * Une couleur d'accent, une famille de caractères, des traits d'un pixel, pas
+ * d'ombre, pas de dégradé. Tout ce qui n'aide pas à décider aujourd'hui n'est
+ * pas ici. Le style est scopé sous `.home` : le reste de la console garde le
+ * sien.
+ */
+.home {
+  --h-bg: #fafafa;
+  --h-surface: #ffffff;
+  --h-ink: #17181c;
+  --h-muted: #6b7280;
+  --h-faint: #9ca3af;
+  --h-line: #e5e7eb;
+  --h-accent: #2563eb;
+  --h-accent-soft: #eff4ff;
+  --h-ok: #16a34a;
+  --h-warn: #d97706;
+  --h-bad: #dc2626;
+  /* La page défile dans sa propre boîte : #root fait la hauteur de la fenêtre. */
+  height: 100%;
+  overflow-y: auto;
+  background: var(--h-bg);
+  color: var(--h-ink);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+.home * { box-sizing: border-box; }
+.home a { color: inherit; text-decoration: none; }
+.home h1, .home h2 { font-family: inherit; letter-spacing: 0; margin: 0; }
+
+.home-wrap { max-width: 880px; margin: 0 auto; padding: 0 24px 64px; }
+
+/* ── En-tête ─────────────────────────────────────────────────────────── */
+.home-head {
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  padding: 22px 0 18px; border-bottom: 1px solid var(--h-line);
+}
+.home-brand { font-size: 17px; font-weight: 600; letter-spacing: 0.08em; }
+.home-nav { display: flex; gap: 18px; font-size: 13px; color: var(--h-muted); }
+.home-nav a:hover, .home-nav a[aria-current='page'] { color: var(--h-ink); }
+.home-spacer { flex: 1; }
+.home-status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--h-muted); }
+.home-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--h-faint); display: inline-block; }
+.home-dot--ok { background: var(--h-ok); }
+.home-dot--warn { background: var(--h-warn); }
+.home-dot--bad { background: var(--h-bad); }
+.home-range { display: inline-flex; border: 1px solid var(--h-line); border-radius: 6px; overflow: hidden; }
+.home-range button {
+  font: inherit; font-size: 13px; color: var(--h-muted); background: var(--h-surface);
+  border: 0; padding: 5px 12px; cursor: pointer;
+}
+.home-range button + button { border-left: 1px solid var(--h-line); }
+.home-range button[aria-pressed='true'] { color: var(--h-ink); background: var(--h-accent-soft); }
+.home-fresh { font-size: 12px; color: var(--h-faint); padding: 8px 0 0; }
+.home-fresh--stale { color: var(--h-warn); }
+.home-fresh--dead { color: var(--h-bad); }
+
+/* ── Sections ────────────────────────────────────────────────────────── */
+.home-section { padding: 34px 0 0; }
+.home-section > h2 {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--h-muted); margin-bottom: 16px;
+}
+
+/* 1 — business */
+.home-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.home-metric { border: 1px solid var(--h-line); border-radius: 8px; background: var(--h-surface); padding: 18px 20px; }
+.home-metric dt { font-size: 13px; color: var(--h-muted); margin-bottom: 6px; }
+.home-metric dd { margin: 0; font-size: 34px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.home-pipeline { margin: 12px 2px 0; font-size: 13px; color: var(--h-muted); }
+
+/* 2 — funnel */
+.home-funnel { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; }
+.home-step { position: relative; min-width: 0; padding-left: 16px; }
+.home-step:first-child { padding-left: 0; }
+.home-step .n { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.home-step .l { font-size: 12px; color: var(--h-muted); margin-top: 2px; }
+.home-step .r { font-size: 11px; color: var(--h-faint); margin-top: 1px; }
+.home-arrow { position: absolute; left: 0; top: 5px; color: var(--h-faint); font-size: 14px; }
+
+/* 3 — segments, 4 — à faire, 5 — hot leads : listes à traits fins */
+.home-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--h-line); }
+.home-list > li { display: flex; align-items: center; gap: 16px; padding: 12px 2px; border-bottom: 1px solid var(--h-line); }
+.home-list .grow { flex: 1; min-width: 0; }
+.home-state { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--h-muted); }
+.home-state--SCALE, .home-state--VALIDÉ { color: var(--h-ok); }
+.home-state--PAUSE, .home-state--ARRÊT { color: var(--h-warn); }
+.home-muted { color: var(--h-muted); font-size: 13px; }
+.home-empty { color: var(--h-muted); font-size: 14px; padding: 6px 2px; }
+
+.home-todo { border: 1px solid var(--h-line); border-left: 3px solid var(--h-accent); border-radius: 8px; background: var(--h-surface); padding: 14px 18px; }
+.home-todo ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.home-todo li a { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.home-todo li a:hover { color: var(--h-accent); }
+.home-todo .count { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 1.5em; }
+.home-todo--clear { border-left-color: var(--h-ok); color: var(--h-muted); }
+
+.home-lead { flex-direction: column; align-items: stretch !important; gap: 4px !important; }
+.home-lead .row { display: flex; align-items: baseline; gap: 12px; }
+.home-lead .company { font-weight: 600; }
+.home-lead .contact { color: var(--h-muted); font-size: 13px; }
+.home-lead .quote { color: var(--h-ink); font-size: 14px; margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-lead .meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--h-faint); }
+.home-lead .meta .home-spacer { flex: 1; }
+
+/* boutons : un seul style, une variante accent */
+.home-btn {
+  font: inherit; font-size: 13px; color: var(--h-ink); background: var(--h-surface);
+  border: 1px solid var(--h-line); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.home-btn:hover { border-color: var(--h-muted); }
+.home-btn:disabled { opacity: 0.5; cursor: default; }
+.home-btn--accent { color: #fff; background: var(--h-accent); border-color: var(--h-accent); }
+.home-btn--accent:hover { border-color: var(--h-accent); opacity: 0.92; }
+.home-btn--link { border: 0; background: none; color: var(--h-muted); padding: 4px 0; }
+.home-btn--link:hover { color: var(--h-ink); border: 0; }
+
+/* 6 — amélioration */
+.home-reco { border: 1px solid var(--h-line); border-radius: 8px; background: var(--h-surface); padding: 18px 20px; }
+.home-reco .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--h-accent); margin-bottom: 8px; }
+.home-reco .headline { font-size: 16px; margin: 0 0 4px; }
+.home-reco .question { font-size: 15px; color: var(--h-muted); margin: 0 0 14px; }
+.home-reco .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.home-reco-more { margin-top: 10px; }
+.home-reco-more li { padding: 8px 2px; }
+
+/* 7 — système */
+.home-system { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; font-size: 13px; color: var(--h-muted); padding-top: 18px; border-top: 1px solid var(--h-line); margin-top: 40px; }
+.home-system .light { display: inline-flex; align-items: center; gap: 7px; }
+.home-system .details { margin-left: auto; font-size: 12px; color: var(--h-faint); }
+.home-system-problems { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--h-warn); }
+.home-system-problems li + li { margin-top: 4px; }
+.home-notice { font-size: 13px; color: var(--h-muted); padding: 10px 14px; border: 1px solid var(--h-line); border-radius: 8px; background: var(--h-surface); margin-top: 16px; }
+.home-notice--warn { color: var(--h-warn); }
+
+@media (max-width: 720px) {
+  .home-wrap { padding: 0 16px 48px; }
+  .home-head { gap: 12px; padding-top: 16px; }
+  .home-nav { width: 100%; order: 3; }
+  .home-metrics { grid-template-columns: 1fr; gap: 10px; }
+  .home-metric { padding: 14px 16px; }
+  .home-metric dd { font-size: 30px; }
+  .home-funnel { grid-template-columns: 1fr; gap: 0; }
+  .home-step { display: flex; align-items: baseline; gap: 10px; padding: 8px 0 8px 0; border-bottom: 1px solid var(--h-line); }
+  .home-step .n { min-width: 3.5em; text-align: right; }
+  .home-arrow { display: none; }
+  .home-lead .quote { white-space: normal; }
+  .home-system .details { margin-left: 0; width: 100%; }
+}

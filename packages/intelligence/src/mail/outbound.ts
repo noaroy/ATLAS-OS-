@@ -226,7 +226,29 @@ export class GmailOutboundProvider implements MailOutboundProvider {
     return { clientId, clientSecret, refreshToken, user };
   }
 
+  /**
+   * L'interrupteur general, lu a la source.
+   *
+   * `ATLAS_OUTBOUND_ENABLED` est deja verifie par la politique d'envoi du
+   * moteur commercial. Il l'est aussi ICI, dans le transport, pour qu'aucun
+   * chemin — un script lance a la main, une route ajoutee plus tard, une
+   * tache restee en file avant un redemarrage — ne puisse poster tant que le
+   * proprietaire n'a pas leve l'interrupteur. Deux gardes independantes
+   * valent mieux qu'une garde parfaite.
+   */
+  private outboundEnabled(): boolean {
+    return /^(1|true|yes|on)$/i.test((this.env.ATLAS_OUTBOUND_ENABLED ?? '').trim());
+  }
+
   status(): MailProviderStatus {
+    if (!this.outboundEnabled()) {
+      return {
+        configured: false,
+        code: 'OUTBOUND_DISABLED',
+        detail: 'ATLAS_OUTBOUND_ENABLED n’est pas vrai : aucun message réel ne part, quel que soit le chemin.',
+        scopes: this.grantedScopes,
+      };
+    }
     if (!this.authorised()) {
       const jamaisRegarde = this.grantedScopes.length === 0 && this.discovered === null;
       return {
@@ -267,6 +289,12 @@ export class GmailOutboundProvider implements MailOutboundProvider {
    * l'appelant, pas lui laisser croire qu'il a eu lieu.
    */
   private assertAuthorised(): void {
+    if (!this.outboundEnabled()) {
+      throw new OutboundNotAuthorisedError(
+        'OUTBOUND_DISABLED',
+        'envoi refusé : ATLAS_OUTBOUND_ENABLED n’est pas vrai — le transport n’envoie rien.',
+      );
+    }
     if (!this.authorised()) {
       throw new OutboundNotAuthorisedError(
         'GMAIL_SEND_SCOPE_MISSING',

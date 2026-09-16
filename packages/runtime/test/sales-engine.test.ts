@@ -564,3 +564,24 @@ describe('daemon embarqué : reprise après arrêt brutal (§40, §85)', () => {
     assert.ok(repos.tasks.lastDaemonRun()?.lastHeartbeatAt, 'le daemon a daté son tour');
   });
 });
+
+describe('interrupteur fermé : aucun chemin ne poste (§66)', () => {
+  test('une tâche d’envoi restée en file avant un redémarrage s’exécute après — et ne poste rien', async () => {
+    seedApprovedDraft();
+    // La configuration par défaut : interrupteur fermé, INTERNAL_TEST. Discovery coupée pour ne pas lancer le lot réel.
+    const cfg = { ...config, sales: { ...config.sales, discoveryEnabled: false } };
+    const outbound = new CountingOutbound();
+    scheduleSalesCycle(repos, cfg, new Date());
+    const handlers = createSalesEngineHandlers({ repos, config: cfg, logger, now: () => NOW, outbound: async () => outbound });
+    const registry = new WorkerRegistry().register(new DeterministicWorker(handlers));
+    const daemon = new AtlasDaemon({ repos, registry, logger, owner: 'daemon-redemarre', maxCycles: 8, maxIdleMs: 50 });
+    await daemon.run();
+    const sendTask = repos.tasks.list({ limit: 50 }).find((t) => t.taskType === SALES_ENGINE_TASKS.SEND)!;
+    assert.equal(sendTask.status, 'DONE');
+    assert.equal(outbound.sent.length, 0, 'le transport n’a jamais été appelé');
+    assert.equal(repos.salesLoop.sentSince('1970-01-01T00:00:00.000Z'), 0);
+    const result = sendTask.result as { blocked: Array<{ reasons: string[] }> };
+    assert.ok(result.blocked[0]!.reasons.includes('OUTBOUND_DISABLED'));
+    assert.ok(result.blocked[0]!.reasons.includes('INTERNAL_TEST_MODE'));
+  });
+});

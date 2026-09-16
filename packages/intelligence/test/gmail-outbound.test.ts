@@ -21,6 +21,8 @@ import {
 
 const READONLY = 'https://www.googleapis.com/auth/gmail.readonly';
 const CONFIGURED_ENV = {
+  // Le test opte explicitement pour l'envoi : sans cette ligne, le transport refuse.
+  ATLAS_OUTBOUND_ENABLED: 'true',
   GMAIL_CLIENT_ID: 'identifiant-de-test',
   GMAIL_CLIENT_SECRET: 'secret-de-test',
   GMAIL_REFRESH_TOKEN: 'jeton-de-test',
@@ -63,7 +65,7 @@ describe('la porte reste fermée sans portée d’envoi', () => {
   test('la portée accordée mais les identifiants absents : refus, pas de plantage', async () => {
     const provider = new GmailOutboundProvider({
       grantedScopes: [GMAIL_SEND_SCOPE],
-      env: {} as NodeJS.ProcessEnv,
+      env: { ATLAS_OUTBOUND_ENABLED: 'true' } as NodeJS.ProcessEnv,
     });
     assert.equal(provider.status().code, 'GMAIL_NOT_CONFIGURED');
     await assert.rejects(
@@ -120,5 +122,24 @@ describe('l’encodage du message', () => {
     assert.ok(!encoded.includes('+'));
     assert.ok(!encoded.includes('/'));
     assert.ok(!encoded.endsWith('='));
+  });
+});
+
+describe('l’interrupteur général, dans le transport lui-même', () => {
+  test('ATLAS_OUTBOUND_ENABLED absent ou faux : le transport refuse avant tout réseau, portée ou pas', async () => {
+    for (const valeur of [undefined, 'false', '0', 'off', '']) {
+      const env = { ...CONFIGURED_ENV, ATLAS_OUTBOUND_ENABLED: valeur } as NodeJS.ProcessEnv;
+      const provider = new GmailOutboundProvider({ grantedScopes: [GMAIL_SEND_SCOPE], env });
+      assert.equal(provider.status().configured, false, String(valeur));
+      assert.equal(provider.status().code, 'OUTBOUND_DISABLED');
+      await assert.rejects(
+        () => provider.sendEmail({ to: 'a@b.fr', subject: 's', bodyText: 'b' }),
+        (error: unknown) => error instanceof OutboundNotAuthorisedError && error.code === 'OUTBOUND_DISABLED',
+      );
+      await assert.rejects(
+        () => provider.replyToThread({ to: 'a@b.fr', subject: 's', bodyText: 'b', threadId: 't' }),
+        (error: unknown) => error instanceof OutboundNotAuthorisedError && error.code === 'OUTBOUND_DISABLED',
+      );
+    }
   });
 });

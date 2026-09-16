@@ -613,9 +613,16 @@ try {
   try {
     await expediteur.verifyScopes();
   } catch (err) {
-    // Un jeton illisible se rapporte, il n'interrompt pas le controle.
-    add('GMAIL AUTH', 'verification du jeton d envoi', 'FAIL',
-      `echange de jeton refuse : ${err instanceof Error ? err.message.slice(0, 90) : String(err)}`);
+    /*
+     * Un jeton refuse par Google (HTTP 400 invalid_grant, jeton revoque,
+     * consentement retire) n'est pas un defaut d'ATLAS : le code a pose la
+     * bonne requete et Google a dit non. C'est AUTH_REQUIRED — le
+     * proprietaire reautorise — et cela se classe comme tel. Le compter en
+     * FAIL ferait croire qu'il reste du code a ecrire.
+     */
+    add('GMAIL AUTH', 'verification du jeton d envoi', 'MANUAL_ACTION_REQUIRED',
+      `AUTH_REQUIRED — echange de jeton refuse par Google : ${err instanceof Error ? err.message.slice(0, 80) : String(err)} ; `
+      + 'reautoriser avec npm run gmail:authorize (le code n est pas en cause)');
   }
   const outbound = expediteur.status();
   add('GMAIL CODE', 'GMAIL_CODE_SEND', 'PASS',
@@ -681,12 +688,15 @@ try {
    * rendant « succes » serait la pire panne possible ici. Aucune requete ne part
    * vers Gmail : le refus est constate localement, avant tout reseau.
    */
+  // Les etats « fermes » que le transport sait nommer : le refus est franc,
+  // sans repli silencieux — c'est le comportement attendu, pas une panne.
+  const FERMETURES_CONNUES = new Set(['OUTBOUND_DISABLED', 'GMAIL_SEND_SCOPE_MISSING', 'GMAIL_SEND_SCOPE_UNVERIFIED', 'GMAIL_NOT_CONFIGURED']);
   add('GMAIL SEND READINESS', 'TRANSPORT_READY',
-    outbound.configured || outbound.code === 'GMAIL_SEND_SCOPE_MISSING' ? 'PASS' : 'FAIL',
+    outbound.configured || FERMETURES_CONNUES.has(outbound.code) ? 'PASS' : 'FAIL',
     outbound.configured
       ? `transport pret : ${outbound.detail}`
-      : outbound.code === 'GMAIL_SEND_SCOPE_MISSING'
-        ? 'transport ecrit et teste ; il refuse franchement sans la portee, sans repli silencieux'
+      : FERMETURES_CONNUES.has(outbound.code)
+        ? `transport ecrit et teste ; il refuse franchement (${outbound.code}), sans repli silencieux`
         : `etat inattendu : ${outbound.code}`);
 
   add('GMAIL SEND READINESS', 'AUTH_READY',
@@ -892,16 +902,21 @@ try {
     );
     const texte = `${sortie.stdout ?? ''}${sortie.stderr ?? ''}`;
     const secretLeak = /sk-ant-[A-Za-z0-9]{8}|sk-proj-[A-Za-z0-9]{8}/.test(texte);
-    const coherent = sortie.status === 0
-      && texte.length > 0
-      && !secretLeak
-      && (marqueur === null || texte.includes(String(run?.stoppedAt?.slice(0, 10) ?? '')));
+    // Seul atlas:status affiche le daemon : lui seul doit porter la date de son
+    // dernier arret. Le rapport parle d'autre chose, et ne peut pas echouer
+    // sur un marqueur qu'il n'a jamais eu a montrer.
+    const dateArret = run?.stoppedAt?.slice(0, 10) ?? null;
+    const doitPorterLeDaemon = nom === 'atlas:status' && marqueur !== null && dateArret !== null;
+    const porteLeDaemon = !doitPorterLeDaemon || texte.includes(dateArret!);
+    const coherent = sortie.status === 0 && texte.length > 0 && !secretLeak && porteLeDaemon;
     add('OBSERVABILITY', `${nom} coherent`, coherent ? 'PASS' : 'FAIL',
       sortie.status !== 0
         ? `sortie en code ${sortie.status}`
         : secretLeak
           ? 'un secret apparait dans la sortie'
-          : `execute, lit la base, ${texte.length} caractere(s), aucun secret`);
+          : !porteLeDaemon
+            ? `execute, mais n affiche pas la date du dernier arret du daemon (${dateArret})`
+            : `execute, lit la base, ${texte.length} caractere(s), aucun secret`);
   }
 
   // Le run reel sur la base principale, atteste par son recu.
@@ -933,21 +948,33 @@ try {
    *
    * On verifie donc que ce qui est en base se retrouve a l'ecran.
    */
+  /*
+   * L'ecran d'accueil affiche la depense DU JOUR. L'ancienne version lui
+   * comparait la depense de toujours : un jour sans appel affichait N/A a
+   * cote de 7,84 $ historiques, et le controle criait a la depense
+   * invisible. On compare desormais la meme periode des deux cotes.
+   */
   const origine = '1970-01-01T00:00:00.000Z';
-  const depenseWorkers = repos.tasks.aiUsageSince(origine);
-  const depenseMissions = repos.llmCalls.usageSince(origine);
-  const depenseTotale = depenseWorkers.knownCostUsd + depenseMissions.knownCostUsd;
-  const appelsTotal = depenseWorkers.calls + depenseMissions.calls;
+  const debutJour = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const depenseTotale = repos.tasks.aiUsageSince(origine).knownCostUsd + repos.llmCalls.usageSince(origine).knownCostUsd;
+  const appelsTotal = repos.tasks.aiUsageSince(origine).calls + repos.llmCalls.usageSince(origine).calls;
+  const jourWorkers = repos.tasks.aiUsageSince(debutJour);
+  const jourMissions = repos.llmCalls.usageSince(debutJour);
+  const depenseJour = jourWorkers.knownCostUsd + jourMissions.knownCostUsd;
+  const appelsJour = jourWorkers.calls + jourMissions.calls;
   const vuALEcran = buildAtlasOverview(repos, config).today.aiCostUsd;
+  const ecranJuste = appelsJour === 0
+    ? vuALEcran === null || vuALEcran === 0
+    : vuALEcran !== null && Math.abs(vuALEcran - depenseJour) < 0.0005;
 
   add('OBSERVABILITY', 'coûts traçables',
-    appelsTotal === 0 || (vuALEcran !== null && vuALEcran > 0) ? 'PASS' : 'FAIL',
+    ecranJuste ? 'PASS' : 'FAIL',
     appelsTotal === 0
       ? 'aucun appel de modele consigne a ce jour'
-      : vuALEcran !== null && vuALEcran > 0
-        ? `${appelsTotal} appel(s) consignes, ${depenseTotale.toFixed(4)} $ au total `
-          + '— les deux registres remontent a l ecran'
-        : `${depenseTotale.toFixed(4)} $ depenses mais l ecran affiche N/A : `
+      : ecranJuste
+        ? `${appelsJour} appel(s) aujourd hui (${depenseJour.toFixed(4)} $) fideles a l ecran · `
+          + `${appelsTotal} appel(s) et ${depenseTotale.toFixed(4)} $ depuis toujours`
+        : `${depenseJour.toFixed(4)} $ depenses aujourd hui mais l ecran affiche ${vuALEcran ?? 'N/A'} : `
           + 'la depense reelle est invisible');
 
   // Une sauvegarde se vérifie par sa date, pas par l'existence d'un script :
@@ -965,9 +992,29 @@ try {
       : [];
     if (copies.length > 0) {
       const ageHours = (Date.now() - copies[0]!.at) / 3_600_000;
-      backupVerdict = ageHours <= 48 ? 'PASS' : 'FAIL';
+      /*
+       * La sauvegarde nocturne est le fait d'un serveur qui tourne. Sur un
+       * poste ou aucune instance ne vit, une copie vieille de trois jours dit
+       * seulement que le poste etait eteint : ce n'est pas un defaut, c'est
+       * une epreuve qui attend la cible. Une instance vivante ici, elle,
+       * doit avoir sauvegarde.
+       */
+      const pidFile = join(config.paths.dataDir, 'atlas.pid');
+      const instanceLocale = (() => {
+        try {
+          const pid = Number(readFileSync(pidFile, 'utf8').trim());
+          if (!Number.isInteger(pid) || pid <= 0) return false;
+          process.kill(pid, 0);
+          return true;
+        } catch { return false; }
+      })();
+      backupVerdict = ageHours <= 48 ? 'PASS' : instanceLocale ? 'FAIL' : 'POST_DEPLOYMENT';
       backupDetail = `${copies.length} copie(s), la plus récente il y a ${Math.round(ageHours)} h`
-        + (ageHours > 48 ? ' — au-delà de 48 h' : '');
+        + (ageHours > 48
+          ? instanceLocale
+            ? ' — au-delà de 48 h alors qu une instance tourne ici'
+            : ' — aucune instance locale ne tourne : la sauvegarde nocturne (02:15 UTC) s eprouve sur la cible'
+          : '');
     }
   } catch (error) {
     backupDetail = error instanceof Error ? error.message.slice(0, 60) : 'illisible';

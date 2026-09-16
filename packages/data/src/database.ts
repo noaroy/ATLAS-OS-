@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { statSync, copyFileSync, existsSync } from 'node:fs';
+import { statSync, copyFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import type { Logger } from '@atlas/core';
 import { AtlasError } from '@atlas/core';
 import { MIGRATIONS } from './migrations.ts';
@@ -81,9 +81,43 @@ export function databaseSizeMb(file: string): number {
  * Consistent online backup. `VACUUM INTO` produces a compacted, fully valid
  * database without blocking writers — safe to run on a live system.
  */
+/**
+ * Une sauvegarde atomique et verifiee.
+ *
+ * `VACUUM INTO` ecrit une base compactee et coherente pendant que le systeme
+ * tourne — mais il ecrit directement au nom final. Un processus tue au milieu
+ * laissait un fichier partiel portant le nom d'une sauvegarde, et c'est ce
+ * fichier qu'une restauration aurait choisi comme « le plus recent ». La copie
+ * est donc ecrite sous un nom temporaire, ouverte en lecture pour un
+ * `integrity_check`, mesuree, puis renommee d'un seul geste. Un echec ne
+ * laisse rien derriere lui.
+ */
 export function backupDatabase(db: Db, destination: string): number {
-  db.prepare('VACUUM INTO ?').run(destination);
-  return statSync(destination).size;
+  const temporaire = `${destination}.tmp-${process.pid}`;
+  try {
+    db.prepare('VACUUM INTO ?').run(temporaire);
+    const bytes = statSync(temporaire).size;
+    if (bytes === 0) throw new AtlasError('INTERNAL', 'sauvegarde vide : le fichier ecrit fait 0 octet', { details: { reason: 'BACKUP_EMPTY' } });
+    const copie = new Database(temporaire, { readonly: true });
+    try {
+      const verdict = (copie.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>)
+        .map((r) => r.integrity_check);
+      if (verdict.length !== 1 || verdict[0] !== 'ok') {
+        throw new AtlasError('INTERNAL', `sauvegarde corrompue — integrity_check : ${verdict.join(' | ').slice(0, 200)}`, { details: { reason: 'BACKUP_CORRUPT' } });
+      }
+    } finally {
+      copie.close();
+    }
+    renameSync(temporaire, destination);
+    return bytes;
+  } catch (error) {
+    try {
+      if (existsSync(temporaire)) unlinkSync(temporaire);
+    } catch {
+      /* un residu illisible se voit au prochain passage ; l erreur d origine prime */
+    }
+    throw error;
+  }
 }
 
 /** Copies the file directly — used only when the connection is already closed. */

@@ -1,18 +1,28 @@
-# ATLAS — plan de déploiement VPS
+# ATLAS — plan de déploiement VPS (variante systemd)
 
-Ce document décrit comment ATLAS tournerait sur un serveur. **Rien n'est acheté,
-rien n'est provisionné.** Il existe pour que le passage en production soit une
-exécution plutôt qu'une improvisation, et pour que le contrôle de mise en
-production ait quelque chose à vérifier.
+> **État réel.** Le VPS existe : Debian 12, Docker Compose, conteneurs `atlas`
+> et `searxng` sains, `ATLAS_OUTBOUND_ENABLED=false`,
+> `ATLAS_ENGINE_MODE=INTERNAL_TEST`, tableau de bord sur `127.0.0.1:4700` par
+> tunnel SSH. Le chemin en vigueur est décrit dans `docs/OPERATOR.md`
+> (« Déployer »). Ce document garde la variante **systemd sans Docker**
+> (`deployment/install.sh`, `atlas.service`, `release.sh`) : valable pour un
+> serveur nu, pas celle du VPS actuel. Les principes — secrets hors dépôt,
+> sauvegarde par `VACUUM INTO`, restauration éprouvée, ordre de bascule —
+> restent vrais dans les deux cas.
+
+Ce document décrit comment ATLAS tournerait sur un serveur sans Docker. Il
+existe pour que le passage en production soit une exécution plutôt qu'une
+improvisation, et pour que le contrôle de mise en production ait quelque chose
+à vérifier.
 
 ---
 
 ## 1. Ce qui tourne réellement
 
-Un seul processus long : `npm run atlas:daemon`. Il dort quand la file est
-vide — un `setTimeout`, pas une boucle — et se réveille à l'échéance connue.
-Les autres commandes (`atlas`, `atlas:status`, `atlas:apply`, `sales:*`) sont
-ponctuelles et lancées à la main.
+Un seul processus long : le serveur (`dist/server/atlas.mjs`, `npm start`),
+qui embarque le daemon. Il dort quand la file est vide — un `setTimeout`, pas
+une boucle — et se réveille à l'échéance connue. Les autres commandes (`atlas`,
+`atlas:status`, `atlas:apply`, `sales:*`) sont ponctuelles et lancées à la main.
 
 Conséquence de dimensionnement : ATLAS n'a pas besoin d'un serveur puissant. Il
 a besoin d'un disque fiable et d'un processus qui redémarre.

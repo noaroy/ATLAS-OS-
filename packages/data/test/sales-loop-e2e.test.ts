@@ -365,6 +365,8 @@ describe('le fournisseur d’envoi', () => {
   test('Gmail sans portée d’envoi échoue franchement, sans repli silencieux', async () => {
     const gmail = new GmailOutboundProvider({
       grantedScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      // L'interrupteur est leve pour que le test eprouve la garde de portee, pas celle de l'interrupteur.
+      env: { ...process.env, ATLAS_OUTBOUND_ENABLED: 'true' },
     });
     assert.equal(gmail.status().configured, false);
     assert.equal(gmail.status().code, 'GMAIL_SEND_SCOPE_MISSING');

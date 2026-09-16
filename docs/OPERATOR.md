@@ -7,8 +7,10 @@ lire ce qu'il fait, et décider ce qu'il a le droit de faire.
 
 Un seul processus : le serveur (`dist/server/atlas.mjs`). Il porte l'API, la
 console, le superviseur (cron internes) et le **daemon embarqué** qui exécute
-les cycles du moteur commercial. Le moteur de recherche SearXNG tourne à côté
-(Docker). Rien d'autre.
+les cycles du moteur commercial. Sur le VPS, il tourne dans un conteneur
+(`atlas`) à côté du moteur de recherche SearXNG (`searxng`), les deux portés
+par Docker Compose. La base SQLite vit dans le volume `atlas-data` (`/data`).
+Rien d'autre.
 
 | Cycle | Cadence | Ce qu'il fait | Ce qu'il ne fait jamais |
 |---|---|---|---|
@@ -50,42 +52,86 @@ npm run sales:campaign -- suppress <valeur> --kind=EMAIL|DOMAIN|COMPANY
 npm run sales:campaign -- decide <recId> test|approve|reject | rollback <versionId>
 npm run sales:pause -- --reason="…"   /   npm run sales:resume
 npm run client:auto -- --brief=briefs/<client>.json --go   # missions client (V2, inchangé)
-npm run atlas:start / atlas:stop     # hors systemd ; sous systemd : systemctl start|stop atlas
+npm run atlas:start / atlas:stop     # sur un poste ; sur le VPS : docker compose … start|stop atlas
 npm run backup / restore-check / db:check / db:migrate
+npm run atlas:production-check       # les gardes, avant chaque bascule (PASS / MANUAL_ACTION_REQUIRED / FAIL)
+npm run atlas:vps-check              # sur le VPS, lecture seule : système, .env (sans valeurs), conteneurs, réseau, base
 ```
 
-Le tableau de bord : `https://<domaine>/` (session requise). Sept sections :
-cartes (RDV semaine, clients, CA, pipeline), entonnoir, performance (réponses
-positives, RDV/contact, client/contact, CAC, CA/100), segments, auto-optimisation
-([TESTER] [VALIDER] [REFUSER]), réponses chaudes, système. Une valeur non
-mesurée s'affiche `N/A` ou `—`, jamais `0`.
+Les scripts `sales:*`, `client:*`, `backup`, `restore-check` s'exécutent depuis
+un **dépôt complet** (`tsx` + `scripts/`). L'image Docker ne contient que
+`dist/` : dans le conteneur, seuls le serveur et son daemon tournent. La
+découverte planifiée, qui lance `scripts/sales-batch.ts`, signale donc
+`DISCOVERY_UNAVAILABLE` tant qu'ATLAS tourne en image dist-only — c'est une
+friction visible, pas une panne silencieuse.
 
-## Déployer (VPS, systemd)
+Le tableau de bord (session requise) : aujourd'hui `http://127.0.0.1:4700/`
+sur le VPS, atteint depuis le poste par un tunnel SSH
+(`ssh -L 4700:127.0.0.1:4700 <user>@<vps>` puis `http://127.0.0.1:4700/`) ;
+demain derrière Caddy en HTTPS. Une seule page, lisible en cinq secondes :
+ATLAS · ● En ligne · 7 jours / 30 jours / Tout ; BUSINESS (RDV, clients, CA
+signé, pipeline actif) ; PROSPECTION (entonnoir) ; SEGMENTS ; À FAIRE ; HOT
+LEADS ([Ouvrir]) ; AMÉLIORATION ATLAS — une recommandation à la fois, [Oui,
+tester] / [Pas maintenant] ; la ligne SYSTÈME. Elle se rafraîchit toute seule
+(toutes les 10 s), ne lit que la base réelle, exclut les entrées INTERNAL_TEST
+du chiffre, et garde les dernières valeurs affichées quand le serveur ne répond
+plus (indicateur « il y a … »). Une valeur non mesurée s'affiche `N/A` ou `—`,
+jamais `0`.
+
+## Déployer (VPS Debian 12, Docker Compose)
+
+Le chemin réel, celui qui a mis la v2 en ligne :
+
+```
+PC Windows (dépôt Git) → bundle / release → VPS Debian 12 (/opt/atlas)
+  → Docker Compose (deployment/docker-compose.yml, --env-file /opt/atlas/.env)
+  → conteneurs atlas + searxng → base persistante (volume atlas-data, /data)
+  → tableau de bord sur 127.0.0.1:4700 → tunnel SSH → (plus tard) Caddy HTTPS
+```
 
 ```bash
-# première fois, en root, depuis un clone du dépôt
-sudo ./deployment/install.sh                       # Node 24, compte atlas, /opt/atlas, unit systemd
-sudo install -D -m 0644 deployment/journald-atlas.conf /etc/systemd/journald.conf.d/atlas.conf
-docker compose -f deployment/docker-compose.yml up -d searxng   # le moteur de recherche
-# puis, à chaque version
-sudo bash deployment/release.sh                    # npm ci → typecheck → tests critiques → build → checkpoint → backup → migrate → restart → healthz
-sudo bash deployment/release.sh --rollback         # retour au checkpoint précédent
+# sur le VPS, depuis /opt/atlas (le dépôt à la version voulue)
+sudo bash deployment/vps-deploy.sh                 # idempotent : Docker si absent, .env vérifié (sans l'afficher),
+                                                   # build de l'image, up -d, healthchecks, UNE recherche SearXNG
+# à la main, si l'on préfère voir chaque geste
+docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml build atlas
+docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml up -d atlas searxng
+docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml ps
+docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml logs -f atlas
+bash deployment/vps-check.sh                       # lecture seule : VPS_OK / VPS_OK_WITH_WARNINGS / VPS_ISSUES
 ```
 
-`/opt/atlas/.env` reste sur le serveur : jamais copié depuis un poste, jamais
-dans git. Y poser au minimum `ATLAS_SESSION_SECRET`, `ATLAS_FOUNDER_EMAIL`,
-`ATLAS_FOUNDER_PASSWORD`, `ATLAS_PUBLIC_URL`, `ANTHROPIC_API_KEY`,
-`SEARXNG_BASE_URL=http://127.0.0.1:8080`, les quatre `GMAIL_*`, et laisser
-`ATLAS_OUTBOUND_ENABLED=false` / `ATLAS_ENGINE_MODE=INTERNAL_TEST` pour la
-première mise en ligne.
+Mettre à jour = amener le dépôt à la nouvelle version (`git fetch` depuis un
+bundle ou un dépôt distant, `git checkout <tag>`), puis `build atlas` et
+`up -d atlas` : le volume `atlas-data` n'est jamais touché, les migrations
+s'appliquent au démarrage. Revenir en arrière = `git checkout <tag précédent>`
+et les deux mêmes commandes ; la base, elle, ne redescend pas — restaurer une
+sauvegarde si une migration l'exige.
 
-HTTPS : Caddy (`deployment/Caddyfile`, `ATLAS_DOMAIN`) devant le port 4700 ;
-pare-feu : 22, 80, 443 seulement. Le tableau de bord n'est jamais public sans
-session.
+`/opt/atlas/.env` reste sur le serveur : jamais copié depuis un poste, jamais
+dans git, droits `0600`. Y poser au minimum `ATLAS_SESSION_SECRET`,
+`ATLAS_FOUNDER_EMAIL`, `ATLAS_FOUNDER_PASSWORD`, `ATLAS_PUBLIC_URL`,
+`ANTHROPIC_API_KEY`, `SEARXNG_SECRET`, les quatre `GMAIL_*`, et laisser
+`ATLAS_OUTBOUND_ENABLED=false` / `ATLAS_ENGINE_MODE=INTERNAL_TEST` /
+`ATLAS_SEARCH_FALLBACK_ENABLED=false` tant que l'envoi réel n'est pas décidé.
+Dans Compose, `SEARXNG_BASE_URL` vaut `http://searxng:8080` (réseau interne) ;
+SearXNG ne publie aucun port. Le port 4700 d'ATLAS n'est publié, s'il l'est,
+que sur `127.0.0.1` du VPS — jamais sur `0.0.0.0` (`atlas:vps-check` le
+vérifie).
+
+Caddy (`deployment/Caddyfile`, `ATLAS_DOMAIN`, ports 80/443) est l'entrée
+publique prévue ; tant qu'il n'est pas activé, le tableau de bord n'est joignable
+que par le tunnel SSH. Pare-feu : 22 seulement aujourd'hui, 80/443 le jour de
+Caddy. Le tableau de bord n'est jamais public sans session.
+
+`deployment/install.sh`, `atlas.service` et `release.sh` décrivent l'autre
+voie — systemd sans Docker — utilisable sur un poste ou un serveur nu ; ce n'est
+pas celle du VPS actuel.
 
 ## Premier lancement sûr (§68)
 
-1. `npm run atlas:status` → ATLAS ONLINE, Outbound PAUSED, mode INTERNAL_TEST.
+1. `npm run atlas:status` (ou, sur le VPS, `bash deployment/vps-check.sh`) →
+   ATLAS ONLINE, Outbound fermé, mode INTERNAL_TEST.
 2. `npm run sales:campaign -- create --name="PME B2B FR" --countries=FR` (non approuvé).
 3. Laisser tourner 24 h : découverte + qualification + lecture de la boîte.
 4. Lire `npm run sales:status` : entonnoir, frictions, recommandations.
@@ -95,18 +141,30 @@ session.
 
 ## Sauvegardes et reprise
 
-- Nocturne 02:15 UTC + à chaque arrêt propre → `data/backups/` (rotation
-  `ATLAS_BACKUP_RETENTION`). `npm run backup` à la demande.
-- `npm run restore-check` ouvre la dernière sauvegarde et vérifie son intégrité.
-- Après un reboot, systemd relance ATLAS (`Restart=always`) ; le daemon
-  récupère les baux expirés et reprend les cycles de la journée.
+- Nocturne 02:15 UTC + à chaque arrêt propre → `data/backups/` (sur le VPS :
+  `/data/backups` dans le volume `atlas-data`), rotation
+  `ATLAS_BACKUP_RETENTION`. `npm run backup` à la demande. Chaque sauvegarde
+  est écrite par `VACUUM INTO` dans un fichier temporaire, vérifiée
+  (`integrity_check`, taille non nulle) puis renommée : jamais de fichier vide
+  ou à moitié écrit sous le nom final.
+- `npm run restore-check` restaure la dernière sauvegarde **dans un fichier
+  temporaire**, vérifie taille, intégrité et contenu, et prouve que la base
+  principale n'a pas bougé. Il ne remplace jamais la base en place.
+- Sortir une sauvegarde du VPS : `docker cp` depuis le conteneur
+  (`/data/backups/…`) ou `docker run --rm -v atlas-os_atlas-data:/data …`,
+  puis `rsync`/`scp` vers un stockage distinct.
+- Après un reboot, Docker relance les conteneurs (`restart: unless-stopped`) ;
+  le daemon récupère les baux expirés et reprend les cycles de la journée.
 
 ## Surveiller
 
-`npm run atlas:status` et la ligne SYSTÈME du tableau de bord : Search ● LLM ●
-Gmail ● Workers ● Database ●. Alertes en base (`/api/alerts`) : daemon arrêté,
-Gmail illisible, rebonds, budget, base. `journalctl -u atlas -f` pour le détail
-— structuré, sans secret, sans corps de message.
+`npm run atlas:status` (dépôt complet) ou `bash deployment/vps-check.sh`
+(VPS) et la ligne SYSTÈME du tableau de bord : Search ● LLM ● Gmail ● Workers ●
+Database ●. Alertes en base (`/api/alerts`) : daemon arrêté, Gmail illisible,
+rebonds, budget, base. `docker compose --env-file /opt/atlas/.env -f
+deployment/docker-compose.yml logs -f atlas` pour le détail — structuré, sans
+secret, sans corps de message. Trois alertes suffisent : conteneur arrêté,
+sauvegarde de plus de 48 h, disque au-delà de 80 %.
 
 ## Ce qui reste humain
 

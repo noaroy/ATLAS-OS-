@@ -706,6 +706,9 @@ function evaluerPays(pages: ReadonlyArray<{ url: string; html: string }>, brief:
     pays: decision.country, fort, contradiction: decision.contradiction, fit, presence,
     detail: {
       country: decision.country,
+      // Les deux dimensions, nommées : le siège légal, et la présence sur le marché visé.
+      legalHeadquartersCountry: decision.country,
+      targetMarketPresence: presence.level,
       basis: decision.basis,
       quote: decision.quote,
       sourceUrl: decision.sourceUrl,
@@ -863,6 +866,8 @@ async function processCandidate(
       reason: raison,
       evidenceUrl: accueil.url,
       detail: {
+        // Le pays lu jusqu'ici reste écrit : la revue sait où elle regarde.
+        country: paysDetail,
         triage: clair
           ? { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: ['hors sujet : aucun terme du brief'] }
           : { status: 'HUMAN_REVIEW', priority: 'P3', recommendation: 'EXCLUDE', reasons: [raison] },

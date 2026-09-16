@@ -28,6 +28,7 @@ import { createLogger } from '@atlas/core';
 const logger = createLogger({ level: 'error', pretty: false });
 
 const IDENTIFIANTS = {
+  ATLAS_OUTBOUND_ENABLED: 'true',
   GMAIL_CLIENT_ID: 'factice.apps.googleusercontent.com',
   GMAIL_CLIENT_SECRET: 'factice-secret',
   GMAIL_REFRESH_TOKEN: 'factice-refresh',
@@ -102,7 +103,7 @@ describe('l’état d’envoi reflète le vrai jeton', () => {
 
   test('la portée accordée ne suffit pas sans identifiants', () => {
     const provider = new GmailOutboundProvider({
-      env: {},
+      env: { ATLAS_OUTBOUND_ENABLED: 'true' },
       grantedScopes: [GMAIL_SEND_SCOPE_URI],
     });
     const status = provider.status();

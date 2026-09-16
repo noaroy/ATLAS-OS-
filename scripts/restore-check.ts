@@ -28,6 +28,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { createLogger, loadConfig, nowIso } from '../packages/core/src/index.ts';
 import { createRepositories, type Repositories } from '../packages/data/src/index.ts';
 
@@ -122,8 +123,28 @@ const rows: Array<{ name: string; source: string; restored: string; equal: boole
 
 try {
   copyFileSync(latest, restored);
+  /*
+   * Deux preuves avant toute comparaison : le fichier n'est pas vide, et
+   * SQLite le juge intègre. Une sauvegarde tronquée ou corrompue doit tomber
+   * ici, avec le verdict de SQLite — pas plus loin, sur une mesure qui aurait
+   * l'air d'une divergence métier.
+   */
+  const bytes = statSync(restored).size;
+  if (bytes === 0) throw new Error('la sauvegarde est vide (0 octet)');
+  const brute = new Database(restored, { readonly: true });
+  try {
+    const verdict = (brute.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>).map((r) => r.integrity_check);
+    if (verdict.length !== 1 || verdict[0] !== 'ok') throw new Error(`integrity_check : ${verdict.join(' | ').slice(0, 200)}`);
+  } finally {
+    brute.close();
+  }
+  rows.push({ name: 'intégrité SQLite', source: 'ok', restored: 'ok', equal: true });
+  rows.push({ name: 'taille (octets)', source: String(statSync(config.paths.databaseFile).size), restored: String(bytes), equal: bytes > 0 });
 
-  // La source d'abord, en lecture seule de fait : on ne lui écrit rien.
+  // La source d'abord, en lecture seule de fait : on ne lui écrit rien. La
+  // copie est ouverte dans un répertoire temporaire : la base principale n'est
+  // jamais remplacée par cette épreuve.
+  const mainBefore = statSync(config.paths.databaseFile);
   const source = createRepositories(config.paths.databaseFile, logger);
   const copy = createRepositories(restored, logger);
   try {
@@ -149,6 +170,11 @@ try {
     source.close();
     copy.close();
   }
+  const mainAfter = statSync(config.paths.databaseFile);
+  rows.push({
+    name: 'base principale intacte', source: String(mainBefore.size), restored: String(mainAfter.size),
+    equal: mainBefore.size === mainAfter.size,
+  });
 
   const divergents = rows.filter((r) => !r.equal);
 

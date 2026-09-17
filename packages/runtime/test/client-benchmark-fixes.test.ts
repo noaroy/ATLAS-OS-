@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '@atlas/core';
-import { createRepositories, type Repositories } from '@atlas/data';
+import { createRepositories, MAX_CANDIDATE_ATTEMPTS, type Repositories } from '@atlas/data';
 import { BUSINESS_EXPANSION } from '@atlas/departments';
 import { createClientRun, runClientBatch, type ClientMissionDeps } from '../src/client-mission.ts';
 import { brief, searchFixture, fetchFixture, llmFixture, TOUS } from './fixtures/sweden-mission.ts';
@@ -206,41 +206,66 @@ describe('3. un domaine difficile : borné, sans dépense, sans bloquer les autr
     return { pages: [], attempts: urls.length, failures: urls.map((url) => ({ url, kind: 'BLOCKED', reason: 'HTTP 403' })) };
   };
 
-  test('premier passage : échec reprenable ; reprise avec cache : aucun fetch, un essai consommé ; sans cache : dernier essai puis état terminal', async () => {
-    const runId = createClientRun(repos, brief(), 'test');
-    const compteur = { fetches: 0 };
-    const d1 = deps({ search: searchFixture([{ domain: 'storaenso-lik.com', title: 'Stora' }]), fetchPages: refusTotal(compteur) });
-    const s1 = await runClientBatch(d1, options(runId));
-    let c = repos.clientCandidates.byDomain(runId, 'storaenso-lik.com')!;
-    assert.equal(c.stage, 'FAILED_RETRYABLE');
-    assert.equal(c.attempts, 1);
-    assert.equal(s1.failed, 1);
-    assert.ok(compteur.fetches > 0, 'le premier passage a réellement tenté le réseau');
-    assert.ok(/aucune page lisible|BLOCKED|403/.test(c.lastError ?? ''), c.lastError ?? '');
+  /**
+   * Le chemin réel de `client-mission batch --resume` : `runClientBatch` avec
+   * `resumeOnly`, la mémoire de pages active (le défaut du CLI), le même dépôt.
+   *
+   *   1. candidat inaccessible           → 2. première tentative : FAILED_RETRYABLE
+   *   3. reprises jusqu'au maximum       → 4. FAILED_FINAL
+   *   5. reprise suivante : 0 traité     → 6. 0 appel modèle, du début à la fin
+   *
+   * Et chaque reprise retente le réseau : un échec en mémoire (403, 404) ne
+   * vaut pas une tentative — relevé au benchmark v4, où trois sites repris
+   * « depuis la mémoire » restaient reprenables sans qu'on ait rien réessayé.
+   */
+  for (const [kind, reason] of [['BLOCKED', 'HTTP 403'], ['TIMEOUT', 'aucune réponse'], ['HTTP_4XX', 'HTTP 404']] as const) {
+    test(`${kind} : reprenable, retenté pour de vrai à chaque reprise, définitif à la troisième, puis plus jamais repris`, async () => {
+      const runId = createClientRun(repos, brief(), 'test');
+      const compteur = { fetches: 0 };
+      const injoignable = async (urls: readonly string[]) => {
+        compteur.fetches += urls.length;
+        return { pages: [], attempts: urls.length, failures: urls.map((url) => ({ url, kind, reason })) };
+      };
+      const d = deps({ search: searchFixture([{ domain: 'storaenso-lik.com', title: 'Stora' }]), fetchPages: injoignable });
+      const reprise = () => runClientBatch(d, { ...options(runId), resumeOnly: true });
+      const etat = () => repos.clientCandidates.byDomain(runId, 'storaenso-lik.com')!;
 
-    // Reprise avec cache : le 403 est en mémoire, rien n'est refait sur le réseau, l'essai compte.
-    const avant = compteur.fetches;
-    await runClientBatch(d1, { ...options(runId), resumeOnly: true });
-    c = repos.clientCandidates.byDomain(runId, 'storaenso-lik.com')!;
-    assert.equal(c.stage, 'FAILED_RETRYABLE');
-    assert.equal(c.attempts, 2);
-    assert.equal(compteur.fetches, avant, 'échec permanent mémorisé : aucun fetch');
+      // 1 → 2. Le premier lot : une vraie tentative, un échec reprenable.
+      const s1 = await runClientBatch(d, options(runId));
+      assert.equal(s1.failed, 1);
+      assert.equal(etat().stage, 'FAILED_RETRYABLE');
+      assert.equal(etat().attempts, 1);
+      assert.ok(compteur.fetches > 0, 'le premier passage a réellement tenté le réseau');
+      assert.ok(/aucune page lisible|site lent/.test(etat().lastError ?? ''), etat().lastError ?? '');
 
-    // Reprise sans cache : le réseau est retenté une dernière fois, puis l'état devient définitif.
-    await runClientBatch(d1, { ...options(runId), resumeOnly: true, cache: false });
-    c = repos.clientCandidates.byDomain(runId, 'storaenso-lik.com')!;
-    assert.equal(c.stage, 'FAILED_FINAL');
-    assert.equal(c.attempts, 3);
-    assert.ok(compteur.fetches > avant, 'sans cache, le réseau a été retenté');
-    assert.equal(d1.llmCalls(), 0, 'aucun contenu : aucun appel modèle, jamais');
-    assert.equal(repos.clientCandidates.pending(runId, 50).length, 0, 'plus rien en attente');
+      // 3. Les reprises, jusqu'au maximum : chacune retente le réseau, même si l'échec est en mémoire.
+      for (let tentative = 2; tentative <= MAX_CANDIDATE_ATTEMPTS; tentative += 1) {
+        const avant = compteur.fetches;
+        const s = await reprise();
+        assert.equal(s.processed, 1, `reprise ${tentative} : le candidat est retraité`);
+        assert.ok(compteur.fetches > avant, `reprise ${tentative} : le réseau a été retenté (${kind} en mémoire ou non)`);
+        assert.equal(etat().attempts, tentative);
+        assert.equal(etat().stage, tentative < MAX_CANDIDATE_ATTEMPTS ? 'FAILED_RETRYABLE' : 'FAILED_FINAL');
+      }
 
-    // Une quatrième reprise ne retraite rien et ne dépense rien.
-    const s4 = await runClientBatch(d1, { ...options(runId), resumeOnly: true, cache: false });
-    assert.equal(s4.processed, 0);
-    assert.equal(repos.clientCandidates.byDomain(runId, 'storaenso-lik.com')!.attempts, 3);
-    assert.equal(repos.clientCandidates.summary(runId).consistent, true);
-  });
+      // 4. L'état terminal, et plus rien en attente.
+      assert.equal(etat().stage, 'FAILED_FINAL');
+      assert.equal(etat().attempts, MAX_CANDIDATE_ATTEMPTS);
+      assert.equal(repos.clientCandidates.pending(runId, 50).length, 0, 'plus rien en attente');
+
+      // 5. La reprise suivante ne retraite rien, ne touche pas au réseau, ne dépense rien.
+      const avant = compteur.fetches;
+      const s5 = await reprise();
+      assert.equal(s5.processed, 0);
+      assert.equal(s5.costUsd, 0);
+      assert.equal(compteur.fetches, avant);
+      assert.equal(etat().attempts, MAX_CANDIDATE_ATTEMPTS);
+
+      // 6. Aucun contenu, aucun appel modèle — jamais.
+      assert.equal(d.llmCalls(), 0);
+      assert.equal(repos.clientCandidates.summary(runId).consistent, true);
+    });
+  }
 
   test('le domaine difficile ne bloque pas les autres candidats du même lot', async () => {
     const runId = createClientRun(repos, brief(), 'test');

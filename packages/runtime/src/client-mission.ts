@@ -11,14 +11,15 @@ import {
   type ClientBrief, parseClientBrief, adjustBrief, normaliseDomain, allCriteria,
   buildBlockCatalogue, pageTitle, resolveContacts,
   extractCountryEvidence, collectCountrySignals, corroborateCountry, assessMarketPresence, decideCountry,
-  collectIdentitySignals, corroborateIdentity, isParasiteName, companyNameFromDomain,
+  collectIdentitySignals, corroborateIdentity, isParasiteName, isDescriptiveName, companyNameFromDomain,
+  describePresenceSignal,
   criteriaSchema, criteriaPrompt, CRITERIA_SYSTEM, resolveQualification, scanCompetitors,
   decideCandidate, qualificationScore,
   siteLinks, planPages, relevancePrecheck, extractSiteFacts, selectBlocksForModel, generalistRisk, rankContactChannels,
   triageCandidate,
   type CriterionResult, type CompetitorHit, type SpecialisationResult, type CandidateDecision, type TriageStatus,
 } from '@atlas/departments';
-import { sha256, type ClientCandidate } from '@atlas/data';
+import { sha256, MAX_CANDIDATE_ATTEMPTS, type ClientCandidate } from '@atlas/data';
 
 /**
  * Une mission client, conduite par lots, sans agent.
@@ -610,10 +611,17 @@ const PER_HOST_CONCURRENCY = 2;
  * Lit des pages en passant par la mémoire : une adresse déjà lue — ou déjà
  * en échec — dans les quatorze derniers jours n'est pas redemandée. Ce qui
  * est lu pour de vrai y est écrit pour la prochaine fois.
+ *
+ * À la reprise d'un candidat en échec (`retry`), un échec en mémoire est
+ * ignoré et l'adresse est redemandée : une tentative doit être une tentative.
+ * Relevé au benchmark v4 : trois sites en 403, repris au lot suivant, étaient
+ * « retraités » depuis la mémoire — zéro requête, un essai consommé, rien
+ * d'appris — et restaient FAILED_RETRYABLE sans que rien ne dise pourquoi.
+ * Les pages lues avec succès, elles, restent servies par la mémoire.
  */
 async function lirePages(
   deps: ClientMissionDeps, domain: string, urls: readonly string[], maxPages: number,
-  timeoutMs: number, useCache: boolean, mesure: CandidateMeasure,
+  timeoutMs: number, useCache: boolean, mesure: CandidateMeasure, retry = false,
 ): Promise<FetchedPages> {
   const cache = useCache ? deps.repos.clientCache : null;
   const pages: FetchedPages['pages'] = [];
@@ -621,7 +629,7 @@ async function lirePages(
   const aLire: string[] = [];
   for (const url of urls) {
     const hit = cache?.getPage(url);
-    if (!hit) { aLire.push(url); continue; }
+    if (!hit || (retry && !hit.ok)) { aLire.push(url); continue; }
     mesure.cacheHits += 1;
     if (hit.ok && hit.html) pages.push({ url: hit.finalUrl ?? url, html: hit.html });
     else failures.push({ url, kind: hit.kind ?? 'OTHER', reason: `en mémoire : ${hit.kind ?? 'échec'}` });
@@ -661,7 +669,7 @@ async function lirePages(
 
 /** Les pages du plan, deux à la fois sur le même hôte. */
 async function lirePlan(
-  deps: ClientMissionDeps, domain: string, urls: readonly string[], timeoutMs: number, useCache: boolean, mesure: CandidateMeasure,
+  deps: ClientMissionDeps, domain: string, urls: readonly string[], timeoutMs: number, useCache: boolean, mesure: CandidateMeasure, retry = false,
 ): Promise<FetchedPages> {
   const pages: FetchedPages['pages'] = [];
   const failures: FetchedPages['failures'] = [];
@@ -671,7 +679,7 @@ async function lirePlan(
       const url = urls[index];
       index += 1;
       if (!url) return;
-      const r = await lirePages(deps, domain, [url], 1, timeoutMs, useCache, mesure);
+      const r = await lirePages(deps, domain, [url], 1, timeoutMs, useCache, mesure, retry);
       pages.push(...r.pages);
       failures.push(...r.failures);
     }
@@ -757,11 +765,13 @@ async function processCandidate(
   // « https://www.x.se/ » et « https://x.se/ » sont la même page : une seule requête.
   const sansWww = (u: string) => u.replace(/^https?:\/\/www\./i, 'https://').replace(/\/+$/, '').toLowerCase();
   const premieres = [`${site}/`, candidat.url].filter((u, i, a) => a.findIndex((x) => sansWww(x) === sansWww(u)) === i);
-  const lu1 = await lirePages(deps, candidat.domain, premieres, 2, timeoutMs, options.cache, mesure);
+  const reprise = candidat.attempts > 0;
+  const lu1 = await lirePages(deps, candidat.domain, premieres, 2, timeoutMs, options.cache, mesure, reprise);
   T.fetch += fin();
   if (lu1.pages.length === 0) {
     const lent = lu1.failures.some((f) => f.kind === 'TIMEOUT');
-    cc.markFailed(candidat.id, lent ? `site lent : aucune réponse en ${timeoutMs / 1000} s` : `aucune page lisible (${lu1.failures.map((f) => f.kind).join(', ') || 'rien lu'})`);
+    const echec = cc.markFailed(candidat.id, lent ? `site lent : aucune réponse en ${timeoutMs / 1000} s` : `aucune page lisible (${lu1.failures.map((f) => f.kind).join(', ') || 'rien lu'})`);
+    deps.logger.info('candidat injoignable', { domain: candidat.domain, attempt: echec.attempts, of: MAX_CANDIDATE_ATTEMPTS, stage: echec.stage });
     return 'FAILED';
   }
   const pages: Array<{ url: string; html: string }> = [...lu1.pages];
@@ -798,7 +808,7 @@ async function processCandidate(
     : plan;
   if (aLire.length > 0) {
     fin = chrono();
-    const lu2 = await lirePlan(deps, candidat.domain, aLire.map((p) => p.url), candidat.attempts > 0 ? TIMEOUT_PLAN_RETRY_MS : TIMEOUT_PLAN_FIRST_MS, options.cache, mesure);
+    const lu2 = await lirePlan(deps, candidat.domain, aLire.map((p) => p.url), reprise ? TIMEOUT_PLAN_RETRY_MS : TIMEOUT_PLAN_FIRST_MS, options.cache, mesure, reprise);
     T.fetch += fin();
     for (const p of lu2.pages) if (!pages.some((x) => memeAdresse(x.url, p.url))) pages.push(p);
     fin = chrono();
@@ -821,29 +831,37 @@ async function processCandidate(
       : paysDetail.basis === 'DECLARED_METADATA' ? 'déclaré par le site'
       : paysDetail.basis === 'POSTAL_ADDRESS' ? 'établi par l’adresse publiée'
       : 'établi par concordance (téléphone, mention)';
-    const raison = `pays ${base} : ${pays}${paysEval.presence.level === 'WEAK' ? ` — un seul signal ${paysEval.presence.country} (${paysEval.presence.signals[0] ?? ''}), insuffisant` : ''}`;
+    const presence = paysEval.presence;
+    const local = presence.level === 'WEAK' && presence.signals[0]
+      ? ` — un seul signal ${presence.country} (${describePresenceSignal(presence.signals[0])}), insuffisant`
+      : presence.level === 'NONE' ? ` — aucun signal ${presence.country}` : '';
+    const raison = `pays ${base} : ${pays}${local}`;
     /*
-     * Une preuve — identifiant, métadonnée, adresse — écarte seule. Une
-     * concordance de signaux faibles (un indicatif, une mention) ne fait
-     * qu'une présomption : cyklop.com, groupe allemand avec des pages
-     * suédoises, sort ainsi. La présomption va en revue, P3, sans appel
-     * modèle — un humain la confirme en trente secondes.
+     * Hors du marché, c'est écarté — seul, sans appel modèle.
+     *
+     * Le siège est ailleurs, prouvé (identifiant, métadonnée, adresse) ou
+     * établi par concordance (deux signaux d'un même pays), et rien n'implante
+     * la société sur le marché visé : au plus un signal faible. Ce n'est pas
+     * une ambiguïté, c'est une réponse. Le doute réel n'arrive jamais ici :
+     * deux signaux locaux ou plus font une présence probable, et
+     * `decideCountry` rend alors NEEDS_VERIFICATION — la société va en revue.
+     *
+     * Relevé au benchmark v4 : Weibang, chinoise par concordance, un seul
+     * signal suédois, sortait en revue « à écarter, 0/100 » — une revue sans
+     * question à poser, gardée par prudence et non par doute. L'état et le
+     * tri disent désormais la même chose.
      */
-    const prouve = paysDetail.basis !== 'CORROBORATION';
-    mesure.exclusion = prouve ? 'COUNTRY' : null;
-    mesure.triage = prouve ? 'AUTO_EXCLUDED' : 'HUMAN_REVIEW';
-    cc.setStage(candidat.id, prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
+    mesure.exclusion = 'COUNTRY';
+    mesure.triage = 'AUTO_EXCLUDED';
+    cc.setStage(candidat.id, 'EXCLUDED', {
       name: titreDuSite(pages) ?? companyNameFromDomain(candidat.domain),
       category: 'WRONG_COUNTRY', reason: raison, evidenceQuote: paysDetail.quote, evidenceUrl: paysDetail.sourceUrl,
       detail: {
         country: paysDetail,
-        triage: prouve
-          ? { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: [raison] }
-          : { status: 'HUMAN_REVIEW', priority: 'P3', recommendation: 'EXCLUDE', reasons: [`${raison} — présomption, pas une preuve`] },
-        score: { total: 0, confidence: 0 },
+        triage: { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: [raison] },
       },
     });
-    return prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED';
+    return 'EXCLUDED';
   }
 
   // ── RELEVANCE_PRECHECK : hors sujet, sans modèle ──────────────────────────
@@ -1113,7 +1131,9 @@ export function titreDuSite(pages: ReadonlyArray<{ url: string; html: string }>)
   // séparateur n'est pas toujours entouré d'espaces, et une entité peut y
   // coller. On coupe au premier séparateur, espaces ou pas, puis on nettoie.
   // « Angloscand | seodr. theme » : un nom de thème n'est jamais celui d'une société.
-  const segments = brut.replace(/\u00a0/g, ' ').split(/\s*[|–—]\s*|\s+-\s+/).map((t) => t.replace(/[\[\]]/g, '').trim()).filter((t) => t.length >= 2 && t.length <= 60 && !isParasiteName(t));
+  // « Förpackningsmaskiner för dina behov » : une accroche non plus — le
+  // domaine vaut mieux qu'un slogan.
+  const segments = brut.replace(/\u00a0/g, ' ').split(/\s*[|–—]\s*|\s+-\s+/).map((t) => t.replace(/[\[\]]/g, '').trim()).filter((t) => t.length >= 2 && t.length <= 60 && !isParasiteName(t) && !isDescriptiveName(t));
   if (segments.length === 0) return null;
   // « Start | Svenska kraftnät » : le premier segment est le nom de la page, pas celui de la société.
   const generique = /^(?:start|startsida|hem|home|homepage|accueil|welcome|välkommen|valkommen|index|startseite|willkommen)$/i;

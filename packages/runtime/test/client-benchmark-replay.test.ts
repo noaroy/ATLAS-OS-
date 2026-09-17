@@ -50,7 +50,7 @@ type Detail = {
 };
 
 describe('benchmark suédois — rejeu déterministe', () => {
-  test('les huit cas sortent comme attendu, et le lot compte juste', async () => {
+  test('les neuf cas sortent comme attendu, et le lot compte juste', async () => {
     const runId = createClientRun(repos, brief(), 'test');
     const llm = llmFixture();
     const appelsParDomaine = new Map<string, number>();
@@ -91,25 +91,35 @@ describe('benchmark suédois — rejeu déterministe', () => {
       check(`llmCalled=${attendu.llmCalled}`, (appelsParDomaine.get(cas.domain) ?? 0) > 0 === attendu.llmCalled, appelsParDomaine.get(cas.domain) ?? 0);
       if (attendu.stage === 'RETAINED') check('retenue = preuve complète et note ≥ 70', d.score?.evidence.level === 'COMPLETE' && (d.score?.total ?? 0) >= 70, d.score);
       if (attendu.total !== undefined) check(`total=${attendu.total}`, d.score?.total === attendu.total, d.score?.total);
+      // Rien de ce qu'un humain lira ne porte un objet interpolé.
+      const lisible = `${c.name ?? ''} ${c.reason ?? ''} ${JSON.stringify(c.detail)}`;
+      check('aucun « [object Object] »', !lisible.includes('[object Object]'), c.reason);
     }
     assert.deepEqual(echecs, [], `\n${echecs.join('\n')}`);
 
-    // Le comptage : huit lus, un annuaire écarté avant lecture, neuf inscrits, un état par ligne.
-    assert.equal(summary.discovered, 8);
+    // Weibang : l'état et le tri disent la même chose, et la raison se lit.
+    const weibang = repos.clientCandidates.byDomain(runId, 'weibang-lik.se')!;
+    assert.match(weibang.reason ?? '', /concordance/);
+    assert.match(weibang.reason ?? '', /un seul signal Suède \(domaine national weibang-lik\.se\), insuffisant/);
+    assert.equal((weibang.detail as Detail).triage.status, 'AUTO_EXCLUDED');
+
+    // Le comptage : neuf lus, un annuaire écarté avant lecture, dix inscrits, un état par ligne.
+    assert.equal(summary.discovered, 9);
     assert.equal(summary.filteredOut, 1);
-    assert.equal(summary.processed, 8);
+    assert.equal(summary.processed, 9);
     const resume = repos.clientCandidates.summary(runId);
-    assert.equal(resume.total, 9);
-    assert.equal(resume.candidates, 8);
+    assert.equal(resume.total, 10);
+    assert.equal(resume.candidates, 9);
     assert.equal(resume.prefiltered, 1);
     assert.equal(resume.consistent, true);
-    assert.equal(Object.values(resume.byStage).reduce((a, b) => a + b, 0), 9);
+    assert.equal(Object.values(resume.byStage).reduce((a, b) => a + b, 0), 10);
     assert.equal(resume.byStage.RETAINED, 3);
     assert.equal(resume.byStage.REVIEW_REQUIRED, 4);
-    assert.equal(resume.byStage.EXCLUDED, 2, 'le fabricant étranger et l’annuaire');
+    assert.equal(resume.byStage.EXCLUDED, 3, 'les deux fabricants étrangers et l’annuaire');
     // Aucun appel modèle pour ce qui n'a rien à lire ou n'est pas du marché.
     assert.equal(appelsParDomaine.get('levo-lik.se') ?? 0, 0);
     assert.equal(appelsParDomaine.get('hlunpack-lik.com') ?? 0, 0);
+    assert.equal(appelsParDomaine.get('weibang-lik.se') ?? 0, 0);
     assert.equal([...appelsParDomaine.values()].reduce((a, b) => a + b, 0), 6, 'six qualifications, une par candidat lisible du marché');
   });
 });

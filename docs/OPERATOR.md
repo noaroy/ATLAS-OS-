@@ -84,7 +84,7 @@ Le chemin réel, celui qui a mis la v2 en ligne :
 
 ```
 PC Windows (dépôt Git) → bundle / release → VPS Debian 12 (/opt/atlas)
-  → Docker Compose (deployment/docker-compose.yml, --env-file /opt/atlas/.env)
+  → Docker Compose (docker-compose.yml + docker-compose.private.yml, --env-file /opt/atlas/.env)
   → conteneurs atlas + searxng → base persistante (volume atlas-data, /data)
   → tableau de bord sur 127.0.0.1:4700 → tunnel SSH → (plus tard) Caddy HTTPS
 ```
@@ -94,11 +94,16 @@ PC Windows (dépôt Git) → bundle / release → VPS Debian 12 (/opt/atlas)
 sudo bash deployment/vps-deploy.sh                 # idempotent : Docker si absent, .env vérifié (sans l'afficher),
                                                    # build de l'image, up -d, healthchecks, UNE recherche SearXNG
 # à la main, si l'on préfère voir chaque geste
-docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml build atlas
-docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml up -d atlas searxng
-docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml ps
-docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml logs -f atlas
+# les fichiers Compose du VPS : la base du dépôt + l'override privé (liaisons
+# 127.0.0.1, hors dépôt). Même liste pour build, up, ps, logs.
+COMPOSE="docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml -f deployment/docker-compose.private.yml"
+$COMPOSE build atlas
+$COMPOSE up -d atlas searxng
+$COMPOSE ps
+$COMPOSE logs -f atlas
 bash deployment/vps-check.sh                       # lecture seule : VPS_OK / VPS_OK_WITH_WARNINGS / VPS_ISSUES
+                                                   # (charge base + override + private s'ils existent, et le --env-file ;
+                                                   #  ATLAS_COMPOSE_FILES=a:b pour imposer la liste ; --compose-command l'affiche)
 ```
 
 Mettre à jour = amener le dépôt à la nouvelle version (`git fetch` depuis un
@@ -161,9 +166,8 @@ pas celle du VPS actuel.
 `npm run atlas:status` (dépôt complet) ou `bash deployment/vps-check.sh`
 (VPS) et la ligne SYSTÈME du tableau de bord : Search ● LLM ● Gmail ● Workers ●
 Database ●. Alertes en base (`/api/alerts`) : daemon arrêté, Gmail illisible,
-rebonds, budget, base. `docker compose --env-file /opt/atlas/.env -f
-deployment/docker-compose.yml logs -f atlas` pour le détail — structuré, sans
-secret, sans corps de message. Trois alertes suffisent : conteneur arrêté,
+rebonds, budget, base. `$COMPOSE logs -f atlas` (la même commande Compose
+que ci-dessus) pour le détail — structuré, sans secret, sans corps de message. Trois alertes suffisent : conteneur arrêté,
 sauvegarde de plus de 48 h, disque au-delà de 80 %.
 
 ## Ce qui reste humain

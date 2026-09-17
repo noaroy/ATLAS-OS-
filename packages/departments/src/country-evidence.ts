@@ -668,6 +668,34 @@ const PRESENCE_NONE = (country: string, reason: string): MarketPresence =>
   ({ country, level: 'NONE', signals: [], quote: null, sourceUrl: null, reason });
 
 /**
+ * Un signal de présence dit en clair — « version linguistique (hreflang
+ * sv-se) », « téléphone +46 8 500 000 00 » — pour toute phrase qu'un humain
+ * lira. Déterministe : même signal, même texte.
+ *
+ * Relevé au benchmark (Weibang) : la raison d'exclusion interpolait l'objet
+ * signal lui-même, et le rapport disait « un seul signal Suède ([object
+ * Object]) ». Un rapport ne porte jamais ce texte ; c'est ici qu'on l'assure.
+ */
+export function describePresenceSignal(signal: { type: PresenceSignalType; rawValue: string }): string {
+  const v = String(signal.rawValue ?? '').replace(/\s+/g, ' ').trim();
+  switch (signal.type) {
+    case 'LOCAL_ID': return `identifiant national ${v}`;
+    case 'LOCAL_METADATA': return `pays déclaré par le site (${v})`;
+    case 'LOCAL_ADDRESS': return `adresse postale ${v}`;
+    case 'LOCAL_PHONE': return `téléphone ${v}`;
+    case 'LOCAL_EMAIL_DOMAIN': return `adresse courriel ${v}`;
+    case 'LOCAL_LANGUAGE_VERSION': {
+      const hreflang = /hreflang=["']([^"']+)["']/i.exec(v)?.[1];
+      const lang = /\blang=["']([^"']+)["']/i.exec(v)?.[1];
+      const chemin = /href=["']([^"']+)["']/i.exec(v)?.[1];
+      return `version linguistique (${hreflang ? `hreflang ${hreflang}` : lang ? `lang ${lang}` : chemin ? `chemin ${chemin}` : v})`;
+    }
+    case 'LOCAL_TLD': return `domaine national ${v}`;
+    default: return v;
+  }
+}
+
+/**
  * L'implantation d'une société sur le marché visé, distincte de son siège.
  *
  * Cyklop est un groupe dont le pied de page nomme Milan et l'en-tête un numéro
@@ -734,19 +762,19 @@ export function assessMarketPresence(
   if (fort) {
     return {
       country: profil.country, level: 'ESTABLISHED', signals, quote: fort.rawValue, sourceUrl: fort.sourceUrl,
-      reason: `implantation ${profil.country} établie : ${fort.type} — ${fort.rawValue}`,
+      reason: `implantation ${profil.country} établie : ${describePresenceSignal(fort)}`,
     };
   }
   if (faibles.length >= 2) {
     return {
       country: profil.country, level: 'LIKELY', signals, quote: null, sourceUrl: null,
-      reason: `présence ${profil.country} probable : ${faibles.map((x) => `${x.type} ${x.rawValue}`).join(' · ')}`,
+      reason: `présence ${profil.country} probable : ${faibles.map(describePresenceSignal).join(' · ')}`,
     };
   }
   if (faibles.length === 1) {
     return {
       country: profil.country, level: 'WEAK', signals, quote: null, sourceUrl: null,
-      reason: `un seul signal ${profil.country} (${faibles[0]!.type} ${faibles[0]!.rawValue}) : insuffisant`,
+      reason: `un seul signal ${profil.country} (${describePresenceSignal(faibles[0]!)}) : insuffisant`,
     };
   }
   return PRESENCE_NONE(profil.country, `aucun signal ${profil.country}`);

@@ -132,8 +132,10 @@ describe('lire moins : les pages que le site désigne, jamais vingt-cinq chemins
   });
 });
 
-describe('le pays : une preuve écarte seule, une présomption va en revue', () => {
-  test('un USt-IdNr allemand écarte ; un simple +49 avec une mention « Deutschland » met en revue P3, sans appel modèle', async () => {
+describe('le pays : une preuve écarte seule ; une concordance sans présence locale écarte aussi', () => {
+  // Depuis v4.1 : hors du marché = écartée, prouvée ou établie par concordance.
+  // Le doute réel — deux signaux locaux — passe par NEEDS_VERIFICATION, pas ici.
+  test('un USt-IdNr allemand écarte ; un +49 avec une mention « Deutschland », sans aucun signal suédois, écarte aussi — sans appel modèle', async () => {
     const runId = createClientRun(repos, brief(), 'test');
     const sites = {
       'prouve.de': { '/': '<html><head><title>Packmaschinen GmbH</title></head><body><p>Wir vertreiben Verpackungsmaschinen und förpackningsmaskiner.</p><p>Impressum: USt-IdNr. DE123456789</p></body></html>' },
@@ -146,10 +148,11 @@ describe('le pays : une preuve écarte seule, une présomption va en revue', () 
     assert.equal(prouve.stage, 'EXCLUDED');
     assert.match(prouve.reason ?? '', /prouvé par identifiant national : Allemagne/);
     const presume = repos.clientCandidates.byDomain(runId, 'presume.com')!;
-    assert.equal(presume.stage, 'REVIEW_REQUIRED');
+    assert.equal(presume.stage, 'EXCLUDED');
     assert.match(presume.reason ?? '', /concordance/);
-    assert.equal((presume.detail as { triage: { priority: string } }).triage.priority, 'P3');
-    assert.equal(s.metrics?.filter.countryExcluded, 1, 'la présomption est une revue, pas une exclusion');
+    assert.match(presume.reason ?? '', /aucun signal Suède/);
+    assert.equal((presume.detail as { triage: { status: string } }).triage.status, 'AUTO_EXCLUDED');
+    assert.equal(s.metrics?.filter.countryExcluded, 2, 'les deux sont des exclusions pays');
   });
 });
 

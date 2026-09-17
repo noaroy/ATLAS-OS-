@@ -2,9 +2,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractCountryEvidence, collectCountrySignals, corroborateCountry, assessMarketPresence, decideCountry,
-  COUNTRY_SIGNAL_RANK,
+  describePresenceSignal, COUNTRY_SIGNAL_RANK, type PresenceSignalType,
 } from '../src/country-evidence.ts';
-import { collectIdentitySignals, corroborateIdentity, isParasiteName, companyNameFromDomain, jsonLdNodes } from '../src/identity-signals.ts';
+import { collectIdentitySignals, corroborateIdentity, isParasiteName, isDescriptiveName, companyNameFromDomain, jsonLdNodes } from '../src/identity-signals.ts';
 import { qualificationScore, evidenceLevelOf, EVIDENCE_FACTOR, type CriterionResult } from '../src/client-criteria.ts';
 import { triageCandidate } from '../src/client-triage.ts';
 
@@ -191,6 +191,90 @@ describe('4. le nom de société', () => {
     for (const good of ['Angloscand', 'Nordpack AB', 'Thematic Solutions', 'Templeton Machines']) assert.equal(isParasiteName(good), false, good);
     assert.equal(companyNameFromDomain('angloscand.se'), 'Angloscand');
     assert.equal(companyNameFromDomain('https://www.nord-pack.com/'), 'Nord Pack');
+  });
+
+  test('une accroche n’est pas un nom : « Förpackningsmaskiner för dina behov » est reconnue, « Nordpack AB » non', () => {
+    for (const slogan of [
+      'Förpackningsmaskiner för dina behov', 'Packaging solutions for your needs', 'Des machines pour vos besoins',
+      'Verpackungsmaschinen für Ihren Bedarf', 'Allt för din produktion', 'Vi levererar till hela Sverige',
+    ]) assert.equal(isDescriptiveName(slogan), true, slogan);
+    for (const nom of [
+      'Fpack', 'Fpack AB', 'Nordpack AB', 'Angloscand', 'Bang & Olufsen', 'Marks and Spencer', 'The Body Shop',
+      'Cyklop GmbH', 'Center for Packaging AB', 'PPS Nordic', 'Stora Enso Packaging Solutions',
+    ]) assert.equal(isDescriptiveName(nom), false, nom);
+  });
+
+  test('fpack.se : le JSON-LD porte le slogan en `name` — le nom retenu est la marque, jamais l’accroche', () => {
+    // La forme réelle du piège : Organization.name = accroche SEO ; og:site_name et
+    // le titre nomment la marque ; le H1 répète l'accroche.
+    const html = `<html><head>
+      <title>Förpackningsmaskiner för dina behov - Fpack-lik</title>
+      <meta property="og:site_name" content="Fpack-lik" />
+      <script type="application/ld+json">{"@type":"Organization","name":"Förpackningsmaskiner för dina behov","url":"https://fpack-lik.se/"}</script>
+      </head><body><h1>Förpackningsmaskiner för dina behov</h1><p>Fpack-lik AB säljer förpackningsmaskiner.</p></body></html>`;
+    const signals = collectIdentitySignals([page('https://fpack-lik.se/', html)]);
+    assert.ok(!signals.some((x) => /dina behov/.test(x.value)), `l’accroche n’est jamais un signal : ${signals.map((x) => x.value).join(' | ')}`);
+    const id = corroborateIdentity(signals, 'fpack-lik.se');
+    assert.equal(id.name, 'Fpack-lik');
+
+    // Le slogan seul, partout : rien de déclaré — le domaine reprendra la main.
+    const seul = `<html><head><title>Förpackningsmaskiner för dina behov</title>
+      <script type="application/ld+json">{"@type":"Organization","name":"Förpackningsmaskiner för dina behov"}</script>
+      </head><body><h1>Förpackningsmaskiner för dina behov</h1></body></html>`;
+    const rien = corroborateIdentity(collectIdentitySignals([page('https://fpack-lik.se/', seul)]), 'fpack-lik.se');
+    assert.equal(rien.name, null);
+    assert.equal(companyNameFromDomain('fpack-lik.se'), 'Fpack Lik');
+  });
+});
+
+describe('5. les signaux de présence se lisent en clair', () => {
+  test('chaque type a un libellé humain, déterministe, jamais « [object Object] »', () => {
+    const cas: Array<[PresenceSignalType, string, RegExp]> = [
+      ['LOCAL_ID', '556000-0001', /^identifiant national 556000-0001$/],
+      ['LOCAL_METADATA', 'addressCountry: SE', /^pays déclaré par le site \(addressCountry: SE\)$/],
+      ['LOCAL_ADDRESS', '126 26 Hägersten', /^adresse postale 126 26 Hägersten$/],
+      ['LOCAL_PHONE', '+46 8 503 053 00', /^téléphone \+46 8 503 053 00$/],
+      ['LOCAL_EMAIL_DOMAIN', 'info@cyklop.se', /^adresse courriel info@cyklop\.se$/],
+      ['LOCAL_LANGUAGE_VERSION', 'hreflang="sv-se"', /^version linguistique \(hreflang sv-se\)$/],
+      ['LOCAL_LANGUAGE_VERSION', '<html lang="sv"', /^version linguistique \(lang sv\)$/],
+      ['LOCAL_LANGUAGE_VERSION', 'href="/sv/produkter/"', /^version linguistique \(chemin \/sv\/produkter\/\)$/],
+      ['LOCAL_TLD', 'weibang-lik.se', /^domaine national weibang-lik\.se$/],
+    ];
+    for (const [type, rawValue, attendu] of cas) {
+      const texte = describePresenceSignal({ type, rawValue });
+      assert.match(texte, attendu, `${type} ${rawValue} → ${texte}`);
+      assert.equal(describePresenceSignal({ type, rawValue }), texte, 'déterministe');
+      assert.ok(!texte.includes('[object'), texte);
+    }
+  });
+
+  test('Weibang : un seul signal suédois — la raison nomme le signal, en mots', () => {
+    const pages = [page('https://weibang-lik.se/', '<html lang="sv"><head><title>Weibang-lik</title></head><body><p>Kina · +86 577 6000 0000</p></body></html>')];
+    const presence = assessMarketPresence(pages, 'Suède');
+    assert.equal(presence.level, 'LIKELY', presence.reason); // lang=sv et domaine .se : deux signaux faibles
+    assert.ok(!presence.reason.includes('[object'), presence.reason);
+    assert.match(presence.reason, /version linguistique \(lang sv\)/);
+    assert.match(presence.reason, /domaine national weibang-lik\.se/);
+
+    const seul = assessMarketPresence([page('https://weibang-lik.com/', '<html lang="sv"><body><p>Kina</p></body></html>')], 'Suède');
+    assert.equal(seul.level, 'WEAK');
+    assert.equal(seul.reason, 'un seul signal Suède (version linguistique (lang sv)) : insuffisant');
+  });
+
+  test('aucune décision de pays — Cyklop, Weibang, sans preuve — ne rend « [object Object] » dans ce qu’elle écrit', () => {
+    const jeux = [
+      [page('https://www.cyklop.com/', HOME_CYKLOP), page('https://www.cyklop.com/contact', CONTACT_CYKLOP)],
+      [page('https://weibang-lik.se/', '<html><body><p>Weibang-lik</p><a href="/kontakt/">Kontakt</a></body></html>'), page('https://weibang-lik.se/kontakt/', '<html><body><p>Ruian, Zhejiang, China · Tel +86 577 6000 0000</p></body></html>')],
+      [page('https://sanspays.com/', '<html><body><p>Rien du tout.</p></body></html>')],
+    ];
+    for (const pages of jeux) {
+      const strong = extractCountryEvidence(pages);
+      const signals = collectCountrySignals(pages);
+      const decision = decideCountry({ strong, signals, corroboration: corroborateCountry(signals), presence: assessMarketPresence(pages, 'Suède'), accepted: ['Suède'] });
+      const texte = JSON.stringify(decision);
+      assert.ok(!texte.includes('[object Object]'), texte);
+      assert.ok(!decision.fitReason.includes('[object'), decision.fitReason);
+    }
   });
 });
 

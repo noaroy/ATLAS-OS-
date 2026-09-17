@@ -90,15 +90,19 @@ export const BENCHMARK: BenchmarkCase[] = [
     },
   },
   {
+    // Le piège réel de fpack.se : le JSON-LD et le H1 portent l'accroche SEO ;
+    // seuls og:site_name et le titre nomment la marque.
     domain: 'fpack-lik.se', title: 'Fpack-lik',
     pages: {
-      'https://fpack-lik.se/': `<html><head><title>Fpack-lik AB</title>
-        <script type="application/ld+json">{"@type":"Organization","name":"Fpack-lik AB","address":{"addressCountry":"SE"}}</script></head><body>
-        <p>Fpack-lik AB ${SV_DISTRIB} för kosmetik och läkemedel i Sverige.</p><p>Vi installerar och servar alla maskiner vi levererar.</p>
+      'https://fpack-lik.se/': `<html><head><title>Förpackningsmaskiner för dina behov - Fpack-lik</title>
+        <meta property="og:site_name" content="Fpack-lik" />
+        <script type="application/ld+json">{"@type":"Organization","name":"Förpackningsmaskiner för dina behov","address":{"addressCountry":"SE"}}</script></head><body>
+        <h1>Förpackningsmaskiner för dina behov</h1>
+        <p>Fpack-lik ${SV_DISTRIB} för kosmetik och läkemedel i Sverige.</p><p>Vi installerar och servar alla maskiner vi levererar.</p>
         <p>Org.nr 556000-0002 · Göteborg · <a href="mailto:info@fpack-lik.se">info@fpack-lik.se</a> · +46 31 000 00 00</p></body></html>`,
     },
     expect: {
-      stage: 'RETAINED', name: 'Fpack-lik AB', country: 'Suède', countryBasis: 'OFFICIAL_ID', presence: 'ESTABLISHED',
+      stage: 'RETAINED', name: 'Fpack-lik', country: 'Suède', countryBasis: 'OFFICIAL_ID', presence: 'ESTABLISHED',
       fit: 'IN_SCOPE', evidence: 'COMPLETE', triage: 'AUTO_APPROVED', llmCalled: true, contradictionEmpty: true, total: 100,
     },
   },
@@ -139,6 +143,22 @@ export const BENCHMARK: BenchmarkCase[] = [
     expect: {
       stage: 'REVIEW_REQUIRED', name: 'ABB-lik', country: 'Suède', countryBasis: 'OFFICIAL_ID', presence: 'ESTABLISHED',
       fit: 'IN_SCOPE', triage: 'HUMAN_REVIEW', category: 'TOO_GENERAL', llmCalled: true,
+    },
+  },
+  {
+    // Le fabricant chinois par concordance — un +86 et « China » sur la page
+    // contact — avec un seul signal suédois (le domaine .se). Hors du marché :
+    // écarté seul, sans appel modèle, et la raison nomme le signal en mots.
+    domain: 'weibang-lik.se', title: 'Weibang-lik',
+    pages: {
+      'https://weibang-lik.se/': `<html><head><title>Weibang-lik</title></head><body>
+        <p>Weibang-lik tillverkar förpackningsmaskiner och kontrollutrustning för export.</p><a href="/kontakt/">Kontakt</a></body></html>`,
+      'https://weibang-lik.se/kontakt/': `<html><head><title>Kontakt</title></head><body>
+        <p>Weibang-lik Machinery Co., Ruian, Zhejiang, China · Tel +86 577 6000 0000 · <a href="mailto:sales@weibang-lik.com">sales@weibang-lik.com</a></p></body></html>`,
+    },
+    expect: {
+      stage: 'EXCLUDED', name: 'Weibang-lik', country: 'Chine', countryBasis: 'CORROBORATION', presence: 'WEAK',
+      fit: 'OUT_OF_SCOPE', triage: 'AUTO_EXCLUDED', category: 'WRONG_COUNTRY', llmCalled: false,
     },
   },
   {

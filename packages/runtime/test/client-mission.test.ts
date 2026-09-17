@@ -321,4 +321,11 @@ describe('titreDuSite : le nom d’une société lu dans le titre de sa page d�
     assert.equal(titreDuSite(page('')), null);
     assert.equal(titreDuSite(page('x'.repeat(80))), null);
   });
+
+  test('fpack.se : une accroche dans le titre ne nomme pas — la marque l’emporte, et sans marque, rien (le domaine reprend)', () => {
+    assert.equal(titreDuSite(page('Förpackningsmaskiner för dina behov - Fpack')), 'Fpack');
+    assert.equal(titreDuSite(page('Fpack | Förpackningsmaskiner för dina behov')), 'Fpack');
+    assert.equal(titreDuSite(page('Förpackningsmaskiner för dina behov')), null, 'un slogan seul n’est le nom de personne');
+    assert.equal(titreDuSite(page('Packaging solutions for your needs')), null);
+  });
 });

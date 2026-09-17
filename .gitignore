@@ -35,3 +35,6 @@ graphify-out/
 /briefs/*.json
 !/briefs/internal-test-sweden.json
 !/briefs/*.example.json
+
+# L'override Compose propre au serveur (liaisons locales) : jamais dans le dépôt.
+deployment/docker-compose.private.yml

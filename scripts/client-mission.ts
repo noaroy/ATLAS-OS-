@@ -21,6 +21,7 @@
  *
  * Rien n'est envoyé, rien n'est soumis. Ce script produit des fiches.
  */
+import { MAX_CANDIDATE_ATTEMPTS } from '../packages/data/src/index.ts';
 import { readFileSync, existsSync } from 'node:fs';
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
@@ -88,6 +89,17 @@ async function main(): Promise<void> {
       // que les lus ; l'écart entre les deux est nommé ici, pas deviné.
       console.log(`  candidats : ${resume.total} inscrit(s) = ${resume.candidates} candidat(s) lu(s) ou à lire + ${resume.prefiltered} écarté(s) avant lecture (annuaires)${resume.consistent ? '' : `  ${c.red}INCOHÉRENCE : états ${Object.values(counts).reduce((a, b) => a + b, 0)} · lignes ${resume.total} · domaines ${resume.distinctDomains}${c.reset}`}`);
       for (const [stage, n] of Object.entries(counts)) if (n > 0) console.log(`    ${stage.padEnd(18)} ${n}`);
+      // Un échec dit où il en est : la tentative consommée, celles qui restent,
+      // et ce que la prochaine reprise fera. Sans cela, « FAILED_RETRYABLE 3 »
+      // après une reprise se lit comme une boucle — c'est un compte.
+      const echecs = repos.clientCandidates.forRun(runId).filter((x) => x.stage === 'FAILED_RETRYABLE' || x.stage === 'FAILED_FINAL');
+      for (const x of echecs) {
+        const restantes = MAX_CANDIDATE_ATTEMPTS - x.attempts;
+        const suite = x.stage === 'FAILED_FINAL'
+          ? 'définitif : aucune reprise ne le retraitera'
+          : `${restantes} reprise(s) réelle(s) encore, puis FAILED_FINAL`;
+        console.log(`    ${c.dim}${x.stage.padEnd(16)} ${x.domain.padEnd(36)} tentative ${x.attempts}/${MAX_CANDIDATE_ATTEMPTS} · ${suite}${x.lastError ? ` · ${x.lastError.slice(0, 70)}` : ''}${c.reset}`);
+      }
       console.log(`  coût modèle : ${spend.run.toFixed(4)} $ (mission) · ${spend.day.toFixed(4)} $ (aujourd’hui, toutes missions)`);
       if (commande === 'status') {
         const prets = repos.clientCandidates.forRun(runId).filter((x) => x.stage === 'RETAINED' || x.stage === 'REVIEW_REQUIRED');
@@ -228,8 +240,13 @@ async function main(): Promise<void> {
         console.log(`  ${c.dim}tri · ${c.green}${m.quality.autoApproved} approuvés seuls${c.reset}${c.dim} · ${c.amber}${m.quality.humanReview} à revoir${c.reset}${c.dim} · ${m.quality.autoExcluded} écartés seuls${c.reset}`);
         if (m.timing.slowest.length) console.log(`  ${c.dim}plus lents · ${m.timing.slowest.map((x) => `${x.domain} ${s(x.ms)} (fetch ${s(x.fetch)}, modèle ${s(x.llm)})`).join(' · ')}${c.reset}`);
       }
-      const restants = repos.clientCandidates.pending(runId, 500).length;
-      console.log(`  en attente après ce lot : ${restants}${restants > 0 ? ` → npm run client:mission -- batch --run=${runId} --resume --go` : ''}`);
+      const enAttente = repos.clientCandidates.pending(runId, 500);
+      const restants = enAttente.length;
+      const reprenables = enAttente.filter((x) => x.stage === 'FAILED_RETRYABLE');
+      const detailReprise = reprenables.length > 0
+        ? ` (dont ${reprenables.length} en échec reprenable : ${reprenables.map((x) => `${x.domain} ${x.attempts}/${MAX_CANDIDATE_ATTEMPTS}`).join(', ')} — chaque reprise retente le réseau, jamais le modèle ; FAILED_FINAL à la ${MAX_CANDIDATE_ATTEMPTS}e)`
+        : '';
+      console.log(`  en attente après ce lot : ${restants}${detailReprise}${restants > 0 ? ` → npm run client:mission -- batch --run=${runId} --resume --go` : ''}`);
       console.log(`  ${c.dim}jour : ${spendSoFar(repos, { runId, batchStartedAt: startOfUtcDay(new Date().toISOString()) }, new Date().toISOString()).day.toFixed(4)} $ · MESSAGES SENT inchangé — ce script n’envoie rien${c.reset}\n`);
       return;
     }

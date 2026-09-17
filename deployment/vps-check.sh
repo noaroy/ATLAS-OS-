@@ -11,8 +11,19 @@
 # « présente » ou « absente », jamais sa valeur.
 #
 # Il ne dépend d'aucun nom de conteneur : les services sont résolus par
-# Docker Compose (projet + service), et les commandes internes passent par
-# `docker compose exec`. Sans Docker, il dit ce qu'il ne peut pas voir.
+# Docker Compose (projet + service) avec les MÊMES fichiers que le
+# déploiement — base, override, private — et le même `--env-file` ; à défaut,
+# par les étiquettes que Compose pose sur chaque conteneur
+# (com.docker.compose.project / .service). Les commandes internes passent par
+# `docker exec` sur l'identifiant trouvé. Sans Docker, il dit ce qu'il ne
+# peut pas voir.
+#
+#   ATLAS_COMPOSE_FILES   liste de fichiers Compose séparés par « : »
+#                         (défaut : docker-compose.yml + override + private
+#                         s'ils existent dans deployment/)
+#   ATLAS_ENV_FILE        le .env passé en --env-file (défaut : <dépôt>/.env)
+#   ATLAS_COMPOSE_PROJECT le projet (défaut : atlas-os)
+#   --compose-command     affiche la commande Compose résolue et s'arrête
 #
 # Code de sortie : 0 si aucun FAIL, 1 sinon — pour qu'un cron ou un humain
 # lise le verdict d'un coup d'œil.
@@ -21,10 +32,48 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-COMPOSE_FILE="${ATLAS_COMPOSE_FILE:-${SCRIPT_DIR}/docker-compose.yml}"
+COMPOSE_DIR="${ATLAS_COMPOSE_DIR:-${SCRIPT_DIR}}"
 PROJECT="${ATLAS_COMPOSE_PROJECT:-atlas-os}"
 ENV_FILE="${ATLAS_ENV_FILE:-${ROOT_DIR}/.env}"
 PORT_DEFAULT=4700
+
+# ── La commande Compose, telle que le déploiement la lance ────────────────────
+# Relevé sur le VPS : `docker compose -p atlas-os -f docker-compose.yml ps`
+# sans --env-file échouait en silence (une variable « :? » du fichier de base
+# n'était pas fournie) et sans le fichier privé — et le contrôle concluait
+# « conteneur absent » devant deux conteneurs sains.
+COMPOSE_FILES=()
+if [[ -n "${ATLAS_COMPOSE_FILES:-}" ]]; then
+  IFS=':' read -r -a COMPOSE_FILES <<< "${ATLAS_COMPOSE_FILES}"
+elif [[ -n "${ATLAS_COMPOSE_FILE:-}" ]]; then
+  COMPOSE_FILES=("${ATLAS_COMPOSE_FILE}")
+else
+  for f in docker-compose.yml docker-compose.override.yml docker-compose.private.yml; do
+    [[ -f "${COMPOSE_DIR}/${f}" ]] && COMPOSE_FILES+=("${COMPOSE_DIR}/${f}")
+  done
+fi
+COMPOSE_ARGS=(-p "${PROJECT}")
+[[ -f "${ENV_FILE}" ]] && COMPOSE_ARGS+=(--env-file "${ENV_FILE}")
+for f in "${COMPOSE_FILES[@]+"${COMPOSE_FILES[@]}"}"; do COMPOSE_ARGS+=(-f "${f}"); done
+COMPOSE_FILE="${COMPOSE_FILES[0]:-}"
+compose() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
+compose_command_text() { printf 'docker compose'; for a in "${COMPOSE_ARGS[@]}"; do printf ' %s' "${a}"; done; printf '\n'; }
+
+if [[ "${1:-}" == "--compose-command" ]]; then compose_command_text; exit 0; fi
+
+# Le conteneur d'un service : par Compose d'abord, par ses étiquettes ensuite.
+# Les étiquettes ne dépendent d'aucun fichier : elles sont posées par Compose
+# à la création, quel que soit le jeu de fichiers utilisé ce jour-là.
+container_of() {
+  local service="$1" cid=""
+  cid="$(compose ps -q "${service}" 2>/dev/null | head -1)"
+  if [[ -z "${cid}" ]]; then
+    cid="$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.service=${service}" 2>/dev/null | head -1)"
+  fi
+  printf '%s' "${cid}"
+}
+# Exécute Node dans le conteneur atlas, par son identifiant : aucun nom en dur.
+atlas_node() { docker exec -i "${ATLAS_CID}" node "$@"; }
 
 if [[ -t 1 ]]; then B=$'\e[1m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; D=$'\e[2m'; N=$'\e[0m'; else B=''; R=''; G=''; Y=''; D=''; N=''; fi
 
@@ -102,15 +151,23 @@ fi
 
 # ── 3. Conteneurs ─────────────────────────────────────────────────────────────
 head_ "3. Conteneurs — projet ${PROJECT}"
-compose() { docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"; }
 ATLAS_UP=0
-if [[ "${DOCKER_OK}" -eq 1 && -f "${COMPOSE_FILE}" ]]; then
+ATLAS_CID=""
+if [[ "${DOCKER_OK}" -eq 1 ]]; then
+  if [[ -n "${COMPOSE_FILE}" && -f "${COMPOSE_FILE}" ]]; then
+    printf '  %s      compose : %s%s\n' "$D" "$(compose_command_text | sed "s#${ROOT_DIR}/##g")" "$N"
+    COMPOSE_ERR="$(compose config --services 2>&1 >/dev/null | head -1 | cut -c1-140)"
+    [[ -n "${COMPOSE_ERR}" ]] && warn "fichiers compose" "Compose ne les lit pas tels quels (${COMPOSE_ERR}) — résolution par étiquettes"
+  else
+    warn "fichiers compose" "aucun fichier trouvé dans ${COMPOSE_DIR} — résolution par étiquettes Docker seulement"
+  fi
   for service in atlas searxng; do
-    CID="$(compose ps -q "${service}" 2>/dev/null | head -1)"
+    CID="$(container_of "${service}")"
     if [[ -z "${CID}" ]]; then
-      fail "conteneur ${service}" "absent (docker compose -p ${PROJECT} ps)"
+      fail "conteneur ${service}" "absent (ni par Compose, ni par étiquette com.docker.compose.project=${PROJECT}/service=${service})"
       continue
     fi
+    [[ "${service}" == "atlas" ]] && ATLAS_CID="${CID}"
     STATE="$(docker inspect --format '{{.State.Status}}' "${CID}" 2>/dev/null)"
     HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}sans healthcheck{{end}}' "${CID}" 2>/dev/null)"
     RESTART="$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${CID}" 2>/dev/null)"
@@ -119,9 +176,9 @@ if [[ "${DOCKER_OK}" -eq 1 && -f "${COMPOSE_FILE}" ]]; then
     if [[ "${RESTART}" == "unless-stopped" || "${RESTART}" == "always" ]]; then pass "restart ${service}" "${RESTART}"; else fail "restart ${service}" "${RESTART:-aucune} — attendu unless-stopped (redémarrage après reboot)"; fi
   done
   # n8n est optionnel (profil) : on le dit seulement s'il tourne.
-  N8N="$(compose ps -q n8n 2>/dev/null | head -1)"; [[ -n "${N8N}" ]] && pass "conteneur n8n" "présent (optionnel)" || na "conteneur n8n" "non démarré (optionnel, profil n8n)"
+  N8N="$(container_of n8n)"; [[ -n "${N8N}" ]] && pass "conteneur n8n" "présent (optionnel)" || na "conteneur n8n" "non démarré (optionnel, profil n8n)"
 else
-  na "conteneurs" "Docker indisponible ou ${COMPOSE_FILE} absent"
+  na "conteneurs" "Docker indisponible"
 fi
 
 # ── 4. Réseau et santé ────────────────────────────────────────────────────────
@@ -136,7 +193,7 @@ fi
 if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
   pass "healthz (hôte)" "http://127.0.0.1:${PORT}/healthz → 200"
 elif [[ "${ATLAS_UP}" -eq 1 ]]; then
-  if compose exec -T atlas node -e "fetch('http://127.0.0.1:'+(process.env.ATLAS_PORT||4700)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+  if atlas_node -e "fetch('http://127.0.0.1:'+(process.env.ATLAS_PORT||4700)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     pass "healthz (conteneur)" "200 depuis l’intérieur — port non publié sur l’hôte (accès par tunnel/exec)"
   else
     fail "healthz" "ni l’hôte ni le conteneur ne répondent 200"
@@ -144,8 +201,8 @@ elif [[ "${ATLAS_UP}" -eq 1 ]]; then
 else
   na "healthz" "conteneur atlas indisponible"
 fi
-if [[ "${DOCKER_OK}" -eq 1 && -n "$(compose ps -q searxng 2>/dev/null)" ]]; then
-  if compose exec -T atlas node -e "fetch(process.env.SEARXNG_BASE_URL.replace(/\/+$/,'')+'/search?q=test&format=json').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+if [[ "${ATLAS_UP}" -eq 1 && -n "$(container_of searxng)" ]]; then
+  if atlas_node -e "fetch(process.env.SEARXNG_BASE_URL.replace(/\/+$/,'')+'/search?q=test&format=json').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     pass "searxng" "répond à ATLAS en JSON"
   else
     fail "searxng" "ne répond pas à une recherche JSON depuis le conteneur atlas"
@@ -156,7 +213,7 @@ fi
 head_ "5. Données (dans le conteneur atlas)"
 if [[ "${ATLAS_UP}" -eq 1 ]]; then
   # Les mesures sont prises par Node dans le conteneur : même bibliothèque SQLite qu’ATLAS, lecture seule.
-  DATA_JSON="$(compose exec -T atlas node - 2>/dev/null <<'JS' | tail -1
+  DATA_JSON="$(atlas_node - 2>/dev/null <<'JS' | tail -1
 const fs = require("fs"); const path = require("path");
 const dir = process.env.ATLAS_DATA_DIR || "/data"; const db = path.join(dir, "atlas.db");
 const out = { db: fs.existsSync(db), dbBytes: fs.existsSync(db) ? fs.statSync(db).size : 0 };

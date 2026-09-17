@@ -141,6 +141,50 @@ export function isParasiteName(name: string): boolean {
 }
 
 /**
+ * Les mots d'une accroche : pronoms, possessifs, prépositions, superlatifs.
+ * Une raison sociale n'en contient pas — ou un seul, en tête (« The Body
+ * Shop »). Une phrase qui en porte deux, ou un parmi quatre mots sans forme
+ * juridique, décrit une offre : elle n'est le nom de personne.
+ */
+const MOTS_D_ACCROCHE = new Set([
+  // suédois · norvégien · danois
+  'for', 'dina', 'din', 'ditt', 'era', 'ert', 'er', 'vara', 'var', 'vart', 'till', 'med', 'av', 'om', 'hos', 'fran',
+  'alla', 'allt', 'behov', 'basta', 'du', 'ni', 'vi', 'har', 'dine', 'deres', 'vare', 'alle', 'beste', 'dere', 'jeres', 'dit',
+  // anglais
+  'your', 'our', 'with', 'all', 'needs', 'best', 'you', 'we', 'here', 'every',
+  // français
+  'pour', 'vos', 'votre', 'nos', 'notre', 'avec', 'tous', 'toutes', 'vous', 'meilleur', 'meilleure', 'meilleurs', 'meilleures', 'besoins', 'ici',
+  // allemand · néerlandais
+  'fur', 'ihre', 'ihr', 'ihren', 'unsere', 'unser', 'mit', 'beste', 'bedarf', 'sie', 'wir', 'hier',
+  'voor', 'uw', 'jouw', 'onze', 'u', 'wij',
+  // finnois
+  'sinun', 'teidan', 'meidan', 'kaikki', 'paras', 'tarpeisiin', 'sinulle', 'teille',
+]);
+
+/** « Nordpack AB », « Cyklop GmbH » : une forme juridique nomme une société, pas une offre. */
+const FORME_JURIDIQUE = /\b(?:AB|Aktiebolag|AS|ASA|ApS|A\/S|Oy|Oyj|GmbH|AG|KG|SAS|SARL|SA|EURL|SCI|Ltd|LTD|Limited|Inc|INC|LLC|plc|PLC|BV|B\.V\.|NV|N\.V\.|Srl|SRL|SpA)\b/;
+
+/**
+ * Vrai quand le « nom » est une accroche — « Förpackningsmaskiner för dina
+ * behov », « Packaging solutions for your needs » — et non une raison sociale.
+ *
+ * Relevé sur fpack.se : le JSON-LD portait ce slogan en `name`. Quatre mots,
+ * soixante caractères au plus : le filtre de plausibilité le laissait passer,
+ * et une seule source déclarante l'emportait sur « Fpack », que le domaine
+ * et le titre nommaient pourtant. Une accroche ne déclare rien : elle est
+ * écartée, et le domaine reprend la main quand rien d'autre ne nomme.
+ */
+export function isDescriptiveName(name: string): boolean {
+  const plat = normalizeCompanyName(name);
+  if (!plat) return false;
+  if (FORME_JURIDIQUE.test(name)) return false;
+  const mots = plat.split(' ').filter(Boolean);
+  if (mots.length < 3) return false;
+  const accroches = mots.filter((m, i) => MOTS_D_ACCROCHE.has(m) && !(i === 0 && mots.length === 3));
+  return accroches.length >= 2 || (mots.length >= 4 && accroches.length >= 1);
+}
+
+/**
  * Le nom qu'un domaine porte, quand aucune page ne le déclare mieux :
  * « angloscand.se » → « Angloscand ». Un repli lisible, jamais une preuve.
  */
@@ -242,6 +286,7 @@ function retenirNom(brut: string): string | null {
   if (!plausible(n)) return null;
   if (NON_NOMS.includes(normalizeCompanyName(n))) return null;
   if (isParasiteName(n)) return null;
+  if (isDescriptiveName(n)) return null;
   /*
    * Une annee n'est pas une raison sociale.
    *

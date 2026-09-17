@@ -106,6 +106,12 @@ const envSchema = z.object({
   ATLAS_FOUNDER_PASSWORD: z.string().min(6).default('atlas-founder'),
 
   ATLAS_DATA_DIR: z.string().default('./data'),
+  /**
+   * Le fichier de base, quand il n'est pas `<ATLAS_DATA_DIR>/atlas.db` — pour
+   * ouvrir volontairement une copie, une archive, une sauvegarde. Absent en
+   * production : le serveur et atlas-cli lisent tous deux /data/atlas.db.
+   */
+  ATLAS_DB_PATH: z.string().optional(),
   ATLAS_BACKUP_DIR: z.string().default('./data/backups'),
   ATLAS_BACKUP_RETENTION: intish(14, 1, 365),
 
@@ -520,6 +526,52 @@ function loadEnvFile(file: string): void {
   }
 }
 
+/**
+ * La garde de la base canonique.
+ *
+ * Sur le serveur, ATLAS tourne dans Docker et sa base vit dans le volume
+ * `atlas-data`, montée en /data. Une commande lancée depuis l'hôte, dans le
+ * même dépôt, ouvrirait — ou créerait — ./data/atlas.db : une seconde base,
+ * silencieuse, sans daemon ni tableau de bord, qui ne dirait jamais qu'elle
+ * n'est pas la bonne. C'est arrivé : les benchmarks INTERNAL_TEST de l'hôte
+ * et la production du conteneur ont vécu dans deux fichiers.
+ *
+ * Le dépôt déployé se reconnaît à `deployment/docker-compose.private.yml`,
+ * le fichier propre au serveur qui n'existe nulle part ailleurs ; ou à
+ * `ATLAS_CANONICAL_DB=docker`, posé exprès. Dans ce dépôt, ouvrir la base
+ * par défaut de l'hôte est refusé, et le message dit quoi lancer à la place.
+ *
+ * La garde se tait quand le choix est explicite : dans le conteneur outils
+ * (`ATLAS_CLI_CONTEXT=docker`, posé par Compose), avec un `ATLAS_DB_PATH`
+ * choisi, avec un `ATLAS_DATA_DIR` qui n'est pas ./data (tests, copies), ou
+ * avec `ATLAS_ALLOW_HOST_DB=1` — pour lire l'archive en connaissance de cause.
+ */
+export function canonicalDatabaseGuard(input: {
+  cwd: string;
+  dataDir: string;
+  env: Record<string, string | undefined>;
+}): { blocked: boolean; reason: string | null } {
+  const env = input.env;
+  if (env.ATLAS_CLI_CONTEXT === 'docker') return { blocked: false, reason: null };
+  if (env.ATLAS_DB_PATH && env.ATLAS_DB_PATH.trim() !== '') return { blocked: false, reason: null };
+  if (/^(1|true|yes|on)$/i.test((env.ATLAS_ALLOW_HOST_DB ?? '').trim())) return { blocked: false, reason: null };
+  const defaut = resolve(input.cwd, 'data');
+  if (resolve(input.dataDir) !== defaut) return { blocked: false, reason: null };
+  const marque = existsSync(join(input.cwd, 'deployment', 'docker-compose.private.yml'))
+    ? 'deployment/docker-compose.private.yml présent : ce dépôt est déployé par Docker Compose'
+    : env.ATLAS_CANONICAL_DB === 'docker' ? 'ATLAS_CANONICAL_DB=docker' : null;
+  if (!marque) return { blocked: false, reason: null };
+  return {
+    blocked: true,
+    reason: [
+      `Base canonique dans Docker (${marque}).`,
+      `Refus d’ouvrir ${join(defaut, 'atlas.db')} : ce serait une seconde base, hors du volume atlas-data que le serveur et le tableau de bord utilisent.`,
+      'Lancer la commande dans le conteneur outils : ./deployment/atlas-cli.sh <commande> … (même volume, même réseau, même .env).',
+      'Pour lire volontairement une base de l’hôte : ATLAS_DB_PATH=<fichier> ou ATLAS_ALLOW_HOST_DB=1.',
+    ].join('\n'),
+  };
+}
+
 export function loadConfig(cwd = process.cwd()): AtlasConfig {
   loadAtlasEnv(cwd);
 
@@ -537,6 +589,12 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
   const dataDir = abs(e.ATLAS_DATA_DIR);
   const backupDir = abs(e.ATLAS_BACKUP_DIR);
   const artifactDir = join(dataDir, 'artifacts');
+  const databaseFile = e.ATLAS_DB_PATH && e.ATLAS_DB_PATH.trim() !== '' ? abs(e.ATLAS_DB_PATH.trim()) : join(dataDir, 'atlas.db');
+
+  // Avant de créer quoi que ce soit : sur le dépôt déployé, la base de l'hôte
+  // n'est pas la bonne, et on ne la crée pas non plus.
+  const garde = canonicalDatabaseGuard({ cwd, dataDir, env: process.env });
+  if (garde.blocked) throw new AtlasError('FORBIDDEN', garde.reason ?? 'base canonique dans Docker', { details: { reason: 'HOST_DB_GUARD' } });
 
   for (const dir of [dataDir, backupDir, artifactDir]) {
     mkdirSync(dir, { recursive: true });
@@ -560,7 +618,7 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       founderEmail: e.ATLAS_FOUNDER_EMAIL,
       founderPassword: e.ATLAS_FOUNDER_PASSWORD,
     },
-    paths: { dataDir, databaseFile: join(dataDir, 'atlas.db'), backupDir, artifactDir },
+    paths: { dataDir, databaseFile, backupDir, artifactDir },
     backup: { retention: e.ATLAS_BACKUP_RETENTION },
     llm: {
       apiKey,

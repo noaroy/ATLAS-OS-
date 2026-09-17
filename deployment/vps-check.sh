@@ -32,32 +32,12 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-COMPOSE_DIR="${ATLAS_COMPOSE_DIR:-${SCRIPT_DIR}}"
-PROJECT="${ATLAS_COMPOSE_PROJECT:-atlas-os}"
-ENV_FILE="${ATLAS_ENV_FILE:-${ROOT_DIR}/.env}"
+# La commande Compose du déploiement — fichiers, --env-file, projet — vient
+# d'un seul endroit, partagé avec atlas-cli.sh. Relevé sur le VPS : lancée
+# sans --env-file ni fichier privé, Compose refusait en silence et le
+# contrôle concluait « conteneur absent » devant deux conteneurs sains.
+. "${SCRIPT_DIR}/compose-env.sh"
 PORT_DEFAULT=4700
-
-# ── La commande Compose, telle que le déploiement la lance ────────────────────
-# Relevé sur le VPS : `docker compose -p atlas-os -f docker-compose.yml ps`
-# sans --env-file échouait en silence (une variable « :? » du fichier de base
-# n'était pas fournie) et sans le fichier privé — et le contrôle concluait
-# « conteneur absent » devant deux conteneurs sains.
-COMPOSE_FILES=()
-if [[ -n "${ATLAS_COMPOSE_FILES:-}" ]]; then
-  IFS=':' read -r -a COMPOSE_FILES <<< "${ATLAS_COMPOSE_FILES}"
-elif [[ -n "${ATLAS_COMPOSE_FILE:-}" ]]; then
-  COMPOSE_FILES=("${ATLAS_COMPOSE_FILE}")
-else
-  for f in docker-compose.yml docker-compose.override.yml docker-compose.private.yml; do
-    [[ -f "${COMPOSE_DIR}/${f}" ]] && COMPOSE_FILES+=("${COMPOSE_DIR}/${f}")
-  done
-fi
-COMPOSE_ARGS=(-p "${PROJECT}")
-[[ -f "${ENV_FILE}" ]] && COMPOSE_ARGS+=(--env-file "${ENV_FILE}")
-for f in "${COMPOSE_FILES[@]+"${COMPOSE_FILES[@]}"}"; do COMPOSE_ARGS+=(-f "${f}"); done
-COMPOSE_FILE="${COMPOSE_FILES[0]:-}"
-compose() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
-compose_command_text() { printf 'docker compose'; for a in "${COMPOSE_ARGS[@]}"; do printf ' %s' "${a}"; done; printf '\n'; }
 
 if [[ "${1:-}" == "--compose-command" ]]; then compose_command_text; exit 0; fi
 
@@ -218,6 +198,28 @@ fi
 
 # ── 5. Données ────────────────────────────────────────────────────────────────
 head_ "5. Données (dans le conteneur atlas)"
+# La base canonique vit dans le volume nommé du projet ; c'est elle que le
+# serveur, le tableau de bord et atlas-cli ouvrent. Une base sous ./data sur
+# l'hôte est une autre base — historique, archive, ou erreur — jamais celle
+# des opérations. On la nomme ; on ne la touche pas.
+if [[ "${DOCKER_OK}" -eq 1 ]]; then
+  if docker volume inspect "${ATLAS_DATA_VOLUME}" >/dev/null 2>&1; then
+    pass "base canonique" "volume ${ATLAS_DATA_VOLUME} présent (/data/atlas.db dans les conteneurs)"
+  else
+    fail "base canonique" "volume ${ATLAS_DATA_VOLUME} introuvable — ATLAS n’est pas déployé ici, ou sous un autre projet (ATLAS_COMPOSE_PROJECT)"
+  fi
+  if docker image inspect atlas-os-cli:1.0.0 >/dev/null 2>&1; then
+    pass "image atlas-cli" "atlas-os-cli:1.0.0 présente — ./deployment/atlas-cli.sh prêt"
+  else
+    na "image atlas-cli" "absente — ./deployment/atlas-cli.sh --build la construit (une fois par version)"
+  fi
+fi
+if [[ -f "${ROOT_DIR}/data/atlas.db" ]]; then
+  HOST_DB_BYTES="$(stat -c '%s' "${ROOT_DIR}/data/atlas.db" 2>/dev/null || stat -f '%z' "${ROOT_DIR}/data/atlas.db" 2>/dev/null || echo '?')"
+  warn "base hôte distincte" "DB hôte distincte détectée (${ROOT_DIR}/data/atlas.db, ${HOST_DB_BYTES} octets) — ne pas l’utiliser pour les opérations production ; utiliser atlas-cli. Elle peut rester comme archive."
+else
+  pass "base hôte" "aucune ${ROOT_DIR}/data/atlas.db sur l’hôte : une seule base, dans le volume"
+fi
 if [[ "${ATLAS_UP}" -eq 1 ]]; then
   # Les mesures sont prises par Node dans le conteneur : même bibliothèque SQLite qu’ATLAS, lecture seule.
   DATA_JSON="$(atlas_node - 2>/dev/null <<'JS' | tail -1

@@ -12,6 +12,8 @@ services:
     build:
       context: ..
       dockerfile: deployment/Dockerfile
+      # L'étape serveur, nommée : le fichier porte aussi l'étape `cli`.
+      target: runtime
     image: atlas-os:1.0.0
     restart: unless-stopped
     env_file: ../.env
@@ -42,6 +44,45 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
+
+  # ─── Outils ponctuels, sur la base canonique ────────────────────────────
+  # `./deployment/atlas-cli.sh client-mission status --run=…`, soit :
+  #   docker compose … run --rm atlas-cli npm run client:mission -- status --run=…
+  #
+  # Même volume `atlas-data` monté en /data, même réseau, même .env, même
+  # utilisateur `node` que le serveur : la commande ouvre /data/atlas.db — la
+  # base que le daemon et le tableau de bord écrivent — et aucune autre. Rien
+  # n'écoute, rien ne redémarre, rien ne reste : le profil `cli` l'exclut de
+  # `up -d` ; `run` le cible explicitement et l'active de lui-même.
+  atlas-cli:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+      target: cli
+    image: atlas-os-cli:1.0.0
+    profiles: ["cli"]
+    restart: "no"
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      ATLAS_DATA_DIR: /data
+      ATLAS_BACKUP_DIR: /data/backups
+      ATLAS_LOG_PRETTY: "true"
+      # Le conteneur outils : la garde de base canonique se tait ici, et
+      # seulement ici — c'est la bonne base.
+      ATLAS_CLI_CONTEXT: docker
+      ATLAS_N8N_BASE_URL: http://n8n:5678
+      SEARXNG_BASE_URL: http://searxng:8080
+    volumes:
+      - atlas-data:/data
+      # Les briefs se lisent sur l'hôte, les rapports s'y écrivent : le dépôt
+      # déployé reste l'endroit où l'opérateur regarde.
+      - ../briefs:/app/briefs:ro
+      - ../out:/app/out
+    networks: [atlas]
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
 
   # Optionnel : `docker compose --profile n8n up -d`. Sans le profil, il ne
   # démarre pas et ATLAS tourne sans lui.

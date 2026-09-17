@@ -74,6 +74,7 @@
     "atlas:daemon-check": "tsx scripts/daemon-main-db-check.ts",
     "atlas:production-check": "tsx scripts/atlas-production-check.ts",
     "atlas:vps-check": "bash deployment/vps-check.sh",
+    "atlas:cli": "bash deployment/atlas-cli.sh",
     "searxng:verify": "tsx scripts/searxng-verify.ts",
     "searxng:up": "docker compose -f deployment/searxng-local.yml up -d",
     "searxng:down": "docker compose -f deployment/searxng-local.yml down",

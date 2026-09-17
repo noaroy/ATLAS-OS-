@@ -30,6 +30,44 @@ COPY . .
 
 RUN npm run build
 
+# ─── CLI stage ──────────────────────────────────────────────────────────────
+# Les outils ponctuels — client:mission, client:review, client:preflight,
+# backup, restore-check, atlas:status — ont besoin du dépôt complet et de tsx,
+# que l'image serveur, volontairement dist-only, ne porte pas. Cette image les
+# porte, et rien d'autre : pas de serveur, pas de daemon, pas de healthcheck,
+# pas de port. Même base, même utilisateur `node`, même /data que le serveur :
+# lancée sur le même volume, elle ouvre la même base — jamais une seconde.
+#
+# Elle précède `runtime` dans le fichier : l'étape finale reste l'image
+# serveur, celle qu'un build sans --target produit.
+#
+#   docker build --target cli -t atlas-os-cli:1.0.0 -f deployment/Dockerfile .
+#   docker compose … build atlas-cli
+FROM node:24-bookworm-slim AS cli
+
+RUN apt-get update  && apt-get install -y --no-install-recommends tini ca-certificates  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Le dépôt tel que `build` l'a installé — sources, scripts, briefs, node_modules
+# avec tsx — copié pièce par pièce : ni .env, ni data/, ni dist, ni bundle.
+COPY --from=build /build/package.json /build/package-lock.json* /build/tsconfig.json ./
+COPY --from=build /build/node_modules ./node_modules
+COPY --from=build /build/packages ./packages
+COPY --from=build /build/scripts ./scripts
+COPY --from=build /build/briefs ./briefs
+
+# /data est le volume partagé ; out/ reçoit les rapports (monté depuis l'hôte).
+RUN mkdir -p /data/artifacts /data/backups /app/out && chown -R node:node /data /app
+ENV ATLAS_DATA_DIR=/data ATLAS_BACKUP_DIR=/data/backups ATLAS_CLI_CONTEXT=docker
+
+USER node
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+# Sans commande : l'état, en lecture. Jamais un processus qui reste.
+CMD ["npm", "run", "atlas:status"]
+
 # ─── Runtime stage ──────────────────────────────────────────────────────────
 FROM node:24-bookworm-slim AS runtime
 

@@ -1,0 +1,19 @@
+# Ce que le contexte Docker ne doit jamais contenir.
+#
+# `COPY . .` de l'étape build prenait tout le dépôt : le .env, la base locale
+# sous data/, les bundles, node_modules de l'hôte. Rien de cela n'a sa place
+# dans une image — un secret copié dans une couche est un secret publié.
+.env
+.env.*
+!.env.example
+data/
+deployment/backups/
+out/
+dist/
+node_modules/
+*.bundle
+*.pem
+*.key
+graphify-out/
+.git/
+.claude/

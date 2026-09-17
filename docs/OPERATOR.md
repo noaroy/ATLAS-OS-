@@ -59,11 +59,53 @@ npm run atlas:vps-check              # sur le VPS, lecture seule : système, .en
 ```
 
 Les scripts `sales:*`, `client:*`, `backup`, `restore-check` s'exécutent depuis
-un **dépôt complet** (`tsx` + `scripts/`). L'image Docker ne contient que
-`dist/` : dans le conteneur, seuls le serveur et son daemon tournent. La
-découverte planifiée, qui lance `scripts/sales-batch.ts`, signale donc
+un **dépôt complet** (`tsx` + `scripts/`). L'image serveur ne contient que
+`dist/` : dans le conteneur `atlas`, seuls le serveur et son daemon tournent.
+La découverte planifiée, qui lance `scripts/sales-batch.ts`, signale donc
 `DISCOVERY_UNAVAILABLE` tant qu'ATLAS tourne en image dist-only — c'est une
 friction visible, pas une panne silencieuse.
+
+### Sur le VPS : `atlas-cli`, la seule façon de lancer les outils
+
+**Une seule base en production : `/data/atlas.db` dans le volume Docker
+`atlas-os_atlas-data`.** C'est elle que le serveur, le daemon et le tableau de
+bord écrivent. Un script lancé depuis l'hôte (`npm run client:mission …` dans
+`/opt/atlas`) ouvrirait — ou créerait — `/opt/atlas/data/atlas.db` : une
+**seconde base**, silencieuse, sans daemon ni tableau de bord. C'est arrivé ;
+la base hôte des benchmarks INTERNAL_TEST est archivée et ne sert plus.
+
+Les outils tournent donc dans un conteneur jetable qui partage le volume, le
+réseau, le `.env` et l'utilisateur du serveur :
+
+```bash
+bash deployment/atlas-cli.sh --build                 # une fois par version : l'image outils (étape `cli` du Dockerfile)
+bash deployment/atlas-cli.sh client-mission start --brief=briefs/internal-test-sweden.json
+bash deployment/atlas-cli.sh client-mission batch --run=msn_xxx --size=20 --queries=8 --budget=0.30 --batch-budget=0.30 --concurrency=4 --go
+bash deployment/atlas-cli.sh client-mission status --run=msn_xxx
+bash deployment/atlas-cli.sh client-review --run=msn_xxx
+bash deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
+bash deployment/atlas-cli.sh backup | restore-check | atlas-status | production-check
+bash deployment/atlas-cli.sh --print client-mission status --run=msn_xxx   # la commande Docker, sans l'exécuter
+```
+
+(`chmod +x deployment/atlas-cli.sh` une fois, et `./deployment/atlas-cli.sh …`
+marche aussi.) Ce que le wrapper fait : résout la commande Compose du
+déploiement (`--env-file /opt/atlas/.env`, base + override + private s'ils
+existent), vérifie que Docker répond, que le volume `atlas-os_atlas-data`
+existe — sinon Compose en créerait un vide, avec une base neuve : il refuse —
+puis lance `docker compose … run --rm atlas-cli npm run <script> -- <args>`.
+Rien n'est publié, rien ne redémarre, le conteneur disparaît avec la commande.
+Les briefs se lisent dans `briefs/` (monté en lecture seule), les rapports
+s'écrivent dans `out/` sur l'hôte (monté ; l'utilisateur `node`, uid 1000, doit
+pouvoir y écrire : `chown 1000 out` ou `chmod 777 out` une fois).
+
+Et si quelqu'un lance quand même un script depuis l'hôte ? Sur le dépôt déployé
+— reconnu à `deployment/docker-compose.private.yml` —, `loadConfig` **refuse
+d'ouvrir `./data/atlas.db`** et affiche la commande `atlas-cli` à utiliser.
+Rien n'est créé. Pour lire volontairement l'archive de l'hôte :
+`ATLAS_DB_PATH=/opt/atlas/data/atlas.db npm run atlas:status` (un fichier
+choisi), ou `ATLAS_ALLOW_HOST_DB=1`. `npm run atlas:vps-check` signale la
+base hôte en WARN si elle existe encore.
 
 Le tableau de bord (session requise) : aujourd'hui `http://127.0.0.1:4700/`
 sur le VPS, atteint depuis le poste par un tunnel SSH

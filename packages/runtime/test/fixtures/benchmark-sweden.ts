@@ -146,19 +146,22 @@ export const BENCHMARK: BenchmarkCase[] = [
     },
   },
   {
-    // Le fabricant chinois par concordance — un +86 et « China » sur la page
-    // contact — avec un seul signal suédois (le domaine .se). Hors du marché :
-    // écarté seul, sans appel modèle, et la raison nomme le signal en mots.
-    domain: 'weibang-lik.se', title: 'Weibang-lik',
+    // Weibang / yanbanmachine.com : chinoise par concordance — un +86 et
+    // « China » sur la page contact — avec un seul signal suédois, une version
+    // linguistique. Ce n'est qu'une présomption : revue P3, sans appel modèle,
+    // sans note, « Écarter sauf preuve contraire », et la raison nomme le
+    // signal en mots — jamais « [object Object] ».
+    domain: 'yanbanmachine-lik.com', title: 'Weibang-lik',
     pages: {
-      'https://weibang-lik.se/': `<html><head><title>Weibang-lik</title></head><body>
-        <p>Weibang-lik tillverkar förpackningsmaskiner och kontrollutrustning för export.</p><a href="/kontakt/">Kontakt</a></body></html>`,
-      'https://weibang-lik.se/kontakt/': `<html><head><title>Kontakt</title></head><body>
-        <p>Weibang-lik Machinery Co., Ruian, Zhejiang, China · Tel +86 577 6000 0000 · <a href="mailto:sales@weibang-lik.com">sales@weibang-lik.com</a></p></body></html>`,
+      'https://yanbanmachine-lik.com/': `<html><head><title>Weibang-lik</title>
+        <link rel="alternate" hreflang="sv" href="https://yanbanmachine-lik.com/sv/"></head><body>
+        <p>Weibang-lik tillverkar förpackningsmaskiner och kontrollutrustning för export.</p><a href="/contact/">Contact</a></body></html>`,
+      'https://yanbanmachine-lik.com/contact/': `<html><head><title>Contact</title></head><body>
+        <p>Weibang-lik Machinery Co., Ruian, Zhejiang, China · Tel +86 577 6000 0000 · <a href="mailto:sales@yanbanmachine-lik.com">sales@yanbanmachine-lik.com</a></p></body></html>`,
     },
     expect: {
-      stage: 'EXCLUDED', name: 'Weibang-lik', country: 'Chine', countryBasis: 'CORROBORATION', presence: 'WEAK',
-      fit: 'OUT_OF_SCOPE', triage: 'AUTO_EXCLUDED', category: 'WRONG_COUNTRY', llmCalled: false,
+      stage: 'REVIEW_REQUIRED', name: 'Weibang-lik', country: 'Chine', countryBasis: 'CORROBORATION', presence: 'WEAK',
+      fit: 'OUT_OF_SCOPE', triage: 'HUMAN_REVIEW', category: 'WRONG_COUNTRY', llmCalled: false,
     },
   },
   {

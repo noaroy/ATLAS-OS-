@@ -837,31 +837,35 @@ async function processCandidate(
       : presence.level === 'NONE' ? ` — aucun signal ${presence.country}` : '';
     const raison = `pays ${base} : ${pays}${local}`;
     /*
-     * Hors du marché, c'est écarté — seul, sans appel modèle.
+     * Deux niveaux de certitude, deux états — et le texte le dit.
      *
-     * Le siège est ailleurs, prouvé (identifiant, métadonnée, adresse) ou
-     * établi par concordance (deux signaux d'un même pays), et rien n'implante
-     * la société sur le marché visé : au plus un signal faible. Ce n'est pas
-     * une ambiguïté, c'est une réponse. Le doute réel n'arrive jamais ici :
-     * deux signaux locaux ou plus font une présence probable, et
-     * `decideCountry` rend alors NEEDS_VERIFICATION — la société va en revue.
+     * Une preuve — identifiant, métadonnée, adresse — écarte seule : la
+     * société est ailleurs, rien ne l'implante ici. Une concordance de
+     * signaux faibles (un indicatif, une mention) n'est qu'une présomption :
+     * la société va en revue, P3, sans appel modèle, avec « Écarter » pour
+     * suggestion — sauf preuve contraire. Un humain la confirme en trente
+     * secondes. Le doute réel — deux signaux locaux ou plus — n'arrive jamais
+     * ici : `decideCountry` rend NEEDS_VERIFICATION.
      *
-     * Relevé au benchmark v4 : Weibang, chinoise par concordance, un seul
-     * signal suédois, sortait en revue « à écarter, 0/100 » — une revue sans
-     * question à poser, gardée par prudence et non par doute. L'état et le
-     * tri disent désormais la même chose.
+     * Relevé au benchmark v4 (Weibang / yanbanmachine.com) : la revue était
+     * voulue, mais elle s'affichait « Écarter · note 0/100 · Chine » comme
+     * une certitude notée. Aucune note n'est écrite : la société n'a pas été
+     * lue par le modèle, et la suggestion se présente comme ce qu'elle est.
      */
-    mesure.exclusion = 'COUNTRY';
-    mesure.triage = 'AUTO_EXCLUDED';
-    cc.setStage(candidat.id, 'EXCLUDED', {
+    const prouve = paysDetail.basis !== 'CORROBORATION';
+    mesure.exclusion = prouve ? 'COUNTRY' : null;
+    mesure.triage = prouve ? 'AUTO_EXCLUDED' : 'HUMAN_REVIEW';
+    cc.setStage(candidat.id, prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED', {
       name: titreDuSite(pages) ?? companyNameFromDomain(candidat.domain),
       category: 'WRONG_COUNTRY', reason: raison, evidenceQuote: paysDetail.quote, evidenceUrl: paysDetail.sourceUrl,
       detail: {
         country: paysDetail,
-        triage: { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: [raison] },
+        triage: prouve
+          ? { status: 'AUTO_EXCLUDED', priority: null, recommendation: 'EXCLUDE', reasons: [raison] }
+          : { status: 'HUMAN_REVIEW', priority: 'P3', recommendation: 'EXCLUDE', reasons: [`${raison} — présomption (pays par concordance, non prouvé) : à confirmer avant d’écarter`] },
       },
     });
-    return 'EXCLUDED';
+    return prouve ? 'EXCLUDED' : 'REVIEW_REQUIRED';
   }
 
   // ── RELEVANCE_PRECHECK : hors sujet, sans modèle ──────────────────────────

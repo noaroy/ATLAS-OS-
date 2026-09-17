@@ -293,23 +293,20 @@ describe('la revue et le rapport', () => {
     await runClientBatch(deps({ fetchPages: fetcher(sites) }), options(runId, { seedDomains: Object.keys(sites), resumeOnly: true }));
     const r = buildClientRunReport(repos, runId, { status: 'PARTIAL', generatedAt: new Date().toISOString(), scoringModel: BUSINESS_EXPANSION.scoringModel, executionMode: 'live' });
     assert.equal(r.retained.length, 1);
-    assert.equal(r.reviewRequired.length, 0);
-    // Depuis v4.1 : la concordance de pays sans présence locale écarte ; elle
-    // n'est plus une « vérification humaine avant lecture ».
-    assert.deepEqual(r.pendingHumanCheck.map((c) => c.domain), []);
-    assert.equal(repos.clientCandidates.byDomain(runId, 'presume.com')!.stage, 'EXCLUDED');
+    assert.equal(r.reviewRequired.length, 0, 'la présomption de pays n’a pas de dossier');
+    assert.deepEqual(r.pendingHumanCheck.map((c) => c.domain), ['presume.com']);
     assert.deepEqual(r.unreachable.map((c) => c.domain), ['mort.se']);
     assert.equal(r.report.analysedCount, 2, 'nordpack et presume ; mort.se n’a pas été lu');
+    assert.ok(r.report.limitations.some((l) => /vérification humaine avant lecture/.test(l) && /presume\.com/.test(l)));
     assert.ok(r.report.limitations.some((l) => /injoignable/.test(l) && /mort\.se/.test(l)));
   });
 
-  test('#17 (v4.1) une concordance de pays sans présence locale est une exclusion pays, pas une revue', async () => {
+  test('#17 la présomption de pays n’est pas comptée comme une exclusion pays', async () => {
     const runId = createClientRun(repos, brief(), 'test');
     const sites: Sites = { 'presume.com': { '/': '<html><body><p>Global Pack liefert förpackningsmaskiner weltweit.</p><a href="/contact">Contact</a></body></html>', '/contact': '<html><body><p>Kontakt: Tel +49 221 123456. Wir liefern nach ganz Deutschland.</p></body></html>' } };
     const s = await runClientBatch(deps({ fetchPages: fetcher(sites) }), options(runId, { seedDomains: ['presume.com'], resumeOnly: true }));
-    assert.equal(s.metrics?.filter.countryExcluded, 1);
-    assert.equal(s.metrics?.quality.humanReview, 0);
-    assert.equal(s.metrics?.quality.autoExcluded, 1);
+    assert.equal(s.metrics?.filter.countryExcluded, 0);
+    assert.equal(s.metrics?.quality.humanReview, 1);
   });
 
   test('#14 « pas de généralistes » ne devient pas une marque concurrente ; « pas la marque Bizerba » oui', () => {

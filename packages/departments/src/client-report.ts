@@ -232,8 +232,16 @@ export interface ReviewQueueItem {
   contact: string;
   recommendation: 'RETAIN' | 'EXCLUDE' | 'TO_CONFIRM';
   recommendationLabel: string;
+  /**
+   * Vrai quand le modèle a lu la société et qu'une note existe. Faux pour une
+   * revue posée avant lecture — pays présumé, hors sujet sur une seule page :
+   * la note ne s'affiche pas, la suggestion se présente comme une présomption.
+   */
+  scored: boolean;
   generalistRisk: number | null;
   country: string | null;
+  /** Vrai quand le pays n'est établi que par concordance de signaux faibles. */
+  countryPresumed: boolean;
   /** La pertinence brute et ce qui manque à la preuve, quand la note en tient compte. */
   relevance?: number;
   evidenceLevel?: { level: 'COMPLETE' | 'PARTIAL' | 'INSUFFICIENT'; missing: string[] } | null;
@@ -244,6 +252,21 @@ export interface ReviewQueueItem {
 export const RECOMMENDATION_LABELS: Record<ReviewQueueItem['recommendation'], string> = {
   RETAIN: 'Retenir', EXCLUDE: 'Écarter', TO_CONFIRM: 'À confirmer',
 };
+
+/**
+ * Le libellé de la suggestion, à la hauteur de ce qu'on sait : une exclusion
+ * suggérée sans lecture du modèle est une présomption, et se dit telle.
+ */
+export function recommendationLabelOf(recommendation: ReviewQueueItem['recommendation'], scored: boolean): string {
+  if (recommendation === 'EXCLUDE' && !scored) return 'Écarter, sauf preuve contraire (présomption, non lue par le modèle)';
+  return RECOMMENDATION_LABELS[recommendation];
+}
+
+/** « Chine » quand c'est prouvé, « Chine (présumé) » quand ce n'est que concordant, « pays non prouvé » sinon. */
+export function countryLabelOf(item: Pick<ReviewQueueItem, 'country' | 'countryPresumed'>): string {
+  if (!item.country) return 'pays non prouvé';
+  return item.countryPresumed ? `${item.country} (présumé)` : item.country;
+}
 
 export function buildSynthesis(p: Pick<ReportProspect, 'company' | 'criteria' | 'verification' | 'activity' | 'contacts' | 'contactForm' | 'facts'> & { channel?: ReportChannel | null }): ReportSynthesis {
   const etablis = (p.criteria ?? []).filter((c) => c.verdict === 'ESTABLISHED');

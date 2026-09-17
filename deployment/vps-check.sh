@@ -191,7 +191,14 @@ else
   na "ports" "ss absent (apt install iproute2)"
 fi
 if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
-  pass "healthz (hôte)" "http://127.0.0.1:${PORT}/healthz → 200"
+  # Un 200 sur l'hôte ne dit pas que le conteneur va bien : il dit que
+  # quelque chose répond sur le port. Les deux constats restent séparés, et
+  # leur désaccord est nommé.
+  if [[ "${ATLAS_UP}" -eq 1 ]]; then
+    pass "healthz (hôte)" "http://127.0.0.1:${PORT}/healthz → 200, et le conteneur atlas est sain"
+  else
+    fail "healthz (hôte)" "http://127.0.0.1:${PORT}/healthz → 200 alors que le conteneur atlas est absent ou non sain — qui écoute sur ${PORT} ?"
+  fi
 elif [[ "${ATLAS_UP}" -eq 1 ]]; then
   if atlas_node -e "fetch('http://127.0.0.1:'+(process.env.ATLAS_PORT||4700)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     pass "healthz (conteneur)" "200 depuis l’intérieur — port non publié sur l’hôte (accès par tunnel/exec)"

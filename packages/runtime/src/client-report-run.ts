@@ -1,7 +1,7 @@
 import type { Repositories, ClientCandidate } from '@atlas/data';
 import {
   buildClientReport, reportToHtml, reportToCsv, exclusionsToCsv, PIPELINE_VERSION,
-  EXCLUSION_LABELS, CRITERION_VERDICT_LABELS, CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS, allCriteria, reportEconomics,
+  EXCLUSION_LABELS, CRITERION_VERDICT_LABELS, CHANNEL_CONFIDENCE_LABELS, recommendationLabelOf, allCriteria, reportEconomics,
   reviewQueueToHtml, reviewQueueToCsv, compareReviewOrder,
   type ReportEntry, type ReportExclusion, type ProspectExtras, type ClientReport, type ReportCriterion, type ReviewQueueItem,
 } from '@atlas/departments';
@@ -134,17 +134,19 @@ export function buildReviewQueue(repos: Repositories, runId: string): ReviewQueu
       ? `${canal.method === 'EMAIL' ? canal.value : canal.method === 'FORM' ? `formulaire ${canal.value}` : `tél. ${canal.value}`} — ${canal.confidenceLabel.toLowerCase()}`
       : 'aucune coordonnée commerciale publiée';
     const recommendation = d.triage?.recommendation ?? 'TO_CONFIRM';
+    const scored = typeof d.score?.total === 'number';
     items.push({
       priority: d.triage?.priority ?? 'P2',
       company: c.name ?? c.domain, domain: c.domain, url: c.url,
-      score: d.score?.total ?? 0, confidence: d.score?.confidence ?? 0,
+      score: d.score?.total ?? 0, confidence: d.score?.confidence ?? 0, scored,
       reasons: d.triage?.reasons?.length ? d.triage.reasons : [c.reason ?? 'à revoir'],
       evidence: preuves.slice(0, 5),
       problematicCriteria: criteria.filter((k) => k.verdict !== 'ESTABLISHED').map((k) => `${k.label} : ${CRITERION_VERDICT_LABELS[k.verdict] ?? k.verdict}`),
       contact,
-      recommendation, recommendationLabel: RECOMMENDATION_LABELS[recommendation],
+      recommendation, recommendationLabel: recommendationLabelOf(recommendation, scored),
       generalistRisk: d.generalistRisk?.score ?? null,
       country: d.country?.country ?? null,
+      countryPresumed: Boolean(d.country?.country) && d.country?.basis === 'CORROBORATION',
       relevance: d.score?.relevance ?? d.score?.total ?? 0,
       evidenceLevel: d.score?.evidence ?? null,
       commands: {

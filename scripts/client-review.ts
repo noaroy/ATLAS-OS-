@@ -12,7 +12,7 @@
 import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { buildReviewQueue, loadClientRun, adjustClientRun, readAutopilot, transition } from '../packages/runtime/src/index.ts';
-import type { ReviewQueueItem as Item } from '../packages/departments/src/index.ts';
+import { countryLabelOf, type ReviewQueueItem as Item } from '../packages/departments/src/index.ts';
 
 loadAtlasEnv();
 
@@ -25,7 +25,7 @@ function fiche(i: Item, n: number, total: number): string {
   const lignes = [
     ``,
     `  ${c.dim}[${n}/${total}]${c.reset} ${couleur}${i.priority}${c.reset} ${c.bold}${i.company}${c.reset} · ${i.url}`,
-    `  Décision suggérée : ${c.bold}${i.recommendationLabel}${c.reset} · note ${i.score}/100${i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` (pertinence ${i.relevance ?? i.score}, preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} : ${i.evidenceLevel.missing.join(', ')})` : ''}${i.country ? ` · ${i.country}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}`,
+    `  Décision suggérée : ${c.bold}${i.recommendationLabel}${c.reset} · ${i.scored ? `note ${i.score}/100` : 'non notée (pas de lecture par le modèle)'}${i.scored && i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` (pertinence ${i.relevance ?? i.score}, preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} : ${i.evidenceLevel.missing.join(', ')})` : ''} · ${countryLabelOf(i)}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}`,
     `  Pourquoi :`,
     ...i.reasons.map((r) => `    ⚠ ${r}`),
     ...(i.evidence.length ? [`  Preuves :`, ...i.evidence.slice(0, 3).map((e) => `    « ${e.quote.slice(0, 140)} » ${c.dim}— ${e.label} · ${e.url}${c.reset}`)] : []),

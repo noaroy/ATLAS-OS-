@@ -204,6 +204,17 @@ describe('4. le nom de société', () => {
     ]) assert.equal(isDescriptiveName(nom), false, nom);
   });
 
+  test('fpack.se → « Fpack » : régression minimale, sur les trois chemins (déclaration, titre, domaine)', () => {
+    // Le JSON-LD porte l'accroche, og:site_name la marque : la marque gagne.
+    const declare = `<html><head><title>Förpackningsmaskiner för dina behov - Fpack</title><meta property="og:site_name" content="Fpack" />
+      <script type="application/ld+json">{"@type":"Organization","name":"Förpackningsmaskiner för dina behov"}</script></head><body><h1>Förpackningsmaskiner för dina behov</h1></body></html>`;
+    assert.equal(corroborateIdentity(collectIdentitySignals([page('https://fpack.se/', declare)]), 'fpack.se').name, 'Fpack');
+    // Rien de déclaré, l'accroche partout : aucun nom — et le domaine, lui, dit « Fpack ».
+    const accroche = `<html><head><title>Förpackningsmaskiner för dina behov</title></head><body><h1>Förpackningsmaskiner för dina behov</h1></body></html>`;
+    assert.equal(corroborateIdentity(collectIdentitySignals([page('https://fpack.se/', accroche)]), 'fpack.se').name, null);
+    assert.equal(companyNameFromDomain('fpack.se'), 'Fpack');
+  });
+
   test('fpack.se : le JSON-LD porte le slogan en `name` — le nom retenu est la marque, jamais l’accroche', () => {
     // La forme réelle du piège : Organization.name = accroche SEO ; og:site_name et
     // le titre nomment la marque ; le H1 répète l'accroche.

@@ -27,7 +27,7 @@ import { createSystem } from '../packages/server/src/bootstrap.ts';
 import { loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createSearchFabric } from '../packages/intelligence/src/search/fabric/factory.ts';
 import { fetchRawPages } from '../packages/intelligence/src/contact-fetch.ts';
-import { parseClientBrief, normaliseDomain } from '../packages/departments/src/index.ts';
+import { parseClientBrief, normaliseDomain, countryLabelOf } from '../packages/departments/src/index.ts';
 import {
   createClientRun, loadClientRun, adjustClientRun, runClientBatch, spendSoFar, startOfUtcDay,
   CLIENT_BATCH_DEFAULTS, clientBudgetLimits, buildReviewQueue, proposeBriefAdjustment,
@@ -108,7 +108,9 @@ async function main(): Promise<void> {
           const preuve = d.score?.evidence && d.score.evidence.level !== 'COMPLETE'
             ? ` · pertinence ${d.score.relevance ?? d.score.total} · preuve ${d.score.evidence.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} (${d.score.evidence.missing.join(', ')})`
             : '';
-          console.log(`    ${x.stage === 'RETAINED' ? c.green : c.amber}${x.stage.padEnd(16)}${c.reset} ${(x.name ?? x.domain).slice(0, 34).padEnd(36)} ${String(d.score?.total ?? '—').padStart(3)}/100 ${c.dim}${d.contacts?.email ?? d.contacts?.formUrl ?? 'sans canal'}${preuve}${d.toConfirm?.length ? ` · à confirmer : ${d.toConfirm.join(', ')}` : ''}${c.reset}`);
+          // Une revue posée avant lecture n'a pas de note : on dit pourquoi elle est là, pas « 0/100 ».
+          const note = typeof d.score?.total === 'number' ? `${String(d.score.total).padStart(3)}/100` : 'non notée';
+          console.log(`    ${x.stage === 'RETAINED' ? c.green : c.amber}${x.stage.padEnd(16)}${c.reset} ${(x.name ?? x.domain).slice(0, 34).padEnd(36)} ${note} ${c.dim}${typeof d.score?.total === 'number' ? (d.contacts?.email ?? d.contacts?.formUrl ?? 'sans canal') : (x.reason ?? '')}${preuve}${d.toConfirm?.length ? ` · à confirmer : ${d.toConfirm.join(', ')}` : ''}${c.reset}`);
         }
       }
       console.log();
@@ -121,7 +123,7 @@ async function main(): Promise<void> {
       console.log(`\n  ${c.bold}FILE DE REVUE${c.reset}  ${brief.client.name} · ${items.length} société(s) · P1 ${items.filter((i) => i.priority === 'P1').length} · P2 ${items.filter((i) => i.priority === 'P2').length} · P3 ${items.filter((i) => i.priority === 'P3').length}`);
       for (const i of items) {
         const couleur = i.priority === 'P1' ? c.green : i.priority === 'P2' ? c.amber : c.red;
-        console.log(`\n  ${couleur}${i.priority}${c.reset} ${c.bold}${i.company}${c.reset} · ${i.url} · ${i.score}/100${i.country ? ` · ${i.country}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · généraliste ${i.generalistRisk}/100` : ''}`);
+        console.log(`\n  ${couleur}${i.priority}${c.reset} ${c.bold}${i.company}${c.reset} · ${i.url} · ${i.scored ? `${i.score}/100` : 'non notée'} · ${countryLabelOf(i)}${i.generalistRisk !== null ? ` · généraliste ${i.generalistRisk}/100` : ''}`);
         for (const r of i.reasons) console.log(`     ${c.dim}⚠ ${r}${c.reset}`);
         for (const e of i.evidence.slice(0, 3)) console.log(`     ${c.dim}« ${e.quote.slice(0, 120)} » — ${e.label}${c.reset}`);
         console.log(`     contact : ${i.contact}`);

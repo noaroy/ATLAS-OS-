@@ -7,6 +7,7 @@ import { createLogger } from '@atlas/core';
 import { createRepositories, type Repositories } from '@atlas/data';
 import { BUSINESS_EXPANSION } from '@atlas/departments';
 import { createClientRun, runClientBatch } from '../src/client-mission.ts';
+import { buildReviewQueue } from '../src/client-report-run.ts';
 import { brief, searchFixture, llmFixture } from './fixtures/sweden-mission.ts';
 import { BENCHMARK, BENCHMARK_PAGES, DIRECTORY_RESULT } from './fixtures/benchmark-sweden.ts';
 
@@ -97,11 +98,20 @@ describe('benchmark suédois — rejeu déterministe', () => {
     }
     assert.deepEqual(echecs, [], `\n${echecs.join('\n')}`);
 
-    // Weibang : l'état et le tri disent la même chose, et la raison se lit.
-    const weibang = repos.clientCandidates.byDomain(runId, 'weibang-lik.se')!;
+    // Weibang : une présomption, dite comme telle — revue P3, sans note, raison lisible.
+    const weibang = repos.clientCandidates.byDomain(runId, 'yanbanmachine-lik.com')!;
     assert.match(weibang.reason ?? '', /concordance/);
-    assert.match(weibang.reason ?? '', /un seul signal Suède \(domaine national weibang-lik\.se\), insuffisant/);
-    assert.equal((weibang.detail as Detail).triage.status, 'AUTO_EXCLUDED');
+    assert.match(weibang.reason ?? '', /un seul signal Suède \(version linguistique \(hreflang sv\)\), insuffisant/);
+    const triageWeibang = (weibang.detail as Detail).triage;
+    assert.equal(triageWeibang.status, 'HUMAN_REVIEW');
+    assert.equal(triageWeibang.priority, 'P3');
+    assert.ok(triageWeibang.reasons.some((r) => /présomption/.test(r)), triageWeibang.reasons.join(' | '));
+    assert.equal((weibang.detail as Detail).score, undefined, 'pas de note : pas de lecture');
+    const fiche = buildReviewQueue(repos, runId).find((i) => i.domain === 'yanbanmachine-lik.com')!;
+    assert.equal(fiche.scored, false);
+    assert.equal(fiche.countryPresumed, true);
+    assert.match(fiche.recommendationLabel, /présomption/);
+    assert.ok(!JSON.stringify(fiche).includes('[object Object]'));
 
     // Le comptage : neuf lus, un annuaire écarté avant lecture, dix inscrits, un état par ligne.
     assert.equal(summary.discovered, 9);
@@ -114,12 +124,12 @@ describe('benchmark suédois — rejeu déterministe', () => {
     assert.equal(resume.consistent, true);
     assert.equal(Object.values(resume.byStage).reduce((a, b) => a + b, 0), 10);
     assert.equal(resume.byStage.RETAINED, 3);
-    assert.equal(resume.byStage.REVIEW_REQUIRED, 4);
-    assert.equal(resume.byStage.EXCLUDED, 3, 'les deux fabricants étrangers et l’annuaire');
+    assert.equal(resume.byStage.REVIEW_REQUIRED, 5, 'dont Weibang, présumée chinoise');
+    assert.equal(resume.byStage.EXCLUDED, 2, 'le fabricant étranger prouvé et l’annuaire');
     // Aucun appel modèle pour ce qui n'a rien à lire ou n'est pas du marché.
     assert.equal(appelsParDomaine.get('levo-lik.se') ?? 0, 0);
     assert.equal(appelsParDomaine.get('hlunpack-lik.com') ?? 0, 0);
-    assert.equal(appelsParDomaine.get('weibang-lik.se') ?? 0, 0);
+    assert.equal(appelsParDomaine.get('yanbanmachine-lik.com') ?? 0, 0);
     assert.equal([...appelsParDomaine.values()].reduce((a, b) => a + b, 0), 6, 'six qualifications, une par candidat lisible du marché');
   });
 });

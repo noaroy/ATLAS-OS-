@@ -1,5 +1,5 @@
 import type { ClientReport, ReportCheck, ReportClaim, ReportProspect, ReportCriterion, ReviewQueueItem } from './client-report.ts';
-import { CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS } from './client-report.ts';
+import { CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS, countryLabelOf } from './client-report.ts';
 
 /**
  * Le rapport client et son extrait gratuit, rendus depuis le même modèle.
@@ -609,9 +609,11 @@ export function reviewQueueToHtml(items: readonly ReviewQueueItem[], context: { 
       <div class="rank">${n}</div>
       <div class="ident">
         <h3>${badge(i.priority)} ${esc(i.company)}</h3>
-        <div class="sub">${link(i.url)}${i.country ? ` · ${esc(i.country)}` : ' · pays non prouvé'}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}</div>
+        <div class="sub">${link(i.url)} · ${esc(countryLabelOf(i))}${i.generalistRisk !== null ? ` · risque généraliste ${i.generalistRisk}/100` : ''}</div>
       </div>
-      <div class="score"><div class="v">${i.score}<span>/100</span></div><div class="c">confiance ${i.confidence.toFixed(2)}${i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` · pertinence ${i.relevance ?? i.score} · preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} (${esc(i.evidenceLevel.missing.join(', '))})` : ''}</div></div>
+      ${i.scored
+        ? `<div class="score"><div class="v">${i.score}<span>/100</span></div><div class="c">confiance ${i.confidence.toFixed(2)}${i.evidenceLevel && i.evidenceLevel.level !== 'COMPLETE' ? ` · pertinence ${i.relevance ?? i.score} · preuve ${i.evidenceLevel.level === 'PARTIAL' ? 'partielle' : 'insuffisante'} (${esc(i.evidenceLevel.missing.join(', '))})` : ''}</div></div>`
+        : '<div class="score"><div class="c">non notée — pas de lecture par le modèle</div></div>'}
     </header>
     <h4>Pourquoi en revue</h4>
     <ul class="claims">${i.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
@@ -644,7 +646,7 @@ export function reviewQueueToCsv(items: readonly ReviewQueueItem[]): string {
   };
   const header = ['priorite', 'entreprise', 'domaine', 'site', 'score', 'confiance', 'pays', 'raisons', 'criteres_en_question', 'preuves', 'contact', 'risque_generaliste', 'recommandation', 'commande_retenir', 'commande_ecarter'];
   const rows = items.map((i) => [
-    i.priority, i.company, i.domain, i.url, i.score, i.confidence, i.country ?? '',
+    i.priority, i.company, i.domain, i.url, i.scored ? i.score : '', i.scored ? i.confidence : '', countryLabelOf(i),
     i.reasons.join(' || '), i.problematicCriteria.join(' | '),
     i.evidence.map((e) => `${e.label} : « ${e.quote} » (${e.url})`).join(' || '),
     i.contact, i.generalistRisk ?? '', RECOMMENDATION_LABELS[i.recommendation], i.commands.retain, i.commands.exclude,

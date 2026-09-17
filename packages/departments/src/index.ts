@@ -89,7 +89,7 @@ export {
   type ProspectExtras,
   EXCLUSION_LABELS,
   CRITERION_VERDICT_LABELS,
-  buildSynthesis, CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS,
+  buildSynthesis, CHANNEL_CONFIDENCE_LABELS, RECOMMENDATION_LABELS, recommendationLabelOf, countryLabelOf,
   type ReportChannel, type ReportSynthesis, type ReviewQueueItem,
 } from './client-report.ts';
 

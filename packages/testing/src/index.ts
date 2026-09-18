@@ -202,7 +202,7 @@ export function makeTestConfig(
   return {
     env: 'test',
     isProduction: false,
-    server: { host: '127.0.0.1', port: 0, publicUrl: 'http://localhost', corsOrigins: [] },
+    server: { host: '127.0.0.1', port: 0, publicUrl: 'http://localhost', corsOrigins: [], internalUrl: 'http://127.0.0.1:0' },
     security: {
       sessionSecret: 'test-secret-value-long-enough',
       founderEmail: 'founder@test.local',

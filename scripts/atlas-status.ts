@@ -72,7 +72,9 @@ const health = await (async () => {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2_000);
-    const response = await fetch(`http://127.0.0.1:${config.server.port}/healthz`, { signal: controller.signal });
+    // L'adresse interne vient de la config : 127.0.0.1 ici, le service `atlas`
+    // depuis le conteneur outils — où 127.0.0.1 serait le conteneur lui-même.
+    const response = await fetch(`${config.server.internalUrl}/healthz`, { signal: controller.signal });
     clearTimeout(timer);
     return response.ok ? 'OK' : `HTTP ${response.status}`;
   } catch {
@@ -84,7 +86,7 @@ const feu = (state: 'ok' | 'warn' | 'down' | 'off'): string =>
   state === 'ok' ? `${c.green}READY${c.reset}` : state === 'warn' ? `${c.amber}DEGRADED${c.reset}`
   : state === 'down' ? `${c.red}DOWN${c.reset}` : `${c.dim}OFF${c.reset}`;
 const online = health === 'OK';
-console.log(`\n  ${c.bold}${online ? c.green : c.red}ATLAS ${online ? 'ONLINE' : 'OFFLINE'}${c.reset}  ${c.dim}${publicUrl} · healthz ${health}${pid ? ` · pid ${pid}${alive ? '' : ' (périmé)'}` : ''}${c.reset}`);
+console.log(`\n  ${c.bold}${online ? c.green : c.red}ATLAS ${online ? 'ONLINE' : 'OFFLINE'}${c.reset}  ${c.dim}${publicUrl} · healthz ${health} (${config.server.internalUrl})${pid ? ` · pid ${pid}${alive ? '' : ' (périmé)'}` : ''}${c.reset}`);
 console.log(`    ${'Daemon'.padEnd(14)}${feu(board.system.workers.state)}   ${c.dim}${board.system.workers.detail}${c.reset}`);
 console.log(`    ${'Workers'.padEnd(14)}${feu(board.system.workers.state)}   ${c.dim}${Object.keys(repos.tasks.countByStatus()).length ? 'file lue' : 'file vide'}${c.reset}`);
 console.log(`    ${'Search'.padEnd(14)}${feu(board.system.search.state)}   ${c.dim}${board.system.search.detail}${c.reset}`);

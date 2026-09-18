@@ -43,6 +43,13 @@ un segment approuvé, la portée Gmail d'envoi accordée, et redémarrer.
 
 ## Commandes
 
+> **En production (VPS), toute commande passe par `bash deployment/atlas-cli.sh …`.**
+> `npm run client:mission …`, `npm run atlas:status`, `npm run backup` lancés
+> depuis l'hôte du dépôt déployé sont **refusés** (garde de base canonique) :
+> ils ouvriraient une seconde base hors du volume Docker. Les commandes
+> `npm run …` ci-dessous valent pour un poste de développement ; sur le VPS,
+> remplacer `npm run <x:y> --` par `bash deployment/atlas-cli.sh <x-y>`.
+
 ```bash
 npm run atlas:status        # ATLAS ONLINE ? Daemon · Search · LLM · Gmail · Database · Outbound · Dashboard
 npm run sales:status        # la page unique, en texte (--range=7d|30d|all)
@@ -84,9 +91,15 @@ bash deployment/atlas-cli.sh client-mission batch --run=msn_xxx --size=20 --quer
 bash deployment/atlas-cli.sh client-mission status --run=msn_xxx
 bash deployment/atlas-cli.sh client-review --run=msn_xxx
 bash deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
+bash deployment/atlas-cli.sh client-report --run=msn_xxx --partial      # rapport HTML/CSV → out/ sur l'hôte
 bash deployment/atlas-cli.sh backup | restore-check | atlas-status | production-check
 bash deployment/atlas-cli.sh --print client-mission status --run=msn_xxx   # la commande Docker, sans l'exécuter
 ```
+
+Dans le conteneur outils, `atlas-status` joint le serveur à `http://atlas:4700`
+(le service Compose ; 127.0.0.1 y désignerait le conteneur outils lui-même) :
+c'est `ATLAS_INTERNAL_URL`, déduite du contexte, et posable explicitement. La
+ligne « Database » doit montrer `/data/atlas.db` — la base canonique.
 
 (`chmod +x deployment/atlas-cli.sh` une fois, et `./deployment/atlas-cli.sh …`
 marche aussi.) Ce que le wrapper fait : résout la commande Compose du

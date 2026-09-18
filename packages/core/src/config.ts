@@ -100,6 +100,13 @@ const envSchema = z.object({
   ATLAS_PORT: intish(4700, 1, 65535),
   ATLAS_PUBLIC_URL: z.string().default('http://localhost:4700'),
   ATLAS_CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  /**
+   * L'adresse à laquelle un outil sur la même machine — ou dans le même
+   * réseau Compose — joint le serveur qui tourne. Vide : http://127.0.0.1:<port>,
+   * et http://atlas:<port> depuis le conteneur outils (ATLAS_CLI_CONTEXT=docker),
+   * où 127.0.0.1 désigne le conteneur lui-même. Posée : elle l'emporte.
+   */
+  ATLAS_INTERNAL_URL: z.string().optional(),
 
   ATLAS_SESSION_SECRET: z.string().min(16, 'ATLAS_SESSION_SECRET must be at least 16 characters'),
   ATLAS_FOUNDER_EMAIL: z.string().email().default('founder@atlas.local'),
@@ -342,7 +349,14 @@ const envSchema = z.object({
 export interface AtlasConfig {
   env: 'development' | 'production' | 'test';
   isProduction: boolean;
-  server: { host: string; port: number; publicUrl: string; corsOrigins: string[] };
+  server: {
+    host: string;
+    port: number;
+    publicUrl: string;
+    corsOrigins: string[];
+    /** Où un outil local joint ce serveur : 127.0.0.1, ou le service `atlas` depuis le conteneur outils. */
+    internalUrl: string;
+  };
   security: { sessionSecret: string; founderEmail: string; founderPassword: string };
   paths: { dataDir: string; databaseFile: string; backupDir: string; artifactDir: string };
   backup: { retention: number };
@@ -572,6 +586,20 @@ export function canonicalDatabaseGuard(input: {
   };
 }
 
+/**
+ * L'adresse interne du serveur, selon d'où l'on parle.
+ *
+ * Relevé dans atlas-cli : `atlas:status` annonçait « ATLAS OFFLINE · healthz
+ * INJOIGNABLE » devant un serveur sain, parce que 127.0.0.1 désigne, dans le
+ * conteneur outils, le conteneur outils. Sur le réseau Compose, le serveur
+ * s'appelle `atlas`. Une adresse posée explicitement l'emporte toujours.
+ */
+export function internalUrlOf(explicit: string | undefined, port: number, cliContext: string | undefined): string {
+  const posee = (explicit ?? '').trim().replace(/\/+$/, '');
+  if (posee) return posee;
+  return cliContext === 'docker' ? `http://atlas:${port}` : `http://127.0.0.1:${port}`;
+}
+
 export function loadConfig(cwd = process.cwd()): AtlasConfig {
   loadAtlasEnv(cwd);
 
@@ -612,6 +640,7 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       corsOrigins: e.ATLAS_CORS_ORIGINS.split(',')
         .map((o) => o.trim())
         .filter(Boolean),
+      internalUrl: internalUrlOf(e.ATLAS_INTERNAL_URL, e.ATLAS_PORT, process.env.ATLAS_CLI_CONTEXT),
     },
     security: {
       sessionSecret: e.ATLAS_SESSION_SECRET,

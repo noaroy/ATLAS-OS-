@@ -184,6 +184,16 @@ publique prévue ; tant qu'il n'est pas activé, le tableau de bord n'est joigna
 que par le tunnel SSH. Pare-feu : 22 seulement aujourd'hui, 80/443 le jour de
 Caddy. Le tableau de bord n'est jamais public sans session.
 
+**Proxy de confiance.** `ATLAS_TRUST_PROXY=false` (défaut) : ATLAS ne croit
+aucun en-tête `X-Forwarded-*` — l'adresse du client est celle de la connexion,
+et personne ne contourne le limiteur de connexion en écrivant `X-Forwarded-For`.
+Le jour de Caddy, sur le réseau Compose : `ATLAS_TRUST_PROXY=uniquelocal`
+(les adresses privées, dont celle du conteneur Caddy), ou le CIDR exact du
+réseau `atlas` (`docker network inspect atlas-os_atlas`) — et retirer alors la
+publication `127.0.0.1:4700` du fichier privé, sinon le tunnel SSH partage
+cette confiance. Jamais `true` sur un port qu'autre chose que le proxy peut
+joindre ; jamais un nombre de sauts (refusé au démarrage).
+
 `deployment/install.sh`, `atlas.service` et `release.sh` décrivent l'autre
 voie — systemd sans Docker — utilisable sur un poste ou un serveur nu ; ce n'est
 pas celle du VPS actuel.

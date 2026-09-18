@@ -7,7 +7,7 @@ import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import type { AtlasSystem } from './bootstrap.ts';
 import { installErrorHandler, AtlasError } from './http/reply.ts';
-import { installAuth } from './http/auth.ts';
+import { installAuth, guardedPath } from './http/auth.ts';
 import { installRateLimits } from './http/limits.ts';
 import { registerRoutes } from './http/routes.ts';
 import { registerRealtime } from './http/realtime.ts';
@@ -25,7 +25,10 @@ export async function createApp(system: AtlasSystem): Promise<FastifyInstance> {
   const app = Fastify({
     // ATLAS has its own structured logger; Fastify's would duplicate every line.
     logger: false,
-    trustProxy: true,
+    // Which X-Forwarded-* headers to believe. `false` by default: the client
+    // address is the socket's, and no one can claim to be 127.0.0.1 by
+    // writing a header. Behind Caddy, ATLAS_TRUST_PROXY names the proxy.
+    trustProxy: system.config.server.trustProxy,
     bodyLimit: 2 * 1024 * 1024,
   });
 
@@ -66,6 +69,8 @@ export async function createApp(system: AtlasSystem): Promise<FastifyInstance> {
     decorateReply: false,
     index: false,
     list: false,
+    // A dotfile is never an artifact; nothing under a dot leaves the server.
+    dotfiles: 'ignore',
   });
 
   registerRoutes(app, system, limiters);
@@ -104,7 +109,8 @@ async function registerConsole(app: FastifyInstance, system: AtlasSystem): Promi
   // Single not-found handler for the whole app: API paths get JSON, everything
   // else falls through to the console shell when one is present.
   app.setNotFoundHandler((request, reply) => {
-    if (!consoleDir || request.url.startsWith('/api') || request.url.startsWith('/healthz')) {
+    const path = guardedPath(request);
+    if (!consoleDir || path.startsWith('/api') || path.startsWith('/healthz')) {
       return reply.status(404).send({
         ok: false,
         error: { code: 'NOT_FOUND', message: `No route for ${request.method} ${request.url}` },
@@ -137,6 +143,9 @@ async function registerConsole(app: FastifyInstance, system: AtlasSystem): Promi
     prefix: '/',
     decorateReply: true,
     index: ['index.html'],
+    list: false,
+    // The console bundle has no dotfiles; if one ever lands there, it is not served.
+    dotfiles: 'ignore',
   });
 
   system.logger.info('serving console', { path: consoleDir });

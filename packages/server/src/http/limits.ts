@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { AtlasError, RateLimiter, type Logger } from '@atlas/core';
+import { guardedPath } from './auth.ts';
 
 /**
  * Request throttling.
@@ -35,9 +36,10 @@ export function installRateLimits(app: FastifyInstance, logger: Logger): Limiter
   };
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/api')) return;
+    const path = guardedPath(request);
+    if (!path.startsWith('/api')) return;
     // The realtime socket is one long-lived connection, not a request stream.
-    if (request.url.startsWith('/api/realtime')) return;
+    if (path.startsWith('/api/realtime')) return;
 
     const result = limiters.api.consume(`api:${clientIp(request)}`);
     if (!result.allowed) {
@@ -85,9 +87,10 @@ function throttle(reply: FastifyReply, retryAfterMs: number): void {
 /**
  * The caller's address.
  *
- * Fastify is configured with `trustProxy`, so `request.ip` already reflects
- * `X-Forwarded-For` when ATLAS sits behind the reverse proxy the deployment
- * docs require.
+ * `request.ip` is the socket address unless ATLAS_TRUST_PROXY names the
+ * proxy in front — only then does `X-Forwarded-For` count, and only from
+ * that proxy. So a client cannot rotate the header to dodge the limiter,
+ * and behind Caddy the real address is still the one throttled.
  */
 function clientIp(request: FastifyRequest): string {
   return request.ip || 'unknown';

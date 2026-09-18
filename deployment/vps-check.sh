@@ -117,8 +117,18 @@ if [[ -f "${ENV_FILE}" ]]; then
   if [[ -z "${GMAIL_MISSING}" ]]; then pass "gmail credentials" "4/4 présents (valeurs non affichées)"; else warn "gmail credentials" "absents :${GMAIL_MISSING} — lecture de la boîte impossible"; fi
 
   OUTBOUND="$(envval ATLAS_OUTBOUND_ENABLED)"; MODE="$(envval ATLAS_ENGINE_MODE)"; AILIVE="$(envval ATLAS_AI_LIVE)"; FALLBACK="$(envval ATLAS_SEARCH_FALLBACK_ENABLED)"
-  case "$(printf '%s' "${OUTBOUND}" | tr '[:upper:]' '[:lower:]')" in ""|false|0|off|no) pass "ATLAS_OUTBOUND_ENABLED" "${OUTBOUND:-non défini (=false)} — aucun envoi réel" ;; *) warn "ATLAS_OUTBOUND_ENABLED" "${OUTBOUND} — L’ENVOI RÉEL EST OUVERT" ;; esac
+  OUT_OPEN=0; case "$(printf '%s' "${OUTBOUND}" | tr '[:upper:]' '[:lower:]')" in ""|false|0|off|no) pass "ATLAS_OUTBOUND_ENABLED" "${OUTBOUND:-non défini (=false)} — aucun envoi réel" ;; *) OUT_OPEN=1; warn "ATLAS_OUTBOUND_ENABLED" "${OUTBOUND} — L’ENVOI RÉEL EST OUVERT" ;; esac
   case "${MODE}" in ""|INTERNAL_TEST) pass "ATLAS_ENGINE_MODE" "${MODE:-non défini (=INTERNAL_TEST)}" ;; PRODUCTION) warn "ATLAS_ENGINE_MODE" "PRODUCTION — de vrais prospects peuvent être contactés si l’envoi est ouvert" ;; *) fail "ATLAS_ENGINE_MODE" "${MODE} — valeur inconnue, le démarrage refusera" ;; esac
+  # L'interrupteur ouvert en INTERNAL_TEST n'envoie rien (la politique le bloque), mais il n'a
+  # aucune raison d'être : c'est une erreur de configuration, et on la nomme.
+  if [[ "${OUT_OPEN}" -eq 1 && ( -z "${MODE}" || "${MODE}" == "INTERNAL_TEST" ) ]]; then fail "cohérence outbound" "ATLAS_OUTBOUND_ENABLED ouvert alors que le mode est INTERNAL_TEST — le remettre à false tant que l’envoi réel n’est pas décidé"; fi
+  TRUSTP="$(envval ATLAS_TRUST_PROXY)"
+  case "$(printf '%s' "${TRUSTP}" | tr '[:upper:]' '[:lower:]')" in
+    ""|false|no|off) pass "ATLAS_TRUST_PROXY" "${TRUSTP:-non défini (=false)} — les en-têtes X-Forwarded-* ne sont pas crus" ;;
+    true) warn "ATLAS_TRUST_PROXY" "true — tout en-tête X-Forwarded-For est cru : réservé à un port joignable uniquement par le proxy" ;;
+    [0-9]*) fail "ATLAS_TRUST_PROXY" "${TRUSTP} — un nombre de sauts est refusé au démarrage ; donner false, true ou les adresses du proxy" ;;
+    *) pass "ATLAS_TRUST_PROXY" "${TRUSTP} — seules ces adresses sont crues" ;;
+  esac
   case "$(printf '%s' "${AILIVE}" | tr '[:upper:]' '[:lower:]')" in true|1|yes|on) pass "ATLAS_AI_LIVE" "true — les appels de modèle sont facturés" ;; *) pass "ATLAS_AI_LIVE" "${AILIVE:-false} — aucune dépense de modèle" ;; esac
   case "$(printf '%s' "${FALLBACK}" | tr '[:upper:]' '[:lower:]')" in ""|false|0|off|no) pass "ATLAS_SEARCH_FALLBACK_ENABLED" "désactivé (obligatoire)" ;; *) fail "ATLAS_SEARCH_FALLBACK_ENABLED" "${FALLBACK} — doit rester désactivé" ;; esac
   BUDGET_DAY="$(envval ATLAS_AI_DAILY_BUDGET_USD)"; BUDGET_MISSION="$(envval ATLAS_MAX_MISSION_COST_USD)"; BUDGET_SALES="$(envval ATLAS_SALES_DAILY_AI_BUDGET_USD)"

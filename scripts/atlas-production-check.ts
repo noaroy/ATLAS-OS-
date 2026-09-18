@@ -800,6 +800,58 @@ try {
     !existsSync(envFile) || gitignore.length > 0 ? 'PASS' : 'FAIL',
     !existsSync(envFile) ? 'aucun .env présent' : '.env est ignoré par git');
 
+  // Les dépendances du transport HTTP, contre les minima corrigés connus
+  // (GHSA-3m5p-2c4r-xxw2, GHSA-w2qp-rph6-63g4 ; GHSA-8pvw-jcv7-9cmj,
+  // GHSA-x428-ghpx-8j92, GHSA-r799-r9gc-m956 ; GHSA-5jgf-p345-68v8,
+  // GHSA-f65p-4m7j-42xc). Déterministe : lu dans node_modules, sans réseau.
+  // `npm audit` reste la référence vivante ; ceci empêche une régression
+  // silencieuse du lockfile.
+  const MINIMA: Array<[string, string[]]> = [
+    ['fastify', ['5.12.1']],
+    ['@fastify/static', ['10.1.4']],
+    ['fast-uri', ['3.1.6', '4.1.3']],
+  ];
+  const versionOf = (pkg: string): string[] => {
+    const out: string[] = [];
+    const lire = (dir: string) => {
+      const f = join(dir, 'node_modules', pkg, 'package.json');
+      if (existsSync(f)) out.push((JSON.parse(readFileSync(f, 'utf8')) as { version: string }).version);
+    };
+    lire(process.cwd());
+    for (const parent of ['fastify', 'fast-json-stringify', 'ajv', '@fastify/ajv-compiler']) lire(join(process.cwd(), 'node_modules', parent));
+    return [...new Set(out)];
+  };
+  const auMoins = (v: string, minima: string[]): boolean => {
+    const n = v.split('.').map(Number);
+    return minima.some((m) => {
+      const mm = m.split('.').map(Number);
+      if (n[0] !== mm[0]) return false;
+      for (let i = 1; i < 3; i += 1) { if ((n[i] ?? 0) !== (mm[i] ?? 0)) return (n[i] ?? 0) > (mm[i] ?? 0); }
+      return true;
+    });
+  };
+  const depsDetail: string[] = [];
+  let depsOk = true;
+  for (const [pkg, minima] of MINIMA) {
+    const versions = versionOf(pkg);
+    if (versions.length === 0) { depsDetail.push(`${pkg} introuvable`); depsOk = false; continue; }
+    const mauvaises = versions.filter((v) => !auMoins(v, minima));
+    depsDetail.push(`${pkg} ${versions.join('/')}${mauvaises.length ? ` < ${minima.join(' ou ')}` : ''}`);
+    if (mauvaises.length) depsOk = false;
+  }
+  add('SECURITY', 'dependances HTTP corrigees', depsOk ? 'PASS' : 'FAIL', depsDetail.join(' · '));
+
+  // Le proxy de confiance : conservateur par défaut. `true` croit n'importe
+  // quel en-tête X-Forwarded-For — acceptable seulement si ce port n'est
+  // joignable que par le proxy, ce que ce contrôle ne peut pas voir d'ici.
+  add('SECURITY', 'proxy de confiance',
+    config.server.trustProxy === true ? 'MANUAL_ACTION_REQUIRED' : 'PASS',
+    config.server.trustProxy === false
+      ? 'ATLAS_TRUST_PROXY=false : les en-têtes X-Forwarded-* ne sont pas crus'
+      : config.server.trustProxy === true
+        ? 'ATLAS_TRUST_PROXY=true : confirmer que seul le reverse proxy peut joindre ce port, sinon nommer ses adresses'
+        : `ATLAS_TRUST_PROXY=${String(config.server.trustProxy)} : seules ces adresses sont crues`);
+
   // ─── OBSERVABILITÉ ───────────────────────────────────────────────────────
   //
   // Aucun verdict UNKNOWN ici. Un signal d'observabilité jamais observé n'est

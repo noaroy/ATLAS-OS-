@@ -38,6 +38,27 @@ export function tokenFrom(request: FastifyRequest): string | null {
   return query?.token?.trim() || null;
 }
 
+/**
+ * The path a guard decides on: the one the router resolved.
+ *
+ * Found in review: `GET /%61pi/cc/dashboard`. The router decodes `%61` to `a`
+ * and serves /api/cc/dashboard; the guard read the raw URL, saw no "/api",
+ * and let the request through unauthenticated. A prefix is judged on the
+ * resolved route (`routeOptions.url`, e.g. `/api/artifacts/*`), never on the
+ * URL as the client spelled it. With no route (404) the decoded path serves;
+ * an undecodable URL is treated as protected.
+ */
+export function guardedPath(request: FastifyRequest): string {
+  const route = request.routeOptions?.url;
+  if (typeof route === 'string' && route.length > 0) return route;
+  const raw = request.url.split('?')[0] ?? '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return '/api/undecodable';
+  }
+}
+
 /** True when the token came from the cookie, so a rotation must re-set it. */
 function cameFromCookie(request: FastifyRequest): boolean {
   return readCookie(request, SESSION_COOKIE) !== null;
@@ -56,13 +77,13 @@ export function installAuth(app: FastifyInstance, system: AtlasSystem, publicPat
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'OPTIONS') return;
 
-    const path = request.url.split('?')[0] ?? '';
+    const path = guardedPath(request);
 
     // The guard protects data, not the shell. Static console assets are
     // public — they are useless without a session, and gating them would
     // leave a browser unable to load the login screen at all.
     if (!path.startsWith('/api')) return;
-    if (publicPaths.some((p) => path === p || path.startsWith(p))) return;
+    if (publicPaths.some((p) => path === p || path.startsWith(`${p}/`))) return;
 
     const token = tokenFrom(request);
     if (!token) throw unauthorized();

@@ -28,6 +28,18 @@ export function installErrorHandler(app: {
       return;
     }
 
+    // Transport-level client errors — the static plugin's 403 on a path it
+    // refuses, Fastify's 413 on an oversized body, 415 on a media type — carry
+    // an HTTP status of their own. They are the client's mistake, not a fault:
+    // answer with that status, no stack in the logs. Found in review: a
+    // backslash in a static path came back as a 500 with a stack trace.
+    const carried = (error as { statusCode?: unknown }).statusCode;
+    if (!(error instanceof AtlasError) && typeof carried === 'number' && carried >= 400 && carried < 500) {
+      const code = carried === 401 ? 'UNAUTHORIZED' : carried === 403 ? 'FORBIDDEN' : carried === 404 ? 'NOT_FOUND' : carried === 429 ? 'RATE_LIMITED' : 'BAD_REQUEST';
+      reply.status(carried).send({ ok: false, error: { code, message: error.message || 'Request refused' } });
+      return;
+    }
+
     const atlas = toAtlasError(error);
 
     if (atlas.status >= 500) {

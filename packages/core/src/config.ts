@@ -107,6 +107,16 @@ const envSchema = z.object({
    * où 127.0.0.1 désigne le conteneur lui-même. Posée : elle l'emporte.
    */
   ATLAS_INTERNAL_URL: z.string().optional(),
+  /**
+   * Quels en-têtes X-Forwarded-* croire. `false` (défaut) : aucun — l'adresse
+   * du client est celle de la connexion, et personne ne peut se faire passer
+   * pour 127.0.0.1 en écrivant un en-tête. `true` : tout en-tête est cru — à
+   * ne poser que si un reverse proxy est le seul chemin vers ce port. Une
+   * liste (« loopback », « uniquelocal », une IP, un CIDR, séparés par des
+   * virgules) : seules les connexions venant de ces adresses sont crues.
+   * Un nombre (sauts) n'est pas accepté : cette forme ignorait l'adresse.
+   */
+  ATLAS_TRUST_PROXY: z.string().default('false'),
 
   ATLAS_SESSION_SECRET: z.string().min(16, 'ATLAS_SESSION_SECRET must be at least 16 characters'),
   ATLAS_FOUNDER_EMAIL: z.string().email().default('founder@atlas.local'),
@@ -356,6 +366,8 @@ export interface AtlasConfig {
     corsOrigins: string[];
     /** Où un outil local joint ce serveur : 127.0.0.1, ou le service `atlas` depuis le conteneur outils. */
     internalUrl: string;
+    /** Ce que Fastify reçoit en `trustProxy` : false, true, ou une liste d'adresses de confiance. */
+    trustProxy: boolean | string;
   };
   security: { sessionSecret: string; founderEmail: string; founderPassword: string };
   paths: { dataDir: string; databaseFile: string; backupDir: string; artifactDir: string };
@@ -600,6 +612,23 @@ export function internalUrlOf(explicit: string | undefined, port: number, cliCon
   return cliContext === 'docker' ? `http://atlas:${port}` : `http://127.0.0.1:${port}`;
 }
 
+/**
+ * `ATLAS_TRUST_PROXY` lue : `false` (défaut) ou `true`, sinon une liste
+ * d'adresses. Un nombre est refusé : la forme « sauts » de Fastify ignorait
+ * l'adresse de connexion (GHSA-3m5p-2c4r-xxw2), et un client pouvait écrire
+ * l'en-tête lui-même.
+ */
+export function trustProxyOf(raw: string): boolean | string {
+  const v = raw.trim();
+  if (v === '' || /^(false|no|off)$/i.test(v)) return false;
+  if (/^(true|yes|on)$/i.test(v)) return true;
+  // « 0 » et « 1 » compris : un chiffre serait lu par Fastify comme un nombre de sauts.
+  if (/^\d+$/.test(v)) {
+    throw new AtlasError('BAD_REQUEST', `ATLAS_TRUST_PROXY=${v} : un nombre de sauts n’est pas accepté ; donnez false, true, ou les adresses du proxy (ex. « uniquelocal » ou « 172.18.0.0/16 »)`);
+  }
+  return v.split(',').map((x) => x.trim()).filter(Boolean).join(',');
+}
+
 export function loadConfig(cwd = process.cwd()): AtlasConfig {
   loadAtlasEnv(cwd);
 
@@ -641,6 +670,7 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
         .map((o) => o.trim())
         .filter(Boolean),
       internalUrl: internalUrlOf(e.ATLAS_INTERNAL_URL, e.ATLAS_PORT, process.env.ATLAS_CLI_CONTEXT),
+      trustProxy: trustProxyOf(e.ATLAS_TRUST_PROXY),
     },
     security: {
       sessionSecret: e.ATLAS_SESSION_SECRET,

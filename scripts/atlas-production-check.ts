@@ -29,7 +29,7 @@ import {
 } from '../packages/runtime/src/index.ts';
 import { pricingFor, currentPricingConfig } from '../packages/llm/src/index.ts';
 import { buildAtlasOverview } from '../packages/server/src/http/atlas-overview.ts';
-import { classifyDaemonRun, deploymentEvidence, summariseReadiness, type LiveContext } from '../packages/runtime/src/readiness.ts';
+import { classifyDaemonRun, deploymentEvidence, summariseReadiness, gmailSendReadiness, type LiveContext, type CheckLine } from '../packages/runtime/src/readiness.ts';
 import { canTransitionLoop, evaluateSendGate } from '../packages/departments/src/index.ts';
 
 const c = {
@@ -69,13 +69,22 @@ const c = {
  * ni une inconnue logicielle : le logiciel est pret, le monde n'a pas encore
  * repondu. Le resume le dit a part, sous REAL_WORLD_EVIDENCE.
  */
-type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED';
+/**
+ * `PAUSED` est la septieme : un verrou d'exploitation tenu ferme volontairement
+ * (ATLAS_OUTBOUND_ENABLED=false, ATLAS_ENGINE_MODE=INTERNAL_TEST). Un fait,
+ * rapporte tel quel : ni un manque logiciel, ni une integration en attente.
+ * Le confondre avec MANUAL_ACTION_REQUIRED faisait reclamer une portee OAuth
+ * deja accordee, parce que la porte fermee cachait le jeton.
+ */
+type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED' | 'PAUSED';
 type Category = 'SOFTWARE_VERIFICATION' | 'OPERATIONAL_CONFIRMATION' | 'EXTERNAL_INTEGRATION' | 'REAL_WORLD_EVIDENCE';
 interface Check { area: string; name: string; verdict: Verdict; detail: string; category: Category }
 
 const checks: Check[] = [];
 const add = (area: string, name: string, verdict: Verdict, detail: string, category: Category = 'SOFTWARE_VERIFICATION') =>
   checks.push({ area, name, verdict, detail, category });
+/** Une ligne rendue ailleurs (packages/runtime/src/readiness.ts), ajoutée telle quelle. */
+const addLine = (line: CheckLine) => add(line.area, line.name, line.verdict, line.detail, line.category ?? 'SOFTWARE_VERIFICATION');
 
 /** Exécute une garde et attend qu'elle refuse. Un refus est la réussite. */
 const mustRefuse = (area: string, name: string, refused: boolean, detail: string) =>
@@ -565,9 +574,49 @@ try {
   // manquant pour du developpement inacheve.
   add('GMAIL CODE', 'GMAIL_CODE_READ',
     'PASS', 'import, rapprochement par fil, classement, idempotence : ecrits et testes');
-  add('GMAIL AUTH', 'GMAIL_AUTH_READ',
-    inbox.configured ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
-    inbox.configured ? `READY — ${inbox.detail}` : `${inbox.detail} — npm run gmail:authorize`);
+
+  /**
+   * Ce que le jeton porte, constate — et l'interrupteur, lu a part.
+   *
+   * `verifyScopes()` echange le jeton de rafraichissement contre un jeton
+   * d'acces et lit les portees rendues : aucune requete vers Gmail, aucun
+   * message — le meme geste que `gmail:check`. Puis `authorization()` dit,
+   * sans reseau, ce que ce jeton autorise : identifiants, gmail.readonly,
+   * gmail.send. L'interrupteur `ATLAS_OUTBOUND_ENABLED` n'entre pas dans
+   * cette reponse.
+   *
+   * Releve sur le VPS (v4.5.2) : ce controle lisait `status().configured`,
+   * que la porte ferme avant toute question de jeton, et annoncait « la
+   * portee gmail.send doit etre accordee » alors que `gmail:check` venait
+   * de la constater. Un verrou d'exploitation pris pour un consentement
+   * manquant. Jamais `sendEmail()` pour le savoir : la porte repondrait a
+   * la place du jeton.
+   */
+  const expediteur = new GmailOutboundProvider({});
+  let jetonRefuse: string | null = null;
+  try {
+    await expediteur.verifyScopes();
+  } catch (err) {
+    // Un jeton refuse par Google (HTTP 400 invalid_grant, jeton revoque,
+    // consentement retire) n'est pas un defaut d'ATLAS : le code a pose la
+    // bonne requete et Google a dit non. Le proprietaire reautorise.
+    jetonRefuse = err instanceof Error ? err.message.slice(0, 80) : String(err);
+  }
+  const autorisation = expediteur.authorization();
+  // « MESSAGES SENT » compte ce qui est parti — l'expediteur a blanc signe
+  // ses accuses `dry-run-N`, et ceux-la n'ont jamais quitte la machine.
+  const envois = repos.salesLoop.realSentSince('1970-01-01T00:00:00.000Z');
+  const lignesGmail = gmailSendReadiness({
+    auth: autorisation,
+    inboxConfigured: inbox.configured,
+    tokenError: jetonRefuse,
+    engineMode: config.sales.engineMode,
+    messagesSent: envois.real,
+    simulatedSends: envois.simulated,
+    unattributedSends: envois.unattributed,
+  });
+  const ligneGmail = (name: string): CheckLine => lignesGmail.find((l) => l.name === name)!;
+  addLine(ligneGmail('GMAIL_AUTH_READ'));
 
   /**
    * L'authentification ne suffit pas : le chemin qui s'en sert doit y arriver.
@@ -635,42 +684,9 @@ try {
     'nextPageToken suivi jusqu au bout, curseur avance apres traitement complet, '
     + 'reprise sans trou ni doublon (packages/intelligence/test/gmail-no-gap-sync.test.ts)');
 
-  /**
-   * L'etat d'envoi, lu sur le vrai jeton.
-   *
-   * `new GmailOutboundProvider({}).status()` rendait « portee absente » quelle
-   * que soit la realite : la liste des portees etait une option de constructeur
-   * dont le defaut etait vide, et personne ne la remplissait. Le controle
-   * annoncait donc GMAIL_SEND_SCOPE_MISSING le jour meme ou la portee venait
-   * d'etre accordee — un verdict code en dur, pas une observation.
-   *
-   * `verifyScopes()` echange le jeton de rafraichissement contre un jeton
-   * d'acces et lit les portees rendues. Aucune requete vers Gmail, aucun
-   * message : le meme geste que la verification de lecture.
-   */
-  const expediteur = new GmailOutboundProvider({});
-  try {
-    await expediteur.verifyScopes();
-  } catch (err) {
-    /*
-     * Un jeton refuse par Google (HTTP 400 invalid_grant, jeton revoque,
-     * consentement retire) n'est pas un defaut d'ATLAS : le code a pose la
-     * bonne requete et Google a dit non. C'est AUTH_REQUIRED — le
-     * proprietaire reautorise — et cela se classe comme tel. Le compter en
-     * FAIL ferait croire qu'il reste du code a ecrire.
-     */
-    add('GMAIL AUTH', 'verification du jeton d envoi', 'MANUAL_ACTION_REQUIRED',
-      `AUTH_REQUIRED — echange de jeton refuse par Google : ${err instanceof Error ? err.message.slice(0, 80) : String(err)} ; `
-      + 'reautoriser avec npm run gmail:authorize (le code n est pas en cause)');
-  }
-  const outbound = expediteur.status();
   add('GMAIL CODE', 'GMAIL_CODE_SEND', 'PASS',
     'RFC 5322, sujet encode, In-Reply-To, idempotence, refus sans portee : ecrits et testes');
-  add('GMAIL AUTH', 'GMAIL_AUTH_SEND',
-    outbound.configured ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
-    outbound.configured
-      ? `READY — ${outbound.detail}`
-      : `${outbound.code} — la portee gmail.send doit etre accordee par le proprietaire`);
+  addLine(ligneGmail('GMAIL_AUTH_SEND'));
 
   /**
    * Ce qui est pret pour l'envoi, sans rien envoyer.
@@ -723,10 +739,14 @@ try {
    * Le transport est-il pret a poster, sans poster ?
    *
    * On verifie que le fournisseur d'envoi sait se decrire, refuse franchement
-   * sans portee, et n'a aucun repli silencieux — un transport qui echouerait en
-   * rendant « succes » serait la pire panne possible ici. Aucune requete ne part
-   * vers Gmail : le refus est constate localement, avant tout reseau.
+   * quand la porte est fermee ou la portee absente, et n'a aucun repli
+   * silencieux — un transport qui echouerait en rendant « succes » serait la
+   * pire panne possible ici. Aucune requete ne part vers Gmail : le refus est
+   * constate localement, avant tout reseau. `status()` est ici la vue du
+   * transport — porte comprise — et c'est bien ce qu'on veut de lui ; ce
+   * qu'il autorise se lit plus haut, par `authorization()`.
    */
+  const outbound = expediteur.status();
   // Les etats « fermes » que le transport sait nommer : le refus est franc,
   // sans repli silencieux — c'est le comportement attendu, pas une panne.
   const FERMETURES_CONNUES = new Set(['OUTBOUND_DISABLED', 'GMAIL_SEND_SCOPE_MISSING', 'GMAIL_SEND_SCOPE_UNVERIFIED', 'GMAIL_NOT_CONFIGURED']);
@@ -734,15 +754,13 @@ try {
     outbound.configured || FERMETURES_CONNUES.has(outbound.code) ? 'PASS' : 'FAIL',
     outbound.configured
       ? `transport pret : ${outbound.detail}`
-      : FERMETURES_CONNUES.has(outbound.code)
-        ? `transport ecrit et teste ; il refuse franchement (${outbound.code}), sans repli silencieux`
-        : `etat inattendu : ${outbound.code}`);
+      : outbound.code === 'OUTBOUND_DISABLED' && autorisation.authReady
+        ? 'transport ecrit et teste, autorisation complete ; il refuse franchement tant que la porte est fermee (OUTBOUND_DISABLED), sans repli silencieux'
+        : FERMETURES_CONNUES.has(outbound.code)
+          ? `transport ecrit et teste ; il refuse franchement (${outbound.code}), sans repli silencieux`
+          : `etat inattendu : ${outbound.code}`);
 
-  add('GMAIL SEND READINESS', 'AUTH_READY',
-    outbound.configured ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
-    outbound.configured
-      ? 'portee gmail.send accordee'
-      : 'seul manque restant : la portee gmail.send, accordee par le proprietaire');
+  for (const name of ['GMAIL_SEND_SCOPE', 'AUTH_READY', 'OUTBOUND_SWITCH', 'ENGINE_MODE', 'MESSAGES_SENT']) addLine(ligneGmail(name));
 
   add('GMAIL', 'anti-doublon',
     repos.salesLoop.sentSince('2000-01-01') >= 0 ? 'PASS' : 'FAIL',
@@ -1237,6 +1255,7 @@ try {
     UNKNOWN: `${c.amber}?     ${c.reset}`,
     NOT_APPLICABLE: `${c.dim}N/A   ${c.reset}`,
     NOT_YET_OBSERVED: `${c.dim}PAS ENCORE${c.reset}`,
+    PAUSED: `${c.amber}PAUSED${c.reset}`,
   };
 
   for (const area of areas) {
@@ -1244,7 +1263,8 @@ try {
     const worst: Verdict = own.some((o) => o.verdict === 'FAIL') ? 'FAIL'
       : own.some((o) => o.verdict === 'UNKNOWN') ? 'UNKNOWN'
       : own.some((o) => o.verdict === 'MANUAL_ACTION_REQUIRED') ? 'MANUAL_ACTION_REQUIRED'
-      : own.some((o) => o.verdict === 'POST_DEPLOYMENT') ? 'POST_DEPLOYMENT' : 'PASS';
+      : own.some((o) => o.verdict === 'POST_DEPLOYMENT') ? 'POST_DEPLOYMENT'
+      : own.some((o) => o.verdict === 'PAUSED') ? 'PAUSED' : 'PASS';
     console.log(`  ${c.bold}${area.padEnd(24)}${c.reset}${mark[worst]}`);
     for (const check of own) {
       console.log(`      ${mark[check.verdict]} ${check.name.padEnd(28)}${c.dim}${check.detail}${c.reset}`);
@@ -1256,6 +1276,7 @@ try {
   const manual = checks.filter((check) => check.verdict === 'MANUAL_ACTION_REQUIRED');
   const post = checks.filter((check) => check.verdict === 'POST_DEPLOYMENT');
   const unknowns = checks.filter((check) => check.verdict === 'UNKNOWN');
+  const locks = checks.filter((check) => check.verdict === 'PAUSED');
 
   /**
    * Quatre réponses, parce que « prêt » répond à quatre questions.
@@ -1279,6 +1300,7 @@ try {
   console.log(`  ${c.bold}DEPLOYMENT BLOCKERS       = ${resume.deploymentBlockers}${c.reset}`);
   console.log(`  ${c.bold}MANUAL ZERO-COST ACTIONS  = ${manual.length}${c.reset}`);
   console.log(`  ${c.bold}POST-DEPLOYMENT CHECKS    = ${post.length}${c.reset}`);
+  console.log(`  ${c.bold}OPERATIONAL LOCKS         = ${locks.length}${c.reset}`);
   console.log(`  ${c.bold}UNKNOWN CRITICAL STATES   = ${unknowns.length}${c.reset}\n`);
 
   const feu = (ok: boolean, label: string) => `${ok ? c.green : c.red}${label}${c.reset}`;
@@ -1287,6 +1309,9 @@ try {
   console.log(`  ${c.bold}LIVE_DEPLOYMENT_STATUS = ${resume.live === 'HEALTHY' ? c.green : resume.live === 'DEGRADED' ? c.red : c.amber}${resume.live}${c.reset}  ${c.dim}— ${resume.liveDetail}${c.reset}`);
   console.log(`  ${c.bold}EXTERNAL_INTEGRATIONS  = ${resume.integrations === 'COMPLETE' ? `${c.green}COMPLETE` : `${c.cyan}ACTION_REQUIRED (${resume.integrationsPending.join(', ')})`}${c.reset}`);
   console.log(`  ${c.bold}REAL_WORLD_EVIDENCE    = ${resume.realWorld === 'OBSERVED' ? `${c.green}OBSERVED` : `${c.amber}NOT_YET_OBSERVED (${resume.realWorldMissing.join(', ')})`}${c.reset}  ${c.dim}— ${resume.realWorld === 'OBSERVED' ? 'des campagnes réelles ont laissé leur trace' : 'aucune campagne réelle n’a encore été menée : rien ici ne prétend qu’ATLAS est commercialement éprouvé'}${c.reset}`);
+  // L'envoi, en une ligne : l'autorisation OAuth d'un cote, les verrous de
+  // l'autre. Une porte fermee n'est pas un jeton manquant.
+  console.log(`  ${c.bold}GMAIL_SEND             = ${autorisation.authReady ? `${c.green}AUTH_READY` : `${c.cyan}${autorisation.code}`}${c.reset}  ${c.dim}· OUTBOUND ${autorisation.outboundEnabled ? 'ARMED' : 'PAUSED'} (ATLAS_OUTBOUND_ENABLED=${autorisation.outboundEnabled}) · ENGINE ${config.sales.engineMode === 'PRODUCTION' ? 'PRODUCTION' : `PAUSED (ATLAS_ENGINE_MODE=${config.sales.engineMode})`} · MESSAGES SENT ${envois.real}${envois.simulated ? ` (+${envois.simulated} simulé(s), jamais partis)` : ''}${envois.unattributed ? ` (+${envois.unattributed} sans accusé)` : ''}${c.reset}`);
 
   if (blockers.length > 0) {
     console.log(`\n  ${c.bold}BLOQUEURS LOGICIELS${c.reset} — ${blockers.length}`);
@@ -1307,6 +1332,13 @@ try {
     console.log(`  ${c.dim}le logiciel est écrit ; il attend une action que vous seul pouvez faire${c.reset}`);
     for (const item of manual) {
       console.log(`    ${c.cyan}·${c.reset} ${item.area} / ${item.name} — ${item.detail}`);
+    }
+  }
+  if (locks.length > 0) {
+    console.log(`\n  ${c.bold}VERROUS D’EXPLOITATION${c.reset} — ${locks.length}`);
+    console.log(`  ${c.dim}tenus fermés volontairement ; levés par le propriétaire, jamais par du code${c.reset}`);
+    for (const item of locks) {
+      console.log(`    ${c.amber}·${c.reset} ${item.area} / ${item.name} — ${item.detail}`);
     }
   }
   if (post.length > 0) {

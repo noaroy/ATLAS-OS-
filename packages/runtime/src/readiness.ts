@@ -16,6 +16,7 @@
  * Tout ici est pur et déterministe : des entrées lues ailleurs, des verdicts
  * rendus ici, testables sans base ni conteneur.
  */
+import type { OutboundAuthorization } from '@atlas/intelligence';
 
 // ─── Le daemon ───────────────────────────────────────────────────────────────
 
@@ -181,7 +182,13 @@ export function deploymentEvidence(a: DeploymentArtefacts): EvidenceItem[] {
 
 // ─── Le résumé ───────────────────────────────────────────────────────────────
 
-export type CheckVerdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED';
+/**
+ * `PAUSED` : un verrou d'exploitation tenu fermé volontairement —
+ * `ATLAS_OUTBOUND_ENABLED=false`, `ATLAS_ENGINE_MODE=INTERNAL_TEST`. Un fait
+ * rapporté tel quel : ni un manque logiciel, ni une intégration en attente,
+ * ni une inconnue. Le propriétaire le lève ; aucun code ne le corrige.
+ */
+export type CheckVerdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED' | 'PAUSED';
 
 /**
  * Ce qu'un contrôle vérifie, et donc ce qu'un « je ne sais pas » veut dire.
@@ -227,6 +234,8 @@ export interface ReadinessSummary {
   realWorld: 'OBSERVED' | 'NOT_YET_OBSERVED';
   realWorldMissing: string[];
   unknowns: number;
+  /** Les verrous d'exploitation tenus fermés : rapportés, jamais comptés comme manques. */
+  operationalLocks: string[];
 }
 
 /**
@@ -257,6 +266,7 @@ export function summariseReadiness(checks: readonly CheckLine[], context: LiveCo
   const realWorldMissing = checks
     .filter((c) => categorie(c) === 'REAL_WORLD_EVIDENCE' && c.verdict !== 'PASS')
     .map((c) => c.name);
+  const operationalLocks = checks.filter((c) => c.verdict === 'PAUSED').map((c) => c.name);
 
   let liveState: ReadinessSummary['live'];
   let liveDetail: string;
@@ -287,5 +297,116 @@ export function summariseReadiness(checks: readonly CheckLine[], context: LiveCo
     realWorld: realWorldMissing.length === 0 ? 'OBSERVED' : 'NOT_YET_OBSERVED',
     realWorldMissing,
     unknowns,
+    operationalLocks,
   };
+}
+
+// ─── Gmail : l'autorisation d'envoi, et la porte ─────────────────────────────
+
+export interface GmailSendReadinessInput {
+  /** Ce que le transport sait de son jeton, lu après `verifyScopes()`. */
+  auth: OutboundAuthorization;
+  /** Les quatre variables sont présentes pour la lecture (même jeton). */
+  inboxConfigured: boolean;
+  /** Le motif si Google a refusé l'échange de jeton ; null sinon. */
+  tokenError: string | null;
+  engineMode: 'INTERNAL_TEST' | 'PRODUCTION';
+  /** Les messages réellement partis, d'après le registre des envois — hors expéditeur à blanc. */
+  messagesSent: number;
+  /** Les issues SENT de l'expéditeur à blanc (`dry-run-N`) : au registre, jamais parties. */
+  simulatedSends?: number;
+  /** Les issues SENT sans accusé : provenance inconnue, dites telles quelles. */
+  unattributedSends?: number;
+}
+
+/** L'aire des faits OAuth, et celle de ce qui est prêt pour l'envoi. */
+export const GMAIL_AUTH_AREA = 'GMAIL AUTH';
+export const GMAIL_SEND_AREA = 'GMAIL SEND READINESS';
+
+/**
+ * Les lignes Gmail du contrôle, depuis trois faits qui ne se parlent pas.
+ *
+ * Relevé sur le VPS (v4.5.2) : `gmail-check` prouvait gmail.send accordée, et
+ * le contrôle affichait « GMAIL_AUTH_SEND : OUTBOUND_DISABLED — la portée
+ * gmail.send doit être accordée ». Il lisait `status().configured`, que la
+ * porte ferme avant toute question de jeton, et prenait un verrou
+ * d'exploitation pour un consentement manquant. EXTERNAL_INTEGRATIONS en
+ * devenait ACTION_REQUIRED pour une portée déjà là.
+ *
+ *   GMAIL_AUTH_READ / GMAIL_AUTH_SEND   ce que le jeton porte (OAuth) ;
+ *   GMAIL_SEND_SCOPE, AUTH_READY        l'autorisation d'envoi, complète ou non ;
+ *   OUTBOUND_SWITCH, ENGINE_MODE        les verrous, PAUSED quand ils sont
+ *                                       fermés — un fait, pas une intégration
+ *                                       en attente ;
+ *   MESSAGES_SENT                       ce qui est réellement parti.
+ */
+export function gmailSendReadiness(input: GmailSendReadinessInput): CheckLine[] {
+  const { auth, tokenError, engineMode } = input;
+  const scope = (name: string, state: OutboundAuthorization['sendScope']): string =>
+    state === 'GRANTED' ? `${name} constatée sur le jeton`
+      : state === 'MISSING' ? `${name} absente du jeton`
+        : `${name} non constatée`;
+  const refus = tokenError ? `échange de jeton refusé par Google : ${tokenError}` : null;
+
+  const authRead: CheckLine = !input.inboxConfigured
+    ? { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_READ', verdict: 'MANUAL_ACTION_REQUIRED', category: 'EXTERNAL_INTEGRATION',
+        detail: 'GMAIL_NOT_CONFIGURED — identifiants absents : npm run gmail:authorize' }
+    : auth.readScope === 'GRANTED'
+      ? { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_READ', verdict: 'PASS', category: 'EXTERNAL_INTEGRATION',
+          detail: `READY — identifiants présents, jeton échangé, ${scope('gmail.readonly', 'GRANTED')}` }
+      : { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_READ', verdict: 'MANUAL_ACTION_REQUIRED', category: 'EXTERNAL_INTEGRATION',
+          detail: `AUTH_REQUIRED — ${refus ?? scope('gmail.readonly', auth.readScope)} : réautoriser avec npm run gmail:authorize (le code n’est pas en cause)` };
+
+  const authSend: CheckLine = auth.authReady
+    ? { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_SEND', verdict: 'PASS', category: 'EXTERNAL_INTEGRATION',
+        detail: `READY — identifiants présents, jeton échangé, ${scope('gmail.send', 'GRANTED')}${auth.outboundEnabled ? '' : ' · l’interrupteur d’envoi est un autre sujet (OUTBOUND_SWITCH)'}` }
+    : !auth.credentials
+      ? { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_SEND', verdict: 'MANUAL_ACTION_REQUIRED', category: 'EXTERNAL_INTEGRATION',
+          detail: 'GMAIL_NOT_CONFIGURED — identifiants absents : npm run gmail:authorize -- --with-send' }
+      : auth.sendScope === 'MISSING'
+        ? { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_SEND', verdict: 'MANUAL_ACTION_REQUIRED', category: 'EXTERNAL_INTEGRATION',
+            detail: `GMAIL_SEND_SCOPE_MISSING — ${scope('gmail.send', 'MISSING')} : npm run gmail:authorize -- --with-send, décision du propriétaire` }
+        : { area: GMAIL_AUTH_AREA, name: 'GMAIL_AUTH_SEND', verdict: 'MANUAL_ACTION_REQUIRED', category: 'EXTERNAL_INTEGRATION',
+            detail: `GMAIL_SEND_SCOPE_UNVERIFIED — ${refus ?? 'portées non constatées'} : réautoriser avec npm run gmail:authorize -- --with-send` };
+
+  const sendScope: CheckLine = {
+    area: GMAIL_SEND_AREA, name: 'GMAIL_SEND_SCOPE', category: 'EXTERNAL_INTEGRATION',
+    verdict: auth.sendScope === 'GRANTED' ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
+    detail: auth.sendScope === 'GRANTED'
+      ? `${scope('gmail.send', 'GRANTED')} — constatée par l’échange de jeton : aucun appel Gmail, aucun envoi`
+      : auth.sendScope === 'MISSING'
+        ? `${scope('gmail.send', 'MISSING')} : npm run gmail:authorize -- --with-send, par le propriétaire`
+        : `${scope('gmail.send', 'UNVERIFIED')} : ${refus ?? 'identifiants absents'}`,
+  };
+
+  const authReady: CheckLine = {
+    area: GMAIL_SEND_AREA, name: 'AUTH_READY', category: 'EXTERNAL_INTEGRATION',
+    verdict: auth.authReady ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
+    detail: auth.authReady
+      ? 'identifiants + jeton échangé + gmail.send : l’autorisation d’envoi est complète — l’interrupteur ne change rien à ce fait'
+      : `${auth.code} — ${!auth.credentials ? 'identifiants absents' : auth.sendScope === 'MISSING' ? 'la portée gmail.send manque' : (refus ?? 'portées non constatées')}`,
+  };
+
+  const outboundSwitch: CheckLine = {
+    area: GMAIL_SEND_AREA, name: 'OUTBOUND_SWITCH', category: 'OPERATIONAL_CONFIRMATION',
+    verdict: auth.outboundEnabled ? 'PASS' : 'PAUSED',
+    detail: auth.outboundEnabled
+      ? 'ARMED — ATLAS_OUTBOUND_ENABLED=true : le transport poste réellement ; chaque envoi passe encore par la politique (approbation, fenêtre, mode)'
+      : 'PAUSED — ATLAS_OUTBOUND_ENABLED=false : verrou d’exploitation, aucun message réel ne part quel que soit le jeton ; levé par le propriétaire, pas par du code — ce n’est pas un défaut d’intégration Gmail',
+  };
+
+  const engine: CheckLine = {
+    area: GMAIL_SEND_AREA, name: 'ENGINE_MODE', category: 'OPERATIONAL_CONFIRMATION',
+    verdict: engineMode === 'PRODUCTION' ? 'PASS' : 'PAUSED',
+    detail: engineMode === 'PRODUCTION'
+      ? 'ATLAS_ENGINE_MODE=PRODUCTION : la politique d’envoi peut viser de vrais prospects, sous approbation'
+      : `PAUSED — ATLAS_ENGINE_MODE=${engineMode} : la politique d’envoi refuse tout envoi réel (INTERNAL_TEST_MODE) et le daemon n’a qu’un expéditeur à blanc — verrou d’exploitation, pas un problème OAuth`,
+  };
+
+  const sent: CheckLine = {
+    area: GMAIL_SEND_AREA, name: 'MESSAGES_SENT', category: 'OPERATIONAL_CONFIRMATION', verdict: 'PASS',
+    detail: `${input.messagesSent} message(s) réellement parti(s) d’après le registre des envois${input.simulatedSends ? ` · ${input.simulatedSends} envoi(s) simulé(s) par l’expéditeur à blanc, jamais partis` : ''}${input.unattributedSends ? ` · ${input.unattributedSends} issue(s) SENT sans accusé, provenance inconnue` : ''} — ce contrôle n’en ajoute aucun`,
+  };
+
+  return [authRead, authSend, sendScope, authReady, outboundSwitch, engine, sent];
 }

@@ -135,6 +135,7 @@ export {
   encodeRfc822,
   base64Url,
   type GmailOutboundOptions,
+  type OutboundAuthorization,
   type MailOutboundProvider,
   type OutboundMessage,
   type SendReceipt,

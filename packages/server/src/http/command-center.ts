@@ -1013,7 +1013,12 @@ export async function buildSystemHealth(
     { id: 'database', label: 'DATABASE', state: 'HEALTHY',
       detail: `${Object.values(repos.tasks.countByStatus()).reduce((s, n) => s + n, 0)} tâche(s)` },
     { id: 'gmail_read', label: 'GMAIL READ', state: inbox.configured ? 'HEALTHY' : 'OFFLINE', detail: inbox.detail },
-    { id: 'gmail_send', label: 'GMAIL SEND', state: send.configured ? 'HEALTHY' : 'BLOCKED', detail: send.detail },
+    // BLOCKED dit vrai : rien ne part. Mais une porte fermée sur une
+    // autorisation complète n'est pas une portée manquante — le détail le dit.
+    { id: 'gmail_send', label: 'GMAIL SEND', state: send.configured ? 'HEALTHY' : 'BLOCKED',
+      detail: send.code === 'OUTBOUND_DISABLED' && outbound.authorization().authReady
+        ? `${send.detail} Autorisation d’envoi complète (gmail.send constatée) : seul l’interrupteur ferme.`
+        : send.detail },
     { id: 'searxng', label: 'SEARXNG', state: searxng, detail: searxngDetail },
     { id: 'claude', label: 'CLAUDE', state: claudeCode.available ? 'HEALTHY' : 'OFFLINE',
       detail: claudeCode.available ? claudeCode.detail : 'binaire non installé' },

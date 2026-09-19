@@ -58,10 +58,14 @@ add(
  */
 const outbound = new GmailOutboundProvider({});
 const outboundStatus = outbound.status();
+// La porte fermée (OUTBOUND_DISABLED) ne dit rien du jeton : sans échange de
+// jeton, la portée n'est ni accordée ni refusée — non constatée.
 add(
   'GMAIL SEND AUTH',
   'BLOQUANT',
-  `${outboundStatus.code} — portée d'envoi non accordée, envoi impossible`,
+  outboundStatus.code === 'OUTBOUND_DISABLED'
+    ? `${outboundStatus.code} — interrupteur d'envoi baissé : envoi impossible ; la portée gmail.send n'est pas interrogée ici (production-check la constate)`
+    : `${outboundStatus.code} — portée d'envoi non constatée, envoi impossible`,
 );
 
 // --- Moteur de recherche ----------------------------------------------------

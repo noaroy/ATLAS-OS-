@@ -211,6 +211,22 @@ describe('le résumé : cinq réponses, aucune affirmation invisible', () => {
     assert.equal(inconnuLive.software, 'READY', 'un inconnu sur l’instance vivante ne bloque pas le logiciel');
     assert.equal(inconnuLive.live, 'HEALTHY', 'seul un FAIL dégrade ; l’inconnu reste affiché « ? »');
   });
+
+  test('PAUSED — un verrou d’exploitation fermé — n’est ni un manque logiciel, ni une intégration en attente, ni une inconnue', () => {
+    // Relevé sur le VPS (v4.5.2) : ATLAS_OUTBOUND_ENABLED=false rendait
+    // EXTERNAL_INTEGRATIONS = ACTION_REQUIRED pour une portée déjà accordée.
+    const r = summariseReadiness([
+      line('CORE', 'PASS'),
+      line('GMAIL SEND READINESS', 'PASS', 'AUTH_READY', 'EXTERNAL_INTEGRATION'),
+      line('GMAIL SEND READINESS', 'PAUSED', 'OUTBOUND_SWITCH', 'OPERATIONAL_CONFIRMATION'),
+      line('GMAIL SEND READINESS', 'PAUSED', 'ENGINE_MODE', 'OPERATIONAL_CONFIRMATION'),
+    ], { kind: 'docker-cli' });
+    assert.equal(r.software, 'READY');
+    assert.equal(r.integrations, 'COMPLETE');
+    assert.deepEqual(r.integrationsPending, []);
+    assert.equal(r.unknowns, 0);
+    assert.deepEqual(r.operationalLocks, ['OUTBOUND_SWITCH', 'ENGINE_MODE']);
+  });
 });
 
 describe('le script atlas-production-check ne porte plus les verdicts d’avant le serveur', () => {

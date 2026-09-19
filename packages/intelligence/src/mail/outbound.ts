@@ -22,7 +22,7 @@
  */
 import { withDeadline } from '@atlas/core';
 import {
-  ACCEPTED_GMAIL_SCOPES, scopesInExcess, type MailProviderStatus,
+  ACCEPTED_GMAIL_SCOPES, GMAIL_READONLY_SCOPE_URI, scopesInExcess, type MailProviderStatus,
 } from './types.ts';
 
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
@@ -113,6 +113,32 @@ export class DryRunOutboundProvider implements MailOutboundProvider {
   async replyToThread(message: OutboundMessage & { threadId: string }): Promise<SendReceipt> {
     return this.sendEmail(message);
   }
+}
+
+/**
+ * L'autorisation d'envoi, séparée de l'interrupteur.
+ *
+ * `status()` répond à « le transport posterait-il ? » — et la porte
+ * (`ATLAS_OUTBOUND_ENABLED`) ferme cette réponse avant toute question de
+ * jeton. C'est voulu pour le transport. C'est faux pour un contrôle de
+ * préparation, qui en concluait « portée gmail.send à accorder » le jour même
+ * où elle venait de l'être : le contrôle lisait la porte et croyait lire le
+ * jeton. Ici, trois faits distincts — identifiants, portées constatées,
+ * interrupteur — et aucun ne parle pour un autre.
+ */
+export interface OutboundAuthorization {
+  /** GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_USER présents. */
+  credentials: boolean;
+  /** Les portées sont connues : constatées par `verifyScopes()`, ou déclarées au constructeur. */
+  verified: boolean;
+  granted: readonly string[];
+  readScope: 'GRANTED' | 'MISSING' | 'UNVERIFIED';
+  sendScope: 'GRANTED' | 'MISSING' | 'UNVERIFIED';
+  /** Identifiants présents et portée d'envoi constatée : prêt à poster dès que la porte s'ouvre. */
+  authReady: boolean;
+  /** La porte, telle quelle — un choix d'exploitation, pas un état OAuth. */
+  outboundEnabled: boolean;
+  code: 'GMAIL_SEND_AUTH_READY' | 'GMAIL_SEND_SCOPE_MISSING' | 'GMAIL_SEND_SCOPE_UNVERIFIED' | 'GMAIL_NOT_CONFIGURED';
 }
 
 export interface GmailOutboundOptions {
@@ -208,11 +234,46 @@ export class GmailOutboundProvider implements MailOutboundProvider {
     return { granted, canSend: granted.includes(GMAIL_SEND_SCOPE) };
   }
 
-  private authorised(): boolean {
+  /** Les portées qui font foi : déclarées au constructeur, sinon constatées ; null tant que rien n'a été demandé. */
+  private knownScopes(): readonly string[] | null {
     // Une liste passee au constructeur fait autorite — les tests s'en servent
     // pour decrire un jeton sans reseau. Sinon, ce qu'on a constate.
-    const known = this.grantedScopes.length > 0 ? this.grantedScopes : this.discovered;
+    return this.grantedScopes.length > 0 ? this.grantedScopes : this.discovered;
+  }
+
+  private authorised(): boolean {
+    const known = this.knownScopes();
     return known !== null && known.includes(GMAIL_SEND_SCOPE);
+  }
+
+  /**
+   * L'état d'autorisation, sans réseau et sans l'interrupteur.
+   *
+   * À lire après `verifyScopes()` — un échange de jeton, jamais un appel à
+   * Gmail, jamais un envoi. Un contrôle qui passerait par `sendEmail()` pour
+   * savoir si la portée est là se heurterait d'abord à la porte, et ne
+   * saurait rien du jeton.
+   */
+  authorization(): OutboundAuthorization {
+    const known = this.knownScopes();
+    const credentials = this.credentials() !== null;
+    const scopeOf = (scope: string): 'GRANTED' | 'MISSING' | 'UNVERIFIED' =>
+      known === null ? 'UNVERIFIED' : known.includes(scope) ? 'GRANTED' : 'MISSING';
+    const sendScope = scopeOf(GMAIL_SEND_SCOPE);
+    return {
+      credentials,
+      verified: known !== null,
+      granted: known ?? [],
+      readScope: scopeOf(GMAIL_READONLY_SCOPE_URI),
+      sendScope,
+      authReady: credentials && sendScope === 'GRANTED',
+      outboundEnabled: this.outboundEnabled(),
+      code: !credentials
+        ? 'GMAIL_NOT_CONFIGURED'
+        : sendScope === 'GRANTED'
+          ? 'GMAIL_SEND_AUTH_READY'
+          : sendScope === 'MISSING' ? 'GMAIL_SEND_SCOPE_MISSING' : 'GMAIL_SEND_SCOPE_UNVERIFIED',
+    };
   }
 
   private credentials(): {

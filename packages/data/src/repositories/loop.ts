@@ -465,6 +465,31 @@ export class SalesLoopRepository {
   }
 
   /**
+   * Les messages réellement partis — et, à part, ceux qui n'ont jamais quitté
+   * la machine.
+   *
+   * Le registre consigne chaque issue SENT, que l'expéditeur soit Gmail ou
+   * l'expéditeur à blanc (INTERNAL_TEST) : celui-ci signe ses accusés
+   * `dry-run-N`. Les compter ensemble ferait dire « 25 messages partis » à
+   * une base qui n'a jamais rien envoyé. `sentSince` reste le compte du
+   * registre, qui plafonne la cadence ; ceci répond à « MESSAGES SENT ».
+   * Une issue SENT sans accusé du tout est de provenance inconnue : comptée à
+   * part, jamais rangée d'office parmi les simulations.
+   */
+  realSentSince(isoDate: string): { real: number; simulated: number; unattributed: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN external_message_id IS NULL THEN 0 WHEN external_message_id LIKE 'dry-run-%' THEN 0 ELSE 1 END) AS real,
+           SUM(CASE WHEN external_message_id LIKE 'dry-run-%' THEN 1 ELSE 0 END) AS simulated,
+           SUM(CASE WHEN external_message_id IS NULL THEN 1 ELSE 0 END) AS unattributed
+         FROM outbound_send_events WHERE phase = 'SENT' AND occurred_at >= ?`,
+      )
+      .get(isoDate) as { real: number | null; simulated: number | null; unattributed: number | null };
+    return { real: Number(row.real ?? 0), simulated: Number(row.simulated ?? 0), unattributed: Number(row.unattributed ?? 0) };
+  }
+
+  /**
    * Combien de relances sont deja parties pour UNE entreprise.
    *
    * Distinct de `sentSince` avec un `purpose` : celui-la compte a l'echelle du

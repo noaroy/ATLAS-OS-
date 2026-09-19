@@ -249,7 +249,7 @@ bash deployment/atlas-cli.sh gmail-read-check   # en-têtes des derniers message
 bash deployment/atlas-cli.sh inbox-initial-sync # premier import : une conversation par entreprise contactée (registre), puis lecture de la boîte
 bash deployment/atlas-cli.sh inbox-sync         # ensuite : la lecture seule, rejouable (curseur, 6 h de chevauchement, dédup) ; n'écrit que dans la base ATLAS
 bash deployment/atlas-cli.sh sales-inbox        # la boîte commerciale : ce qui est revenu, ce qu'il reste à faire
-bash deployment/atlas-cli.sh production-check   # GMAIL AUTH / GMAIL SEND READINESS : lecture READY, envoi OUTBOUND_DISABLED
+bash deployment/atlas-cli.sh production-check   # GMAIL AUTH : ce que le jeton porte · GMAIL SEND READINESS : autorisation d'un côté, verrous (PAUSED) de l'autre
 ```
 La synchronisation est « sans trou » par construction : curseur
 `lastReceivedAt` par boîte, relu avec **6 h de chevauchement**, déduplication
@@ -271,6 +271,23 @@ d'`inbox-sync` — par ce qu'elle a constaté, jamais l'absence de travail :
 | `STALE` | aucune lecture depuis plus de 90 min : la preuve est trop vieille pour conclure | `daemon-check` — le daemon tourne-t-il ? |
 | `UNKNOWN` | aucune tentative jamais consignée | attendre un cycle, ou `inbox-sync` |
 | `OFF` | Gmail non configuré ici | — |
+
+**Ce que dit `production-check` de l'envoi.** Trois faits qui ne se parlent
+pas : ce que le jeton porte (OAuth), l'autorisation d'envoi qui en découle, et
+les verrous d'exploitation. Une porte fermée n'est pas une portée manquante.
+
+| Ligne | Sens |
+|---|---|
+| `GMAIL AUTH / GMAIL_AUTH_READ`, `GMAIL_AUTH_SEND` | identifiants présents, jeton échangé (oauth2 seulement, aucun appel Gmail), `gmail.readonly` / `gmail.send` **constatées sur le jeton**. MANUEL seulement si la portée manque, si Google refuse le jeton, ou sans identifiants |
+| `GMAIL SEND READINESS / GMAIL_SEND_SCOPE`, `AUTH_READY` | l'autorisation d'envoi est complète — **quel que soit l'interrupteur** |
+| `OUTBOUND_SWITCH` | `PAUSED` tant que `ATLAS_OUTBOUND_ENABLED=false` ; `ARMED` sinon. Un verrou d'exploitation : compté sous OPERATIONAL LOCKS, jamais sous EXTERNAL_INTEGRATIONS |
+| `ENGINE_MODE` | `PAUSED` en `INTERNAL_TEST` (la politique d'envoi refuse tout envoi réel, le daemon n'a qu'un expéditeur à blanc) ; `PASS` en `PRODUCTION` |
+| `MESSAGES_SENT` | les messages réellement partis d'après le registre — les accusés `dry-run-N` de l'expéditeur à blanc sont comptés à part |
+
+La ligne de synthèse `GMAIL_SEND = AUTH_READY · OUTBOUND PAUSED · ENGINE PAUSED ·
+MESSAGES SENT 0` est l'état attendu avant le premier envoi réel : tout est
+autorisé, rien n'est ouvert. Le contrôle ne passe jamais par le transport pour
+le savoir — `sendEmail()` se heurterait à la porte avant de voir le jeton.
 
 **Aucun envoi possible.** `GmailOutboundProvider` refuse (`OUTBOUND_DISABLED`)
 dans le transport lui-même tant que `ATLAS_OUTBOUND_ENABLED` n'est pas vrai,

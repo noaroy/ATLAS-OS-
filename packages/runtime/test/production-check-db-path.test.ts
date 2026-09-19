@@ -84,6 +84,24 @@ describe('les scripts servis par atlas-cli.sh lisent la base de la config', () =
     });
   }
 
+  test('le chemin Gmail de production : sales-inbox, inbox-sync ouvrent config.paths.databaseFile ; gmail-check et gmail-read-check n’ouvrent aucune base', () => {
+    // Relevé sur le VPS (v4.5.0) : le premier import Gmail (`sales-inbox sync`)
+    // plantait sur /app/data/atlas.db — le repli relatif au cwd, dans le conteneur.
+    for (const file of ['sales-inbox.ts', 'sales-inbox-sync.ts']) {
+      const source = readFileSync(join(ROOT, 'scripts', file), 'utf8');
+      assert.ok(!/'data\/atlas\.db'/.test(source), `${file} : plus aucun repli data/atlas.db`);
+      assert.match(source, /const config = loadConfig\(process\.cwd\(\)\);/, `${file} charge la config`);
+      assert.match(source, /createRepositories\(config\.paths\.databaseFile, logger\)|const dbPath = config\.paths\.databaseFile;/, `${file} ouvre la base de la config`);
+    }
+    for (const file of ['gmail-check.ts', 'gmail-read-check.ts']) {
+      const source = readFileSync(join(ROOT, 'scripts', file), 'utf8');
+      assert.ok(!/createRepositories\(/.test(source), `${file} ne touche aucune base`);
+    }
+    const wrapper = readFileSync(join(ROOT, 'deployment', 'atlas-cli.sh'), 'utf8');
+    for (const cmd of ['sales-inbox)', 'inbox-sync)', 'gmail-check)', 'gmail-read-check)']) assert.ok(wrapper.includes(cmd), `atlas-cli : ${cmd}`);
+    assert.match(wrapper, /inbox-initial-sync[\s\S]{0,200}npm run sales:inbox -- sync && npm run sales:inbox-sync/, 'le premier import en une commande, dans un seul conteneur');
+  });
+
   test('atlas-production-check ouvre config.paths.databaseFile', () => {
     const source = readFileSync(join(ROOT, 'scripts', 'atlas-production-check.ts'), 'utf8');
     assert.match(source, /const dbPath = config\.paths\.databaseFile;/);

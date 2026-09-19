@@ -246,7 +246,9 @@ restent tels quels). Ensuite, tout en lecture seule :
 ```bash
 bash deployment/atlas-cli.sh gmail-check        # jeton + portées + boîte
 bash deployment/atlas-cli.sh gmail-read-check   # en-têtes des derniers messages (--max=20, --thread=<id>, --since=AAAA-MM-JJ)
-bash deployment/atlas-cli.sh inbox-sync         # rattache les réponses aux conversations ; n'écrit que dans la base ATLAS
+bash deployment/atlas-cli.sh inbox-initial-sync # premier import : une conversation par entreprise contactée (registre), puis lecture de la boîte
+bash deployment/atlas-cli.sh inbox-sync         # ensuite : la lecture seule, rejouable (curseur, 6 h de chevauchement, dédup) ; n'écrit que dans la base ATLAS
+bash deployment/atlas-cli.sh sales-inbox        # la boîte commerciale : ce qui est revenu, ce qu'il reste à faire
 bash deployment/atlas-cli.sh production-check   # GMAIL AUTH / GMAIL SEND READINESS : lecture READY, envoi OUTBOUND_DISABLED
 ```
 La synchronisation est « sans trou » par construction : curseur

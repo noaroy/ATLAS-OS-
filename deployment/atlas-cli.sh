@@ -8,7 +8,9 @@
 #   ./deployment/atlas-cli.sh client-review --run=msn_…
 #   ./deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
 #   ./deployment/atlas-cli.sh backup | restore-check | daemon-check | atlas-status | production-check
-#   ./deployment/atlas-cli.sh gmail-check | gmail-read-check | inbox-sync   # Gmail en lecture seule, rien n'est envoyé
+#   ./deployment/atlas-cli.sh gmail-check | gmail-read-check                # Gmail en lecture seule, rien n'est envoyé
+#   ./deployment/atlas-cli.sh inbox-initial-sync                             # premier import : conversations depuis le registre, puis lecture de la boîte
+#   ./deployment/atlas-cli.sh sales-inbox [sync|record …] | inbox-sync       # la boîte commerciale ; la lecture Gmail seule (rejouable, sans trou)
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -56,6 +58,7 @@ npm_script_of() {
     sales-status)     printf 'sales:status' ;;
     gmail-check)      printf 'gmail:check' ;;
     gmail-read-check) printf 'gmail:read-check' ;;
+    sales-inbox)      printf 'sales:inbox' ;;
     inbox-sync)       printf 'sales:inbox-sync' ;;
     *) return 1 ;;
   esac
@@ -65,6 +68,14 @@ build_container_command() {
   # Rend, sur stdout, un mot par ligne : la commande à exécuter dans le conteneur.
   local first="$1"; shift
   local script
+  # Le premier import Gmail, en deux temps dans un seul conteneur : ouvrir une
+  # conversation par entreprise contactée (registre d'outreach), puis lire la
+  # boîte et rattacher les réponses. Rejouable : les deux étapes sont idempotentes.
+  if [[ "${first}" == "inbox-initial-sync" ]]; then
+    printf '%s
+' sh -c 'npm run sales:inbox -- sync && npm run sales:inbox-sync'
+    return 0
+  fi
   if script="$(npm_script_of "${first}")"; then
     printf '%s\n' npm run "${script}"
     if [[ $# -gt 0 ]]; then printf '%s\n' -- "$@"; fi
@@ -131,7 +142,7 @@ else
   [[ $# -gt 0 ]] || { usage; exit 2; }
   # Le premier mot est validé ici, dans le processus principal : un `die`
   # dans une substitution ne sortirait que de la substitution.
-  npm_script_of "$1" >/dev/null || case "$1" in npm|node|npx|sh|bash) ;; *) die "commande inconnue : $1 (voir --help)" ;; esac
+  npm_script_of "$1" >/dev/null || case "$1" in npm|node|npx|sh|bash|inbox-initial-sync) ;; *) die "commande inconnue : $1 (voir --help)" ;; esac
   mapfile -t CONTAINER_CMD < <(build_container_command "$@")
   [[ ${#CONTAINER_CMD[@]} -gt 0 ]] || die "commande vide"
 fi

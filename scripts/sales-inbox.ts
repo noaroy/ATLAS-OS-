@@ -13,7 +13,7 @@
  *   sales-inbox record <domaine> ...   consigne un événement entrant
  */
 import { readFileSync } from 'node:fs';
-import { createLogger, canonicalDomainOf, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, canonicalDomainOf, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
   classifyInbound,
@@ -24,10 +24,11 @@ import {
   type InboundKind,
 } from '../packages/departments/src/index.ts';
 
-// Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
-// pas pour ce processus et la configuration parait absente sans qu'aucune
-// erreur ne le dise.
-loadAtlasEnv();
+// La configuration d'abord : elle charge `.env.local`/`.env` et résout la base
+// — ATLAS_DB_PATH compris, /data/atlas.db dans le conteneur outils — là où un
+// repli « data/atlas.db » relatif au cwd ouvrait /app/data/atlas.db, un dossier
+// qui n'existe pas. Relevé sur le VPS au premier import Gmail.
+const config = loadConfig(process.cwd());
 
 const c = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
@@ -39,7 +40,7 @@ const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
 const logger = createLogger({ level: 'error', pretty: false });
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const repos = createRepositories(config.paths.databaseFile, logger);
 const today = flag('today') ?? new Date().toISOString().slice(0, 10);
 
 /** L'état courant d'une conversation, recalculé depuis ses événements. */

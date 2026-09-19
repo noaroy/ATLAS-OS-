@@ -67,7 +67,7 @@ const flag = (name: string) =>
 
 const logger = createLogger({ level: 'error', pretty: false });
 const config = loadConfig(process.cwd());
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const repos = createRepositories(config.paths.databaseFile, logger);
 const sales = config.sales;
 const runId = `run-${Date.now()}`;
 const today = flag('today') ?? new Date().toISOString().slice(0, 10);

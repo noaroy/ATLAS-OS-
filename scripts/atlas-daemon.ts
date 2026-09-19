@@ -31,9 +31,8 @@ const logger = createLogger({
   level: (flag('log') as 'debug' | 'info' | 'warn' | 'error') ?? 'info',
   pretty: true,
 });
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
-
 const config = loadConfig(process.cwd());
+const repos = createRepositories(config.paths.databaseFile, logger);
 
 // Les workers de modèle sont branchés, mais figés tant que ATLAS_AI_LIVE est
 // faux — ce qui est la valeur par défaut. La fabrique journalise le mode

@@ -11,7 +11,7 @@
  *   npm run atlas:report
  *   npm run atlas:report -- --since=2026-08-01
  */
-import { createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, loadAtlasEnv, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 
 // Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
@@ -25,7 +25,8 @@ const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
 const logger = createLogger({ level: 'error', pretty: false });
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const config = loadConfig(process.cwd());
+const repos = createRepositories(config.paths.databaseFile, logger);
 
 const since = flag('since') ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 const sinceIso = `${since}T00:00:00.000Z`;

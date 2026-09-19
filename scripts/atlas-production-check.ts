@@ -68,7 +68,11 @@ const mustRefuse = (area: string, name: string, refused: boolean, detail: string
 
 const logger = createLogger({ level: 'error', pretty: false });
 const config = loadConfig(process.cwd());
-const dbPath = process.env.ATLAS_DB_PATH ?? 'data/atlas.db';
+// La base vient de la config, jamais d'un second calcul : `loadConfig` honore
+// déjà ATLAS_DB_PATH et résout <ATLAS_DATA_DIR>/atlas.db — /data/atlas.db dans
+// le conteneur outils. Relevé sur le VPS : le repli « data/atlas.db » devenait
+// /app/data/atlas.db, un dossier qui n'existe pas, et le contrôle plantait.
+const dbPath = config.paths.databaseFile;
 const repos = createRepositories(dbPath, logger);
 
 const scratch = mkdtempSync(join(tmpdir(), 'atlas-check-'));

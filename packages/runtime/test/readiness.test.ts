@@ -137,8 +137,45 @@ describe('les preuves de déploiement, lues dans les artefacts réels', () => {
   });
 });
 
-describe('le résumé : quatre réponses, aucune affirmation invisible', () => {
-  const line = (area: string, verdict: CheckLine['verdict'], name = 'x'): CheckLine => ({ area, verdict, name, detail: '' });
+describe('le résumé : cinq réponses, aucune affirmation invisible', () => {
+  const line = (area: string, verdict: CheckLine['verdict'], name = 'x', category?: CheckLine['category']): CheckLine => ({ area, verdict, name, detail: '', ...(category ? { category } : {}) });
+
+  test('logiciel validé, Gmail en attente, aucune campagne encore : READY · READY · HEALTHY · ACTION_REQUIRED (Gmail) · NOT_YET_OBSERVED (registre, réponses)', () => {
+    const r = summariseReadiness([
+      line('CORE', 'PASS', 'file'), line('SECURITY', 'PASS', 'garde'),
+      line('AI ORCHESTRATION', 'PASS', 'mode IA', 'OPERATIONAL_CONFIRMATION'),
+      line('GMAIL AUTH', 'MANUAL_ACTION_REQUIRED', 'Gmail', 'EXTERNAL_INTEGRATION'),
+      line('SALES', 'NOT_YET_OBSERVED', 'registre global', 'REAL_WORLD_EVIDENCE'),
+      line('SALES', 'NOT_YET_OBSERVED', 'suivi des réponses', 'REAL_WORLD_EVIDENCE'),
+      line('DEPLOYMENT', 'PASS', 'compose'),
+      line('LIVE DEPLOYMENT', 'PASS', 'serveur joignable'), line('LIVE DEPLOYMENT', 'PASS', 'daemon en cours'),
+    ], { kind: 'docker-cli' });
+    assert.equal(r.software, 'READY');
+    assert.deepEqual(r.softwareUnverified, []);
+    assert.equal(r.deployment, 'READY');
+    assert.equal(r.live, 'HEALTHY');
+    assert.equal(r.integrations, 'ACTION_REQUIRED');
+    assert.deepEqual(r.integrationsPending, ['Gmail']);
+    assert.equal(r.realWorld, 'NOT_YET_OBSERVED');
+    assert.deepEqual(r.realWorldMissing, ['registre global', 'suivi des réponses']);
+  });
+
+  test('un registre vide ou une réponse jamais reçue ne rend pas le logiciel NOT_READY ; observés, ils passent OBSERVED', () => {
+    const vide = summariseReadiness([line('SALES', 'UNKNOWN', 'registre global', 'REAL_WORLD_EVIDENCE'), line('SALES', 'NOT_YET_OBSERVED', 'suivi des réponses', 'REAL_WORLD_EVIDENCE')], { kind: 'unknown' });
+    assert.equal(vide.software, 'READY');
+    assert.equal(vide.realWorld, 'NOT_YET_OBSERVED');
+    const plein = summariseReadiness([line('SALES', 'PASS', 'registre global', 'REAL_WORLD_EVIDENCE'), line('SALES', 'PASS', 'suivi des réponses', 'REAL_WORLD_EVIDENCE')], { kind: 'unknown' });
+    assert.equal(plein.realWorld, 'OBSERVED');
+    assert.deepEqual(plein.realWorldMissing, []);
+  });
+
+  test('une confirmation d’exploitation (ATLAS_AI_LIVE=true) n’est pas une inconnue logicielle ; une épreuve non jouée l’est, et se nomme', () => {
+    const confirmation = summariseReadiness([line('AI ORCHESTRATION', 'UNKNOWN', 'mode IA', 'OPERATIONAL_CONFIRMATION')], { kind: 'unknown' });
+    assert.equal(confirmation.software, 'READY');
+    const epreuve = summariseReadiness([line('DAEMON MAIN DB', 'UNKNOWN', 'daemon sur un instantané'), line('OBSERVABILITY', 'UNKNOWN', 'restauration éprouvée')], { kind: 'unknown' });
+    assert.equal(epreuve.software, 'NOT_READY');
+    assert.deepEqual(epreuve.softwareUnverified, ['daemon sur un instantané', 'restauration éprouvée']);
+  });
 
   test('depuis le conteneur outils, l’instance vivante se juge : HEALTHY ou DEGRADED avec la raison', () => {
     const ok = summariseReadiness([line('CORE', 'PASS'), line('DEPLOYMENT', 'PASS'), line('LIVE DEPLOYMENT', 'PASS', 'serveur joignable'), line('LIVE DEPLOYMENT', 'PASS', 'daemon en cours')], { kind: 'docker-cli' });
@@ -165,7 +202,8 @@ describe('le résumé : quatre réponses, aucune affirmation invisible', () => {
     assert.equal(r.softwareBlockers, 0);
     assert.equal(r.deployment, 'NOT_READY');
     assert.equal(r.deploymentBlockers, 1);
-    assert.equal(r.integrationsPending, 1);
+    assert.equal(r.integrations, 'ACTION_REQUIRED');
+    assert.deepEqual(r.integrationsPending, ['x']);
     const inconnu = summariseReadiness([line('OBSERVABILITY', 'UNKNOWN')], { kind: 'unknown' });
     assert.equal(inconnu.software, 'NOT_READY');
     assert.equal(inconnu.unknowns, 1);
@@ -186,6 +224,20 @@ describe('le script atlas-production-check ne porte plus les verdicts d’avant 
     assert.match(source, /classifyDaemonRun\(repos\.tasks\.daemonRuns\(2\)/);
     assert.match(source, /deploymentEvidence\(/);
     assert.match(source, /summariseReadiness\(checks, liveContext\)/);
+  });
+
+  test('les cinq anciennes inconnues sont classées : deux preuves du monde réel, une confirmation, deux épreuves jouables par atlas-cli sur instantané', () => {
+    assert.match(source, /'registre global', ledger\.length > 0 \? 'PASS' : 'NOT_YET_OBSERVED'[\s\S]{0,300}'REAL_WORLD_EVIDENCE'/);
+    assert.match(source, /'suivi des réponses', conversations\.length > 0 \? 'PASS' : 'NOT_YET_OBSERVED'[\s\S]{0,300}'REAL_WORLD_EVIDENCE'/);
+    assert.match(source, /'mode IA', 'PASS'[\s\S]{0,400}'OPERATIONAL_CONFIRMATION'/);
+    assert.match(source, /atlas-cli\.sh daemon-check/);
+    assert.match(source, /atlas-cli\.sh restore-check/);
+    const daemonCheck = readFileSync(join(ROOT, 'scripts', 'daemon-main-db-check.ts'), 'utf8');
+    assert.match(daemonCheck, /snapshotDatabase\(sourcePath, dbPath\)/, 'le daemon d’épreuve tourne sur un instantané, jamais sur la source');
+    const restoreCheck = readFileSync(join(ROOT, 'scripts', 'restore-check.ts'), 'utf8');
+    assert.match(restoreCheck, /snapshotDatabase\(config\.paths\.databaseFile, fresh\)/);
+    const wrapper = readFileSync(join(ROOT, 'deployment', 'atlas-cli.sh'), 'utf8');
+    assert.match(wrapper, /daemon-check\)\s+printf 'atlas:daemon-check'/);
   });
 
   test('le Dockerfile embarque les artefacts que le contrôle lit, sans le fichier privé', () => {

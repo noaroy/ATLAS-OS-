@@ -120,6 +120,24 @@ export function backupDatabase(db: Db, destination: string): number {
   }
 }
 
+/**
+ * Un instantane coherent d'une base VIVANTE, sans y ecrire.
+ *
+ * La source est ouverte en lecture seule ; `VACUUM INTO` lit une image
+ * coherente (WAL compris) pendant que le serveur continue d'ecrire. C'est ce
+ * qu'utilisent les epreuves — restauration, daemon — pour travailler sur une
+ * copie fidele de la base canonique sans jamais la toucher. Meme verification
+ * qu'une sauvegarde : non vide, integre, renommee d'un seul geste.
+ */
+export function snapshotDatabase(source: string, destination: string): number {
+  const lecture = new Database(source, { readonly: true });
+  try {
+    return backupDatabase(lecture, destination);
+  } finally {
+    lecture.close();
+  }
+}
+
 /** Copies the file directly — used only when the connection is already closed. */
 export function copyDatabase(source: string, destination: string): number {
   copyFileSync(source, destination);

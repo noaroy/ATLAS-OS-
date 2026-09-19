@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { createLogger, loadConfig, nowIso } from '../packages/core/src/index.ts';
-import { createRepositories, type Repositories } from '../packages/data/src/index.ts';
+import { createRepositories, snapshotDatabase, type Repositories } from '../packages/data/src/index.ts';
 
 const c = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
@@ -112,6 +112,22 @@ const latest = join(dir, copies[0]!.name);
 const ageHours = (Date.now() - copies[0]!.at) / 3_600_000;
 const scratch = mkdtempSync(join(tmpdir(), 'atlas-restore-'));
 const restored = join(scratch, 'restored.db');
+/*
+ * Deux epreuves, parce que la base est vivante.
+ *
+ * La sauvegarde stockee date d'hier soir ; la base a bouge depuis (un tour de
+ * daemon, une tache). La comparer a la source d'aujourd'hui dirait « diverge »
+ * sans rien apprendre. On l'eprouve donc pour ce qu'elle est : un fichier qui
+ * doit se restaurer — non vide, integre, lisible domaine par domaine.
+ *
+ * La fidelite du mecanisme, elle, s'eprouve sur un instantane pris a
+ * l'instant, en lecture seule sur la source : restaure dans un fichier
+ * temporaire, il doit rendre exactement ce que la source contient au meme
+ * moment. Si un ecrivain passe entre les deux lectures, on recommence une
+ * fois ; la source n'est jamais touchee.
+ */
+const fresh = join(scratch, 'fresh.db');
+const freshRestored = join(scratch, 'fresh-restored.db');
 
 console.log(`\n  ${c.bold}ÉPREUVE DE RESTAURATION${c.reset}`);
 console.log(`  ${c.dim}${latest}${c.reset}`);
@@ -141,34 +157,46 @@ try {
   rows.push({ name: 'intégrité SQLite', source: 'ok', restored: 'ok', equal: true });
   rows.push({ name: 'taille (octets)', source: String(statSync(config.paths.databaseFile).size), restored: String(bytes), equal: bytes > 0 });
 
-  // La source d'abord, en lecture seule de fait : on ne lui écrit rien. La
-  // copie est ouverte dans un répertoire temporaire : la base principale n'est
-  // jamais remplacée par cette épreuve.
+  // La sauvegarde stockée : chaque domaine se lit — c'est sa restaurabilité.
   const mainBefore = statSync(config.paths.databaseFile);
-  const source = createRepositories(config.paths.databaseFile, logger);
-  const copy = createRepositories(restored, logger);
-  try {
-    for (const domain of DOMAINS) {
-      const inSource = domain.measure(source);
-      const inCopy = domain.measure(copy);
-      rows.push({
-        name: domain.name,
-        source: String(inSource),
-        restored: String(inCopy),
-        equal: inSource === inCopy,
-      });
+  {
+    const copy = createRepositories(restored, logger);
+    try {
+      const lus = DOMAINS.map((d) => `${d.name} ${d.measure(copy)}`);
+      rows.push({ name: `sauvegarde stockée lisible (${DOMAINS.length} domaines)`, source: 'lisible', restored: 'lisible', equal: true });
+      console.log(`  ${c.dim}${copies[0]!.name} : ${lus.join(' · ')}${c.reset}`);
+    } finally {
+      copy.close();
     }
-    const runSource = daemonFingerprint(source);
-    const runCopy = daemonFingerprint(copy);
-    rows.push({
-      name: 'dernier run du daemon',
-      source: runSource.slice(0, 22),
-      restored: runCopy.slice(0, 22),
-      equal: runSource === runCopy,
-    });
-  } finally {
-    source.close();
-    copy.close();
+  }
+
+  // L'instantané frais, restauré, comparé à la source au même instant.
+  // Un écrivain concurrent peut passer entre les deux lectures : un second
+  // essai lève le doute. La source n'est ouverte qu'en lecture.
+  let essai = 0;
+  for (;;) {
+    essai += 1;
+    for (const f of [fresh, freshRestored]) if (existsSync(f)) rmSync(f);
+    snapshotDatabase(config.paths.databaseFile, fresh);
+    copyFileSync(fresh, freshRestored);
+    const source = createRepositories(config.paths.databaseFile, logger);
+    const copy = createRepositories(freshRestored, logger);
+    const tentative: typeof rows = [];
+    try {
+      for (const domain of DOMAINS) {
+        const inCopy = domain.measure(copy);
+        const inSource = domain.measure(source);
+        tentative.push({ name: domain.name, source: String(inSource), restored: String(inCopy), equal: inSource === inCopy });
+      }
+      const runSource = daemonFingerprint(source);
+      const runCopy = daemonFingerprint(copy);
+      tentative.push({ name: 'dernier run du daemon', source: runSource.slice(0, 22), restored: runCopy.slice(0, 22), equal: runSource === runCopy });
+    } finally {
+      source.close();
+      copy.close();
+    }
+    if (tentative.every((r) => r.equal) || essai >= 2) { rows.push(...tentative); break; }
+    console.log(`  ${c.dim}la source a bougé pendant la lecture : nouvel instantané${c.reset}`);
   }
   const mainAfter = statSync(config.paths.databaseFile);
   rows.push({
@@ -184,14 +212,15 @@ try {
    * champ pointait à côté de la base, tous les domaines paraissaient vides, et
    * le verdict annonçait « vérifiée » sans avoir rien comparé.
    */
-  const sourceVide = rows.every((r) => r.source === '0' || r.source === 'aucun');
+  const mesures = rows.filter((r) => DOMAINS.some((d) => d.name === r.name) || r.name === 'dernier run du daemon');
+  const sourceVide = mesures.every((r) => r.source === '0' || r.source === 'aucun');
 
   ok = divergents.length === 0 && !sourceVide;
   detail = sourceVide
     ? 'base source illisible ou vide : aucune comparaison possible'
     : divergents.length > 0
       ? `divergence(s) : ${divergents.map((d) => `${d.name} ${d.restored}≠${d.source}`).join(' ; ')}`
-      : `${rows.length} domaine(s) identiques à la source`;
+      : `sauvegarde stockée restaurable ; instantané frais : ${rows.length - 2} domaine(s) identiques à la source`;
 
   const width = Math.max(...rows.map((r) => r.name.length));
   for (const row of rows) {

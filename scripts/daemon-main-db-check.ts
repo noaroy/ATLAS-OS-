@@ -19,10 +19,11 @@
  */
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createLogger, loadConfig } from '../packages/core/src/index.ts';
-import { createRepositories, type Repositories } from '../packages/data/src/index.ts';
+import { createRepositories, snapshotDatabase, type Repositories } from '../packages/data/src/index.ts';
 
 const c = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
@@ -31,7 +32,21 @@ const c = {
 
 const logger = createLogger({ level: 'error', pretty: false });
 const config = loadConfig(process.cwd());
-const dbPath = process.env.ATLAS_DB_PATH ?? config.paths.databaseFile;
+/*
+ * L'epreuve tourne sur un INSTANTANE de la base principale, jamais sur elle.
+ *
+ * Sur le serveur, la base canonique est vivante : un daemon y bat. Y deposer
+ * une tache et y lancer un second daemon reviendrait a fermer le tour du
+ * vrai (« arret non consigne »), a lui disputer sa file, et a laisser une
+ * sonde dans la production. L'instantane porte le meme schema, les memes
+ * migrations, les memes donnees : ce qu'on eprouve — demarrage, reprise,
+ * une tache menee au bout, arret propre, aucune donnee commerciale touchee,
+ * integrite — se prouve dessus sans que la source bouge d'un octet.
+ */
+const sourcePath = config.paths.databaseFile;
+const scratch = mkdtempSync(join(tmpdir(), 'atlas-daemon-check-'));
+const dbPath = join(scratch, 'atlas.db');
+const snapshotBytes = snapshotDatabase(sourcePath, dbPath);
 
 const sum = (record: Record<string, number>): number =>
   Object.values(record).reduce((total, n) => total + n, 0);
@@ -61,8 +76,8 @@ const check = (name: string, ok: boolean, detail: string) => {
   results.push({ name, ok, detail });
 };
 
-console.log(`\n  ${c.bold}DAEMON SUR LA BASE PRINCIPALE${c.reset}`);
-console.log(`  ${c.dim}${dbPath}${c.reset}`);
+console.log(`\n  ${c.bold}DAEMON SUR UN INSTANTANÉ DE LA BASE PRINCIPALE${c.reset}`);
+console.log(`  ${c.dim}source ${sourcePath} → instantané ${dbPath} (${snapshotBytes} octets, lecture seule sur la source)${c.reset}`);
 console.log(`  ${c.dim}ATLAS_AI_LIVE=${process.env.ATLAS_AI_LIVE ?? 'false'} · aucun envoi · aucune suppression${c.reset}\n`);
 
 // --- Avant ---
@@ -195,6 +210,7 @@ try {
   }
 } finally {
   repos.close();
+  rmSync(scratch, { recursive: true, force: true });
 }
 
 const width = Math.max(...results.map((r) => r.name.length));
@@ -212,12 +228,12 @@ const receipt = join(config.paths.backupDir, 'daemon-main-db-check.json');
 mkdirSync(config.paths.backupDir, { recursive: true });
 writeFileSync(
   receipt,
-  JSON.stringify({ at: new Date().toISOString(), db: dbPath, ok, checks: results }, null, 2),
+  JSON.stringify({ at: new Date().toISOString(), db: sourcePath, mode: 'snapshot', ok, checks: results }, null, 2),
   'utf8',
 );
 console.log(`  ${c.dim}recu : ${receipt}${c.reset}`);
 console.log(
-  `\n  ${ok ? `${c.green}DAEMON ÉPROUVÉ SUR LA BASE PRINCIPALE${c.reset}` : `${c.red}ÉCHEC${c.reset}`}`
+  `\n  ${ok ? `${c.green}DAEMON ÉPROUVÉ SUR UN INSTANTANÉ DE LA BASE PRINCIPALE${c.reset}` : `${c.red}ÉCHEC${c.reset}`}`
   + ` — ${results.filter((r) => r.ok).length}/${results.length}\n`,
 );
 process.exitCode = ok ? 0 : 1;

@@ -61,7 +61,7 @@ npm run sales:pause -- --reason="…"   /   npm run sales:resume
 npm run client:auto -- --brief=briefs/<client>.json --go   # missions client (V2, inchangé)
 npm run atlas:start / atlas:stop     # sur un poste ; sur le VPS : docker compose … start|stop atlas
 npm run backup / restore-check / db:check / db:migrate
-npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS ·
+npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS · REAL_WORLD_EVIDENCE ·
                                      # LIVE_DEPLOYMENT_STATUS (observé seulement depuis atlas-cli) · EXTERNAL_INTEGRATIONS
 npm run atlas:vps-check              # sur le VPS, lecture seule : système, .env (sans valeurs), conteneurs, réseau, base
 ```
@@ -93,7 +93,8 @@ bash deployment/atlas-cli.sh client-mission status --run=msn_xxx
 bash deployment/atlas-cli.sh client-review --run=msn_xxx
 bash deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
 bash deployment/atlas-cli.sh client-report --run=msn_xxx --partial      # rapport HTML/CSV → out/ sur l'hôte
-bash deployment/atlas-cli.sh backup | restore-check | atlas-status | production-check
+bash deployment/atlas-cli.sh backup | restore-check | daemon-check | atlas-status | production-check
+                                                     # restore-check et daemon-check travaillent sur un instantané : la base canonique ne bouge pas
 bash deployment/atlas-cli.sh --print client-mission status --run=msn_xxx   # la commande Docker, sans l'exécuter
 ```
 

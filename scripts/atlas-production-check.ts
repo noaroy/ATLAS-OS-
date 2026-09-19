@@ -63,12 +63,19 @@ const c = {
  * plus, ce qui est l'etat voulu en production. Le dire FAIL ferait d'une
  * dependance de sonde un bloqueur logiciel.
  */
-type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE';
-interface Check { area: string; name: string; verdict: Verdict; detail: string }
+/**
+ * `NOT_YET_OBSERVED` est la sixieme : ce que seule une campagne reelle
+ * produit — un registre rempli, des reponses. Son absence n'est ni un echec
+ * ni une inconnue logicielle : le logiciel est pret, le monde n'a pas encore
+ * repondu. Le resume le dit a part, sous REAL_WORLD_EVIDENCE.
+ */
+type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED';
+type Category = 'SOFTWARE_VERIFICATION' | 'OPERATIONAL_CONFIRMATION' | 'EXTERNAL_INTEGRATION' | 'REAL_WORLD_EVIDENCE';
+interface Check { area: string; name: string; verdict: Verdict; detail: string; category: Category }
 
 const checks: Check[] = [];
-const add = (area: string, name: string, verdict: Verdict, detail: string) =>
-  checks.push({ area, name, verdict, detail });
+const add = (area: string, name: string, verdict: Verdict, detail: string, category: Category = 'SOFTWARE_VERIFICATION') =>
+  checks.push({ area, name, verdict, detail, category });
 
 /** Exécute une garde et attend qu'elle refuse. Un refus est la réussite. */
 const mustRefuse = (area: string, name: string, refused: boolean, detail: string) =>
@@ -284,12 +291,14 @@ try {
       ? 'FAIL' : 'PASS',
     'un dépassement met en pause, il ne fait pas échouer');
 
-  // Le mode réel est un choix, pas un défaut : on rapporte lequel est actif.
-  add('AI ORCHESTRATION', 'mode IA',
-    config.ai.live ? 'UNKNOWN' : 'PASS',
+  // Le mode réel est un choix d'exploitation que le logiciel connaît : on le
+  // rapporte tel quel, avec les plafonds qui l'encadrent. Ce n'est pas une
+  // inconnue logicielle, et il ne bloque rien.
+  add('AI ORCHESTRATION', 'mode IA', 'PASS',
     config.ai.live
-      ? 'ATLAS_AI_LIVE=true : les appels sont facturés, à confirmer volontairement'
-      : 'ATLAS_AI_LIVE=false : aucune dépense sans décision');
+      ? `ATLAS_AI_LIVE=true : appels facturés, sous plafonds — jour ${config.ai.dailyBudgetUsd} $ · mission ${config.budget.maxMissionCostUsd} $`
+      : 'ATLAS_AI_LIVE=false : aucune dépense sans décision',
+    'OPERATIONAL_CONFIRMATION');
 
   // ─── INGÉNIERIE ──────────────────────────────────────────────────────────
 
@@ -409,21 +418,24 @@ try {
   // rien du vrai ; un vrai binaire installe ne dit rien de son authentification.
   // Les confondre ferait annoncer « disponible » un poste qui s'arretera a la
   // premiere requete, apres avoir cree un worktree et pose un bail.
+  // Dans le conteneur outils, l'ingenierie n'existe pas par construction :
+  // pas de binaire, pas de git, pas de depot. Ce n'est pas une action qui
+  // attend — c'est l'etat voulu en production. Les trois sondes ne s'appliquent pas.
+  const ingenierieHorsProduction = process.env.ATLAS_CLI_CONTEXT === 'docker' && !cc.available;
+  const horsProd = 'ingenierie hors production Docker (ni binaire, ni git, ni depot dans l image) — voulu ; s eprouve sur un poste';
   add('CLAUDE CODE REAL BINARY', 'binaire reel',
-    cc.available ? 'PASS' : 'MANUAL_ACTION_REQUIRED',
+    cc.available ? 'PASS' : ingenierieHorsProduction ? 'NOT_APPLICABLE' : 'MANUAL_ACTION_REQUIRED',
     cc.available
       ? `detecte : ${cc.detail}`
-      : 'npm i -g @anthropic-ai/claude-code');
+      : ingenierieHorsProduction ? horsProd : 'npm i -g @anthropic-ai/claude-code');
 
   const ccAuth = detectClaudeCodeAuth(cc);
   add('CLAUDE CODE REAL BINARY', 'authentification',
-    ccAuth.state === 'READY' ? 'PASS'
-      : ccAuth.state === 'MANUAL_ACTION_REQUIRED' ? 'MANUAL_ACTION_REQUIRED'
-        : 'MANUAL_ACTION_REQUIRED',
-    ccAuth.detail);
+    ccAuth.state === 'READY' ? 'PASS' : ingenierieHorsProduction ? 'NOT_APPLICABLE' : 'MANUAL_ACTION_REQUIRED',
+    ingenierieHorsProduction && ccAuth.state !== 'READY' ? horsProd : ccAuth.detail);
 
-  let smokeVerdict: Verdict = 'MANUAL_ACTION_REQUIRED';
-  let smokeDetail = 'npm run claude-code:smoke — une mission minuscule de bout en bout, '
+  let smokeVerdict: Verdict = ingenierieHorsProduction ? 'NOT_APPLICABLE' : 'MANUAL_ACTION_REQUIRED';
+  let smokeDetail = ingenierieHorsProduction ? horsProd : 'npm run claude-code:smoke — une mission minuscule de bout en bout, '
     + 'sans credit supplementaire';
   try {
     const smoke = JSON.parse(
@@ -513,10 +525,11 @@ try {
         : 'aucune instance configuree — renseigner SEARXNG_BASE_URL');
 
   const ledger = repos.sales.ledgerDomains();
-  add('SALES', 'registre global', ledger.length > 0 ? 'PASS' : 'UNKNOWN',
+  add('SALES', 'registre global', ledger.length > 0 ? 'PASS' : 'NOT_YET_OBSERVED',
     ledger.length > 0
       ? `${ledger.length} entreprise(s), append-only`
-      : 'registre vide : rien à vérifier');
+      : 'registre vide : aucune campagne réelle n’a encore eu lieu sur cette base',
+    'REAL_WORLD_EVIDENCE');
 
   mustRefuse('SALES', 'portail d’envoi',
     !evaluateSendGate(
@@ -536,10 +549,11 @@ try {
       : 'ATLAS_SALES_HUMAN_APPROVAL=false : des messages peuvent partir seuls');
 
   const conversations = repos.conversations.all();
-  add('SALES', 'suivi des réponses', conversations.length > 0 ? 'PASS' : 'UNKNOWN',
+  add('SALES', 'suivi des réponses', conversations.length > 0 ? 'PASS' : 'NOT_YET_OBSERVED',
     conversations.length > 0
       ? `${conversations.length} conversation(s) suivies`
-      : 'aucune conversation : rien à vérifier');
+      : 'aucune conversation : aucune réponse réelle n’a encore été reçue sur cette base',
+    'REAL_WORLD_EVIDENCE');
 
   // ─── GMAIL ───────────────────────────────────────────────────────────────
 
@@ -1009,7 +1023,7 @@ try {
   // Le run reel sur la base principale, atteste par son recu.
   const daemonReceiptPath = join(config.paths.backupDir, 'daemon-main-db-check.json');
   let daemonVerdict: Verdict = 'UNKNOWN';
-  let daemonDetail = 'jamais eprouve — npm run atlas:daemon-check';
+  let daemonDetail = 'jamais eprouve — bash deployment/atlas-cli.sh daemon-check (sur un instantane de la base : la base canonique ne bouge pas)';
   try {
     const receipt = JSON.parse(readFileSync(daemonReceiptPath, 'utf8')) as {
       at: string; ok: boolean; checks: Array<{ name: string; ok: boolean }>;
@@ -1020,7 +1034,7 @@ try {
       ? `${receipt.checks.length}/${receipt.checks.length} le ${receipt.at.slice(0, 16).replace('T', ' ')}`
       : `echec(s) : ${failed.map((k) => k.name).join(', ')}`;
   } catch { /* le recu n'existe pas : l'epreuve n'a pas eu lieu */ }
-  add('DAEMON MAIN DB', 'run reel sur la base principale', daemonVerdict, daemonDetail);
+  add('DAEMON MAIN DB', 'daemon sur un instantane', daemonVerdict, daemonDetail);
 
   /**
    * Toute depense reelle est-elle visible ?
@@ -1114,7 +1128,7 @@ try {
   // reçu vieux de plus d'un mois ne prouve plus grand-chose : les sauvegardes
   // ont changé depuis.
   let restoreVerdict: Verdict = 'UNKNOWN';
-  let restoreDetail = 'jamais éprouvée : lancer npm run restore-check';
+  let restoreDetail = 'jamais éprouvée : bash deployment/atlas-cli.sh restore-check (lecture seule sur la base canonique)';
   try {
     const receipt = join(config.paths.backupDir, 'restore-check.json');
     if (existsSync(receipt)) {
@@ -1222,6 +1236,7 @@ try {
     POST_DEPLOYMENT: `${c.dim}APRES ${c.reset}`,
     UNKNOWN: `${c.amber}?     ${c.reset}`,
     NOT_APPLICABLE: `${c.dim}N/A   ${c.reset}`,
+    NOT_YET_OBSERVED: `${c.dim}PAS ENCORE${c.reset}`,
   };
 
   for (const area of areas) {
@@ -1267,10 +1282,11 @@ try {
   console.log(`  ${c.bold}UNKNOWN CRITICAL STATES   = ${unknowns.length}${c.reset}\n`);
 
   const feu = (ok: boolean, label: string) => `${ok ? c.green : c.red}${label}${c.reset}`;
-  console.log(`  ${c.bold}SOFTWARE_READINESS     = ${feu(resume.software === 'READY', resume.software)}${c.reset}`);
+  console.log(`  ${c.bold}SOFTWARE_READINESS     = ${feu(resume.software === 'READY', resume.software)}${c.reset}${resume.softwareUnverified.length ? `  ${c.dim}— épreuves non jouées : ${resume.softwareUnverified.join(', ')}${c.reset}` : ''}`);
   console.log(`  ${c.bold}DEPLOYMENT_READINESS   = ${feu(resume.deployment === 'READY', resume.deployment)}${c.reset}`);
   console.log(`  ${c.bold}LIVE_DEPLOYMENT_STATUS = ${resume.live === 'HEALTHY' ? c.green : resume.live === 'DEGRADED' ? c.red : c.amber}${resume.live}${c.reset}  ${c.dim}— ${resume.liveDetail}${c.reset}`);
-  console.log(`  ${c.bold}EXTERNAL_INTEGRATIONS  = ${resume.integrationsPending === 0 ? `${c.green}COMPLETE` : `${c.cyan}${resume.integrationsPending} ACTION(S) MANUELLE(S)`}${c.reset}`);
+  console.log(`  ${c.bold}EXTERNAL_INTEGRATIONS  = ${resume.integrations === 'COMPLETE' ? `${c.green}COMPLETE` : `${c.cyan}ACTION_REQUIRED (${resume.integrationsPending.join(', ')})`}${c.reset}`);
+  console.log(`  ${c.bold}REAL_WORLD_EVIDENCE    = ${resume.realWorld === 'OBSERVED' ? `${c.green}OBSERVED` : `${c.amber}NOT_YET_OBSERVED (${resume.realWorldMissing.join(', ')})`}${c.reset}  ${c.dim}— ${resume.realWorld === 'OBSERVED' ? 'des campagnes réelles ont laissé leur trace' : 'aucune campagne réelle n’a encore été menée : rien ici ne prétend qu’ATLAS est commercialement éprouvé'}${c.reset}`);
 
   if (blockers.length > 0) {
     console.log(`\n  ${c.bold}BLOQUEURS LOGICIELS${c.reset} — ${blockers.length}`);

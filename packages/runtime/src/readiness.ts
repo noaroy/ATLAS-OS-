@@ -181,9 +181,26 @@ export function deploymentEvidence(a: DeploymentArtefacts): EvidenceItem[] {
 
 // ─── Le résumé ───────────────────────────────────────────────────────────────
 
-export type CheckVerdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE';
+export type CheckVerdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'NOT_YET_OBSERVED';
 
-export interface CheckLine { area: string; verdict: CheckVerdict; name: string; detail: string }
+/**
+ * Ce qu'un contrôle vérifie, et donc ce qu'un « je ne sais pas » veut dire.
+ *
+ *   SOFTWARE_VERIFICATION    le code, ses gardes, ses épreuves reproductibles.
+ *                            Un UNKNOWN ici bloque le logiciel : l'épreuve
+ *                            existe et n'a pas été jouée.
+ *   OPERATIONAL_CONFIRMATION un choix d'exploitation que le logiciel connaît
+ *                            déjà (ATLAS_AI_LIVE=true). Ce n'est pas une
+ *                            inconnue : c'est un fait, rapporté tel quel.
+ *   EXTERNAL_INTEGRATION     un service tiers qui attend une main humaine
+ *                            (Gmail, moteur de recherche).
+ *   REAL_WORLD_EVIDENCE      ce que seule une campagne réelle produit — un
+ *                            registre rempli, des réponses. Absent, c'est
+ *                            « pas encore observé », jamais « pas prêt ».
+ */
+export type CheckCategory = 'SOFTWARE_VERIFICATION' | 'OPERATIONAL_CONFIRMATION' | 'EXTERNAL_INTEGRATION' | 'REAL_WORLD_EVIDENCE';
+
+export interface CheckLine { area: string; verdict: CheckVerdict; name: string; detail: string; category?: CheckCategory }
 
 /** Les aires qui parlent du déploiement, et non du logiciel. */
 export const DEPLOYMENT_AREAS: ReadonlySet<string> = new Set(['DEPLOYMENT', 'LINUX COMPATIBILITY']);
@@ -198,11 +215,17 @@ export type LiveContext =
 export interface ReadinessSummary {
   software: 'READY' | 'NOT_READY';
   softwareBlockers: number;
+  /** Les épreuves logicielles non jouées : elles bloquent, et se nomment. */
+  softwareUnverified: string[];
   deployment: 'READY' | 'NOT_READY';
   deploymentBlockers: number;
   live: 'HEALTHY' | 'DEGRADED' | 'LOCAL_INSTANCE' | 'NOT_OBSERVABLE_HERE';
   liveDetail: string;
-  integrationsPending: number;
+  integrations: 'COMPLETE' | 'ACTION_REQUIRED';
+  integrationsPending: string[];
+  /** Ce qu'une campagne réelle produirait, et qui manque encore. */
+  realWorld: 'OBSERVED' | 'NOT_YET_OBSERVED';
+  realWorldMissing: string[];
   unknowns: number;
 }
 
@@ -217,16 +240,23 @@ export interface ReadinessSummary {
  * on dit qu'on ne la voit pas.
  */
 export function summariseReadiness(checks: readonly CheckLine[], context: LiveContext): ReadinessSummary {
-  const software = checks.filter((c) => !DEPLOYMENT_AREAS.has(c.area) && c.area !== LIVE_AREA);
+  const categorie = (c: CheckLine): CheckCategory => c.category ?? (c.verdict === 'MANUAL_ACTION_REQUIRED' ? 'EXTERNAL_INTEGRATION' : 'SOFTWARE_VERIFICATION');
+  const software = checks.filter((c) => !DEPLOYMENT_AREAS.has(c.area) && c.area !== LIVE_AREA && categorie(c) === 'SOFTWARE_VERIFICATION');
   const deployment = checks.filter((c) => DEPLOYMENT_AREAS.has(c.area));
   const live = checks.filter((c) => c.area === LIVE_AREA);
   const softwareBlockers = software.filter((c) => c.verdict === 'FAIL').length;
   const unknowns = checks.filter((c) => c.verdict === 'UNKNOWN').length;
-  // Un « je ne sais pas » sur le logiciel bloque le logiciel ; sur l'instance
-  // vivante (une table des montages illisible), il se lit dans LIVE, pas ici.
-  const softwareUnknowns = software.filter((c) => c.verdict === 'UNKNOWN').length;
+  // Un « je ne sais pas » sur une épreuve logicielle bloque le logiciel : elle
+  // existe et n'a pas été jouée. Un registre vide, une réponse jamais reçue,
+  // un choix d'exploitation ne sont pas des inconnues logicielles.
+  const softwareUnverified = software.filter((c) => c.verdict === 'UNKNOWN').map((c) => c.name);
   const deploymentBlockers = deployment.filter((c) => c.verdict === 'FAIL').length;
-  const integrationsPending = checks.filter((c) => c.verdict === 'MANUAL_ACTION_REQUIRED').length;
+  const integrationsPending = checks
+    .filter((c) => c.verdict === 'MANUAL_ACTION_REQUIRED' || (categorie(c) === 'EXTERNAL_INTEGRATION' && c.verdict !== 'PASS' && c.verdict !== 'NOT_APPLICABLE'))
+    .map((c) => c.name);
+  const realWorldMissing = checks
+    .filter((c) => categorie(c) === 'REAL_WORLD_EVIDENCE' && c.verdict !== 'PASS')
+    .map((c) => c.name);
 
   let liveState: ReadinessSummary['live'];
   let liveDetail: string;
@@ -245,13 +275,17 @@ export function summariseReadiness(checks: readonly CheckLine[], context: LiveCo
   }
 
   return {
-    software: softwareBlockers === 0 && softwareUnknowns === 0 ? 'READY' : 'NOT_READY',
+    software: softwareBlockers === 0 && softwareUnverified.length === 0 ? 'READY' : 'NOT_READY',
     softwareBlockers,
+    softwareUnverified,
     deployment: deploymentBlockers === 0 ? 'READY' : 'NOT_READY',
     deploymentBlockers,
     live: liveState,
     liveDetail,
-    integrationsPending,
+    integrations: integrationsPending.length === 0 ? 'COMPLETE' : 'ACTION_REQUIRED',
+    integrationsPending: [...new Set(integrationsPending)],
+    realWorld: realWorldMissing.length === 0 ? 'OBSERVED' : 'NOT_YET_OBSERVED',
+    realWorldMissing,
     unknowns,
   };
 }

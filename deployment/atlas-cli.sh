@@ -7,7 +7,7 @@
 #   ./deployment/atlas-cli.sh client-mission status --run=msn_…
 #   ./deployment/atlas-cli.sh client-review --run=msn_…
 #   ./deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
-#   ./deployment/atlas-cli.sh backup | restore-check | atlas-status | production-check
+#   ./deployment/atlas-cli.sh backup | restore-check | daemon-check | atlas-status | production-check
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -50,6 +50,7 @@ npm_script_of() {
     production-check) printf 'atlas:production-check' ;;
     backup)           printf 'backup' ;;
     restore-check)    printf 'restore-check' ;;
+    daemon-check)     printf 'atlas:daemon-check' ;;
     db-check)         printf 'db:check' ;;
     sales-status)     printf 'sales:status' ;;
     *) return 1 ;;

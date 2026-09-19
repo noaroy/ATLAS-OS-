@@ -229,6 +229,7 @@ export {
   buildSalesDashboard, gmailLightOf, GMAIL_EVIDENCE_MAX_AGE_MINUTES,
   type SalesDashboard, type DashboardRange, type SystemLight, type GmailLight, type GmailStatusCode, type GmailEvidence,
 } from './sales-dashboard.ts';
+export { runManualSendLot, type ManualSendItem, type ManualSendResult, type ManualSendOptions, type ManualSendReport } from './manual-send.ts';
 export {
   classifyDaemonRun, deploymentEvidence, summariseReadiness, gmailSendReadiness, DAEMON_STALE_AFTER_MS, DEPLOYMENT_AREAS, LIVE_AREA, GMAIL_AUTH_AREA, GMAIL_SEND_AREA,
   type DaemonRunView, type DaemonRunState, type DeploymentArtefacts, type EvidenceItem, type CheckVerdict, type CheckLine, type LiveContext, type ReadinessSummary, type GmailSendReadinessInput,

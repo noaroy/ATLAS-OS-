@@ -566,3 +566,7 @@ export * from './client-pages.ts';
 export * from './client-triage.ts';
 
 export * from './sales-engine.ts';
+export {
+  evaluateManualSendLot, normaliseAddress, sameAddress, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE,
+  type ManualSendLotInput, type ManualSendLotVerdict, type ManualSendBlock, type ManualSendBlockCode,
+} from './manual-send-guard.ts';

@@ -11,6 +11,7 @@
 #   ./deployment/atlas-cli.sh gmail-check | gmail-read-check                # Gmail en lecture seule, rien n'est envoyé
 #   ./deployment/atlas-cli.sh inbox-initial-sync                             # premier import : conversations depuis le registre, puis lecture de la boîte
 #   ./deployment/atlas-cli.sh sales-inbox [sync|record …] | inbox-sync       # la boîte commerciale ; la lecture Gmail seule (rejouable, sans trou)
+#   ./deployment/atlas-cli.sh send-approved --file=out/lot.json [--send]  # envoi manuel approuvé ; en INTERNAL_TEST, vers GMAIL_USER seulement, confirmé [o/N]
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -60,6 +61,7 @@ npm_script_of() {
     gmail-read-check) printf 'gmail:read-check' ;;
     sales-inbox)      printf 'sales:inbox' ;;
     inbox-sync)       printf 'sales:inbox-sync' ;;
+    send-approved)    printf 'sales:send-approved' ;;
     *) return 1 ;;
   esac
 }

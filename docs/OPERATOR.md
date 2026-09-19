@@ -296,6 +296,50 @@ avant toute politique et quel que soit le jeton — un jeton portant
 en `INTERNAL_TEST_MODE`, et le daemon n'a qu'un fournisseur à blanc hors
 PRODUCTION.
 
+## Premier envoi réel : le self-test, vers sa propre boîte
+
+Tant que `ATLAS_ENGINE_MODE=INTERNAL_TEST`, le chemin manuel
+`sales:send-approved --send` **ne peut écrire qu'à `GMAIL_USER`** : un lot
+qui contient une seule autre adresse est refusé en entier
+(`INTERNAL_TEST_RECIPIENT_BLOCKED`), avant toute lecture de boîte,
+réservation ou écriture. Pas de liste d'exceptions, pas de variable de
+contournement : PRODUCTION est le seul mode qui écrit à quelqu'un d'autre.
+La porte (`ATLAS_OUTBOUND_ENABLED`) reste prioritaire. Le daemon, lui, ne
+change pas : hors PRODUCTION il n'a qu'un expéditeur à blanc.
+
+Ordre des gardes, dans `runManualSendLot` (packages/runtime/src/manual-send.ts),
+éprouvé avec le vrai transport dont seul `fetch` est intercepté :
+garde de lot (porte, puis destinataires) → échange de jeton → **confirmation
+au clavier** (destination, nombre, mode) → par message : transport autorisé,
+registre, déjà parti ?, réponse reçue ?, clé d'idempotence → brouillon →
+approbation → réservation → envoi → registre.
+
+```bash
+# 1. Le lot : un seul message, vers GMAIL_USER (le domaine sert de clé de registre ; choisir un nom qui ne ressemble à aucun prospect)
+cat > out/self-test.json <<'EOF'
+[{ "domain": "selftest.atlas.invalid", "companyName": "ATLAS self-test", "recipient": "<GMAIL_USER>",
+   "subject": "ATLAS — self-test", "bodyText": "Premier envoi réel, vers moi-même.", "purpose": "FIRST_TOUCH" }]
+EOF
+
+# 2. Simulation : la garde, le registre, la clé — rien n'est écrit ; une NOTE dit ce que --send refuserait
+bash deployment/atlas-cli.sh send-approved --file=out/self-test.json
+
+# 3. Ouvrir la porte, pour ce seul envoi : ATLAS_OUTBOUND_ENABLED=true dans /opt/atlas/.env
+#    (le conteneur outils lit .env à chaque commande ; le daemon, non recréé, garde false)
+
+# 4. L'envoi, confirmé au clavier : destination / nombre / mode INTERNAL_TEST SELF-TEST, puis [o/N]
+bash deployment/atlas-cli.sh send-approved --file=out/self-test.json --send
+
+# 5. Refermer la porte : ATLAS_OUTBOUND_ENABLED=false dans /opt/atlas/.env
+
+# 6. Vérifier : registre (MESSAGES SENT 1), réception (le message dans la boîte), anti-doublon (rejouer refuse)
+bash deployment/atlas-cli.sh production-check | grep -E 'MESSAGES_SENT|GMAIL_SEND '
+bash deployment/atlas-cli.sh gmail-read-check --max=5
+bash deployment/atlas-cli.sh send-approved --file=out/self-test.json --send   # → BLOCKED : deja contactee / déjà envoyé
+```
+Sans terminal (cron, script), `--yes` tient lieu de confirmation — tapé par
+une personne ; il ne touche pas à la garde de lot.
+
 ## Premier lancement sûr (§68)
 
 1. `npm run atlas:status` (ou, sur le VPS, `bash deployment/vps-check.sh`) →

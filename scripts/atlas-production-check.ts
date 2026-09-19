@@ -29,6 +29,7 @@ import {
 } from '../packages/runtime/src/index.ts';
 import { pricingFor, currentPricingConfig } from '../packages/llm/src/index.ts';
 import { buildAtlasOverview } from '../packages/server/src/http/atlas-overview.ts';
+import { classifyDaemonRun, deploymentEvidence, summariseReadiness, type LiveContext } from '../packages/runtime/src/readiness.ts';
 import { canTransitionLoop, evaluateSendGate } from '../packages/departments/src/index.ts';
 
 const c = {
@@ -55,7 +56,14 @@ const c = {
  * ferait croire au proprietaire qu'il peut la faire aujourd'hui. Elle est ni
  * l'un ni l'autre : elle attend un deploiement, et se nomme ainsi.
  */
-type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN';
+/**
+ * `NOT_APPLICABLE` est la cinquieme : une sonde qui n'a pas de sens dans ce
+ * runtime. L'isolation par worktree git, eprouvee depuis un conteneur sans
+ * git ni depot, n'echoue pas : elle ne s'applique pas — et l'ingenierie non
+ * plus, ce qui est l'etat voulu en production. Le dire FAIL ferait d'une
+ * dependance de sonde un bloqueur logiciel.
+ */
+type Verdict = 'PASS' | 'FAIL' | 'MANUAL_ACTION_REQUIRED' | 'POST_DEPLOYMENT' | 'UNKNOWN' | 'NOT_APPLICABLE';
 interface Check { area: string; name: string; verdict: Verdict; detail: string }
 
 const checks: Check[] = [];
@@ -303,10 +311,22 @@ try {
     config.engineering.maxFilesChanged > 0 && config.engineering.maxDiffLines > 0 ? 'PASS' : 'FAIL',
     `${config.engineering.maxFilesChanged} fichiers · ${config.engineering.maxDiffLines} lignes maximum`);
 
-  // Isolation : vérifiée en créant réellement un worktree jetable.
+  // Isolation : vérifiée en créant réellement un worktree jetable — quand git
+  // est là. Dans le conteneur (image dist-only, sans git ni dépôt), l'ingénierie
+  // ne peut pas s'exécuter : `repoRootOf` rend null et la tâche échoue en
+  // NOT_A_REPOSITORY, sans rien toucher. C'est l'état voulu en production, et
+  // la sonde ne s'applique pas. Relevé sur le VPS : « spawnSync git ENOENT »
+  // comptait comme un bloqueur logiciel.
+  const gitDisponible = spawnSync('git', ['--version'], { encoding: 'utf8', timeout: 10_000 }).status === 0;
   let isolated = false;
   let isolationDetail = 'git worktree indisponible';
-  try {
+  let isolationVerdict: Verdict = 'FAIL';
+  if (!gitDisponible) {
+    isolationVerdict = 'NOT_APPLICABLE';
+    isolationDetail = process.env.ATLAS_CLI_CONTEXT === 'docker'
+      ? 'git absent du conteneur : l’ingénierie ne peut pas s’exécuter ici (NOT_A_REPOSITORY), aucune auto-modification possible — la sonde vaut sur un poste avec git'
+      : 'git absent de cette machine : la sonde d’isolation ne peut pas être éprouvée ici';
+  } else try {
     const demo = join(scratch, 'repo');
     execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: mkdirp(demo) });
     execFileSync('git', ['config', 'user.email', 'c@a.local'], { cwd: demo });
@@ -322,10 +342,11 @@ try {
       ? 'écrire dans le worktree ne touche pas le dépôt'
       : 'le dépôt principal a bougé';
     execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: demo });
+    isolationVerdict = isolated ? 'PASS' : 'FAIL';
   } catch (error) {
     isolationDetail = error instanceof Error ? error.message.slice(0, 80) : 'échec';
   }
-  add('ENGINEERING', 'isolation du workspace', isolated ? 'PASS' : 'FAIL', isolationDetail);
+  add('ENGINEERING', 'isolation du workspace', isolationVerdict, isolationDetail);
 
   add('ENGINEERING', 'application sous approbation',
     scratchRepos.tasks.workspacesInState('APPROVED_TO_APPLY').length === 0 ? 'PASS' : 'PASS',
@@ -770,9 +791,16 @@ try {
     'l’envoi commercial et le paiement restent des décisions, même au niveau 3');
 
   const envFile = join(process.cwd(), '.env');
-  const gitignore = existsSync(join(process.cwd(), '.gitignore'))
-    ? execFileSync('git', ['check-ignore', '.env'], { cwd: process.cwd(), encoding: 'utf8' }).trim()
-    : '';
+  // Par git quand il est là ; par lecture du .gitignore sinon (le conteneur n'a pas git).
+  const gitignore = (() => {
+    const file = join(process.cwd(), '.gitignore');
+    if (!existsSync(file)) return '';
+    try {
+      return execFileSync('git', ['check-ignore', '.env'], { cwd: process.cwd(), encoding: 'utf8' }).trim();
+    } catch {
+      return /^\.env\s*$/m.test(readFileSync(file, 'utf8')) ? '.env' : '';
+    }
+  })();
   /**
    * L'ecran de gestion expose l'etat complet du systeme : il ne doit pas etre
    * lisible sans session.
@@ -867,11 +895,14 @@ try {
     run
       ? `dernier demarrage ${run.startedAt.slice(0, 19).replace('T', ' ')}`
       : 'jamais lance sur cette base — npm run atlas:daemon-check');
-  add('OBSERVABILITY', 'arret journalise', run?.stoppedAt ? 'PASS' : 'FAIL',
-    run?.stoppedAt
-      ? `dernier arret ${run.stoppedAt.slice(0, 19).replace('T', ' ')}`
-      : run ? 'run laisse ouvert : une reprise le croirait vivant'
-        : 'jamais lance — npm run atlas:daemon-check');
+  // Un tour ouvert n'est pas un defaut de journal quand le daemon bat : c'est
+  // le journal qui dit « en cours ». Seul un tour ouvert SANS battement est un
+  // arret non consigne — et le prochain demarrage le fermera, ce que le tour
+  // precedent atteste quand c'est deja arrive.
+  const tourDaemon = classifyDaemonRun(repos.tasks.daemonRuns(2), new Date());
+  add('OBSERVABILITY', 'arret journalise',
+    tourDaemon.state === 'RUNNING' || tourDaemon.state === 'STOPPED_CLEANLY' ? 'PASS' : 'FAIL',
+    `${tourDaemon.state} — ${tourDaemon.detail}`);
 
   // Les evenements de tache : la file sans son historique ne se diagnostique pas.
   const doneRecent = repos.tasks.list({ status: 'DONE', limit: 1 })[0];
@@ -1124,22 +1155,59 @@ try {
   add('LINUX COMPATIBILITY', 'chemins et processus', 'PASS',
     'chemins resolus par node:path, arborescence tuee par groupe ou taskkill selon la plateforme');
 
-  const plan = join(process.cwd(), 'docs', 'vps-deployment.md');
-  let planCovers = false;
-  if (existsSync(plan)) {
-    const text = readFileSync(plan, 'utf8');
-    // Un fichier présent ne suffit pas : on vérifie qu'il traite les sujets qui
-    // font échouer une bascule, pas qu'il existe.
-    const required = ['systemd', 'EnvironmentFile', 'backup', 'SIGTERM', 'SearXNG', 'restaur'];
-    const missing = required.filter((topic) => !text.toLowerCase().includes(topic.toLowerCase()));
-    planCovers = missing.length === 0;
-    add('VPS DEPLOYMENT PLAN', 'plan de déploiement', planCovers ? 'PASS' : 'FAIL',
-      planCovers
-        ? `${plan.split(/[\/]/).slice(-2).join('/')} — service, secrets, sauvegarde, arrêt, surveillance`
-        : `plan incomplet : ${missing.join(', ')} non traité(s)`);
+  // Le déploiement, d'après ce qui déploie vraiment : Compose, Dockerfile,
+  // guide opérateur. Le plan systemd d'avant Docker n'est plus la référence.
+  const lire = (rel: string): string | null => {
+    const f = join(process.cwd(), ...rel.split('/'));
+    return existsSync(f) ? readFileSync(f, 'utf8') : null;
+  };
+  for (const item of deploymentEvidence({
+    compose: lire('deployment/docker-compose.yml'),
+    dockerfile: lire('deployment/Dockerfile'),
+    operatorGuide: lire('docs/OPERATOR.md'),
+  })) {
+    add('DEPLOYMENT', item.name, item.ok ? 'PASS' : 'FAIL', item.detail);
+  }
+
+  // L'instance vivante, observée seulement là où on la voit : depuis le
+  // conteneur outils, sur le même volume et le même réseau que le serveur.
+  // Ailleurs, on ne prétend rien.
+  const contexteDocker = process.env.ATLAS_CLI_CONTEXT === 'docker';
+  const healthzInterne = await (async () => {
+    try {
+      const r = await fetch(`${config.server.internalUrl}/healthz`, { signal: AbortSignal.timeout(3_000) });
+      return r.ok ? 'OK' : `HTTP ${r.status}`;
+    } catch {
+      return 'INJOIGNABLE';
+    }
+  })();
+  let liveContext: LiveContext = { kind: 'unknown' };
+  if (contexteDocker) {
+    liveContext = { kind: 'docker-cli' };
+    add('LIVE DEPLOYMENT', 'serveur joignable', healthzInterne === 'OK' ? 'PASS' : 'FAIL',
+      `${config.server.internalUrl}/healthz → ${healthzInterne}`);
+    add('LIVE DEPLOYMENT', 'daemon en cours', tourDaemon.state === 'RUNNING' ? 'PASS' : 'FAIL', tourDaemon.detail);
+    // /data doit être un point de montage : la base vit dans le volume, pas dans la couche du conteneur.
+    let monte: boolean | null = null;
+    try {
+      const mounts = readFileSync('/proc/self/mountinfo', 'utf8');
+      monte = mounts.split('\n').some((line) => line.split(' ')[4] === config.paths.dataDir);
+    } catch { monte = null; }
+    add('LIVE DEPLOYMENT', 'base sur le volume',
+      monte === true ? 'PASS' : monte === false ? 'FAIL' : 'UNKNOWN',
+      monte === true ? `${config.paths.dataDir} est un point de montage (volume) · base ${config.paths.databaseFile}`
+        : monte === false ? `${config.paths.dataDir} n’est pas un point de montage : la base serait perdue avec le conteneur`
+          : 'table des montages illisible');
+    const envDansImage = existsSync(join(process.cwd(), '.env'));
+    add('LIVE DEPLOYMENT', 'secrets hors image', envDansImage ? 'FAIL' : 'PASS',
+      envDansImage ? `${join(process.cwd(), '.env')} présent dans l’image : un secret copié dans une couche est un secret publié`
+        : 'aucun .env dans l’image ; les variables viennent de Compose (env_file)');
   } else {
-    add('VPS DEPLOYMENT PLAN', 'plan de déploiement', 'FAIL',
-      'aucun plan écrit : service, redémarrage, secrets, sauvegarde, surveillance');
+    liveContext = { kind: 'local', serverReachable: healthzInterne === 'OK' };
+    add('LIVE DEPLOYMENT', 'instance observée', 'POST_DEPLOYMENT',
+      healthzInterne === 'OK'
+        ? `un serveur répond sur ${config.server.internalUrl} : instance locale — le VPS s’observe par atlas-cli`
+        : 'le VPS ne se voit pas d’ici : bash deployment/atlas-cli.sh production-check');
   }
 
   // ─── RENDU ───────────────────────────────────────────────────────────────
@@ -1153,6 +1221,7 @@ try {
     MANUAL_ACTION_REQUIRED: `${c.cyan}MANUEL${c.reset}`,
     POST_DEPLOYMENT: `${c.dim}APRES ${c.reset}`,
     UNKNOWN: `${c.amber}?     ${c.reset}`,
+    NOT_APPLICABLE: `${c.dim}N/A   ${c.reset}`,
   };
 
   for (const area of areas) {
@@ -1174,34 +1243,34 @@ try {
   const unknowns = checks.filter((check) => check.verdict === 'UNKNOWN');
 
   /**
-   * Deux verdicts, parce qu'ils répondent à deux questions différentes.
+   * Quatre réponses, parce que « prêt » répond à quatre questions.
    *
-   * Le premier demande : reste-t-il du développement ? Une autorisation OAuth
-   * absente n'en est pas ; exiger qu'elle soit accordée avant d'autoriser
-   * l'achat du serveur reviendrait à rendre le serveur nécessaire pour obtenir
-   * le droit de l'acheter.
+   *   SOFTWARE_READINESS     reste-t-il du développement ? (FAIL ou UNKNOWN
+   *                          hors déploiement)
+   *   DEPLOYMENT_READINESS   ce qui déploie — Compose, image, guide — dit-il
+   *                          redémarrage, santé, volume, secrets, sauvegarde ?
+   *   LIVE_DEPLOYMENT_STATUS l'instance vivante, jugée seulement là où ce
+   *                          contrôle la voit : depuis le conteneur outils.
+   *                          Ailleurs : NOT_OBSERVABLE_HERE, jamais un faux
+   *                          « non déployé » deviné.
+   *   EXTERNAL_INTEGRATIONS  ce qui attend une main humaine : Gmail, envoi.
    *
-   * Le second demande : le système tourne-t-il en production ? Il ne peut pas
-   * être vrai avant un déploiement réel, et le laisser vert par anticipation
-   * serait la seule façon de se mentir utilement.
-   *
-   * Un `UNKNOWN` bloque le premier au même titre qu'un `FAIL`. C'est la leçon
-   * du verdict précédent : il annonçait YES pendant que l'observabilité était
-   * « jamais vérifiée ». « Je ne sais pas » n'est pas « ça marche », et le seul
-   * moment où la différence se paie est celui où l'on a déjà dépensé.
+   * Un `UNKNOWN` pèse comme un `FAIL` sur le logiciel : « je ne sais pas »
+   * n'est pas « ça marche ».
    */
-  const readyToBuy = blockers.length === 0 && unknowns.length === 0;
+  const resume = summariseReadiness(checks, liveContext);
 
-  console.log(`  ${c.bold}SOFTWARE BLOCKERS         = ${blockers.length}${c.reset}`);
+  console.log(`  ${c.bold}SOFTWARE BLOCKERS         = ${resume.softwareBlockers}${c.reset}`);
+  console.log(`  ${c.bold}DEPLOYMENT BLOCKERS       = ${resume.deploymentBlockers}${c.reset}`);
   console.log(`  ${c.bold}MANUAL ZERO-COST ACTIONS  = ${manual.length}${c.reset}`);
   console.log(`  ${c.bold}POST-DEPLOYMENT CHECKS    = ${post.length}${c.reset}`);
   console.log(`  ${c.bold}UNKNOWN CRITICAL STATES   = ${unknowns.length}${c.reset}\n`);
 
-  console.log(`  ${c.bold}READY FOR VPS PURCHASE = ${readyToBuy ? `${c.green}YES` : `${c.red}NO`}${c.reset}`);
-  console.log(
-    `  ${c.bold}READY FOR 24/7 PRODUCTION = ${c.amber}NOT_DEPLOYED${c.reset}`
-    + `  ${c.dim}— aucun déploiement Linux, aucun soak test${c.reset}`,
-  );
+  const feu = (ok: boolean, label: string) => `${ok ? c.green : c.red}${label}${c.reset}`;
+  console.log(`  ${c.bold}SOFTWARE_READINESS     = ${feu(resume.software === 'READY', resume.software)}${c.reset}`);
+  console.log(`  ${c.bold}DEPLOYMENT_READINESS   = ${feu(resume.deployment === 'READY', resume.deployment)}${c.reset}`);
+  console.log(`  ${c.bold}LIVE_DEPLOYMENT_STATUS = ${resume.live === 'HEALTHY' ? c.green : resume.live === 'DEGRADED' ? c.red : c.amber}${resume.live}${c.reset}  ${c.dim}— ${resume.liveDetail}${c.reset}`);
+  console.log(`  ${c.bold}EXTERNAL_INTEGRATIONS  = ${resume.integrationsPending === 0 ? `${c.green}COMPLETE` : `${c.cyan}${resume.integrationsPending} ACTION(S) MANUELLE(S)`}${c.reset}`);
 
   if (blockers.length > 0) {
     console.log(`\n  ${c.bold}BLOQUEURS LOGICIELS${c.reset} — ${blockers.length}`);
@@ -1235,7 +1304,10 @@ try {
   ${c.dim}MESSAGES SENT: 0 — ce contrôle n'envoie rien.${c.reset}
 `);
 
-  process.exitCode = readyToBuy ? 0 : 1;
+  // Le code de sortie dit le logiciel et le déploiement — ce qui se corrige
+  // dans le dépôt. Une intégration en attente n'est pas un échec ; une
+  // instance non observable d'ici non plus.
+  process.exitCode = resume.software === 'READY' && resume.deployment === 'READY' ? 0 : 1;
 } finally {
   repos.close();
   scratchRepos.close();

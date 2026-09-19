@@ -57,6 +57,11 @@ COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/packages ./packages
 COPY --from=build /build/scripts ./scripts
 COPY --from=build /build/briefs ./briefs
+# Les artefacts de déploiement et le guide opérateur : production-check lit
+# ce qui déploie vraiment (Compose, Dockerfile, OPERATOR.md) pour rendre son
+# verdict. Le fichier privé et les rapports de déploiement restent dehors.
+COPY --from=build /build/deployment ./deployment
+COPY --from=build /build/docs ./docs
 
 # /data est le volume partagé ; out/ reçoit les rapports (monté depuis l'hôte).
 RUN mkdir -p /data/artifacts /data/backups /app/out && chown -R node:node /data /app

@@ -8,6 +8,8 @@
 !.env.example
 data/
 deployment/backups/
+deployment/docker-compose.private.yml
+deployment/rapport-*.txt
 out/
 dist/
 node_modules/

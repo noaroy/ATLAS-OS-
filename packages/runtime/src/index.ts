@@ -226,3 +226,7 @@ export {
   type RecommendationDecision,
 } from './sales-engine.ts';
 export { buildSalesDashboard, type SalesDashboard, type DashboardRange, type SystemLight } from './sales-dashboard.ts';
+export {
+  classifyDaemonRun, deploymentEvidence, summariseReadiness, DAEMON_STALE_AFTER_MS, DEPLOYMENT_AREAS, LIVE_AREA,
+  type DaemonRunView, type DaemonRunState, type DeploymentArtefacts, type EvidenceItem, type CheckVerdict, type CheckLine, type LiveContext, type ReadinessSummary,
+} from './readiness.ts';

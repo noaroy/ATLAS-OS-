@@ -61,7 +61,8 @@ npm run sales:pause -- --reason="…"   /   npm run sales:resume
 npm run client:auto -- --brief=briefs/<client>.json --go   # missions client (V2, inchangé)
 npm run atlas:start / atlas:stop     # sur un poste ; sur le VPS : docker compose … start|stop atlas
 npm run backup / restore-check / db:check / db:migrate
-npm run atlas:production-check       # les gardes, avant chaque bascule (PASS / MANUAL_ACTION_REQUIRED / FAIL)
+npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS ·
+                                     # LIVE_DEPLOYMENT_STATUS (observé seulement depuis atlas-cli) · EXTERNAL_INTEGRATIONS
 npm run atlas:vps-check              # sur le VPS, lecture seule : système, .env (sans valeurs), conteneurs, réseau, base
 ```
 

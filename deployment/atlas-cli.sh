@@ -8,6 +8,7 @@
 #   ./deployment/atlas-cli.sh client-review --run=msn_…
 #   ./deployment/atlas-cli.sh client-preflight --brief=briefs/internal-test-sweden.json
 #   ./deployment/atlas-cli.sh backup | restore-check | daemon-check | atlas-status | production-check
+#   ./deployment/atlas-cli.sh gmail-check | gmail-read-check | inbox-sync   # Gmail en lecture seule, rien n'est envoyé
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -53,6 +54,9 @@ npm_script_of() {
     daemon-check)     printf 'atlas:daemon-check' ;;
     db-check)         printf 'db:check' ;;
     sales-status)     printf 'sales:status' ;;
+    gmail-check)      printf 'gmail:check' ;;
+    gmail-read-check) printf 'gmail:read-check' ;;
+    inbox-sync)       printf 'sales:inbox-sync' ;;
     *) return 1 ;;
   esac
 }

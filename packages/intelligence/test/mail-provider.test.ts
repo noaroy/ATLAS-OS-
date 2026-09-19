@@ -139,20 +139,21 @@ describe('le bootstrap d’autorisation', () => {
   // elles le sont. L'assertion porte sur ce qui s'exécute, pas sur la prose.
   const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-  test('ne demande que la lecture et l’envoi', () => {
-    // La liste blanche compte deux entrées, décidées explicitement : lire pour
-    // rattacher les réponses, envoyer pour répondre après approbation humaine.
-    // Celles qui restent interdites donneraient sur la boîte entière un pouvoir
-    // qu'aucune fonction d'ATLAS ne demande — étiqueter, supprimer, tout lire.
+  test('ne demande que la lecture — et l’envoi seulement sur demande explicite', () => {
+    // La liste blanche vient du mode : lecture seule par défaut (la phase 1),
+    // lecture et envoi sur --with-send. Celles qui restent interdites
+    // donneraient sur la boîte entière un pouvoir qu'aucune fonction d'ATLAS
+    // ne demande — étiqueter, supprimer, tout lire.
     assert.equal(source.includes('gmail.modify'), false);
     assert.equal(source.includes('gmail.compose'), false);
     assert.equal(source.includes('mail.google.com'), false);
 
-    // Les portées viennent des constantes partagées, jamais d'une chaîne
-    // recopiée ici : deux littéraux finiraient par diverger.
+    // Les portées viennent des constantes partagées, par le mode, jamais d'une
+    // chaîne recopiée ici : deux littéraux finiraient par diverger.
     assert.ok(
-      /ACCEPTED_SCOPES = \[GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE\]/.test(source),
-      'la liste blanche est exactement lecture + envoi, depuis les constantes',
+      /const MODE = parseGmailAuthMode\(process\.argv\);/.test(source)
+        && /const ACCEPTED_SCOPES = \[\.\.\.gmailScopesFor\(MODE\)\.accepted\]/.test(source),
+      'la liste blanche est celle du mode, depuis les constantes',
     );
     assert.ok(
       /scopes:\s*ACCEPTED_SCOPES/.test(source),

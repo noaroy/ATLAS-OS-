@@ -200,6 +200,70 @@ joindre ; jamais un nombre de sauts (refusé au démarrage).
 voie — systemd sans Docker — utilisable sur un poste ou un serveur nu ; ce n'est
 pas celle du VPS actuel.
 
+## Gmail, en lecture seule d'abord
+
+ATLAS lit la boîte pour rattacher les réponses ; il n'y écrit rien. L'envoi est
+une phase à part, décidée plus tard (`--with-send`, `ATLAS_OUTBOUND_ENABLED`).
+
+**Architecture.** OAuth 2.0 « application de bureau », flux *loopback* avec
+PKCE : le consentement se donne dans le navigateur, sur les pages de Google ;
+le code revient sur `http://127.0.0.1:<port aléatoire>/callback`, ATLAS
+l'échange contre un jeton de rafraîchissement avec le secret client, qui ne
+quitte jamais la machine. Aucun serveur tiers, aucun mot de passe vu par
+ATLAS. Le jeton est écrit dans `.env.local` (ignoré par Git), jamais affiché.
+Les portées acceptées sont fermées : `gmail.readonly` seule en phase 1 ;
+`gmail.send` seulement sur `--with-send` ; jamais `gmail.modify` ni
+`mail.google.com` — un jeton plus large est **refusé**, même s'il vient d'un
+consentement antérieur.
+
+**1. Google Cloud, une fois.** Un projet → *APIs & Services › Library* →
+activer **Gmail API** → *OAuth consent screen* : type *External*, votre
+adresse en **Test user**, portée `…/auth/gmail.readonly` seulement →
+*Credentials › Create credentials › OAuth client ID* → type **Desktop app**
+(pas « Web application » : le loopback n'a pas d'URI de redirection fixe).
+Notez le *client ID* et le *client secret*.
+
+**2. Sur le poste Windows** (il faut un navigateur ; le VPS n'en a pas) :
+```bash
+# dans .env.local (ignoré par Git), à la main :
+#   GMAIL_CLIENT_ID=…apps.googleusercontent.com
+#   GMAIL_CLIENT_SECRET=…
+npm run gmail:authorize               # lecture seule : ouvre Google, écoute 127.0.0.1, écrit GMAIL_REFRESH_TOKEN + GMAIL_USER dans .env.local
+npm run gmail:check                   # jeton échangé, portées accordées, boîte identifiée — rien d'écrit
+npm run gmail:read-check              # les 5 derniers en-têtes entrants, lecture seule
+```
+Si Google refuse l'échange (HTTP 400/401) : le jeton a été révoqué ou le
+client n'est pas de type *Desktop app*. Si `gmail:authorize` annonce une
+portée en trop : révoquer sur https://myaccount.google.com/permissions et
+recommencer en ne cochant que la lecture.
+
+**3. Sur le VPS**, sans rien commiter : recopier à la main
+`GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_USER`
+dans `/opt/atlas/.env` (`chmod 600`), puis
+`$COMPOSE up -d atlas` (Compose recrée le conteneur avec le nouvel
+environnement ; `ATLAS_OUTBOUND_ENABLED=false` et `ATLAS_ENGINE_MODE=INTERNAL_TEST`
+restent tels quels). Ensuite, tout en lecture seule :
+```bash
+bash deployment/atlas-cli.sh gmail-check        # jeton + portées + boîte
+bash deployment/atlas-cli.sh gmail-read-check   # en-têtes des derniers messages (--max=20, --thread=<id>, --since=AAAA-MM-JJ)
+bash deployment/atlas-cli.sh inbox-sync         # rattache les réponses aux conversations ; n'écrit que dans la base ATLAS
+bash deployment/atlas-cli.sh production-check   # GMAIL AUTH / GMAIL SEND READINESS : lecture READY, envoi OUTBOUND_DISABLED
+```
+La synchronisation est « sans trou » par construction : curseur
+`lastReceivedAt` par boîte, relu avec **6 h de chevauchement**, déduplication
+par identifiant de message (`alreadyImported`), curseur avancé seulement
+quand toute la page a été traitée ; le daemon la rejoue toutes les 15 min.
+Rattachement par fil (`threadId`, `In-Reply-To`/`References`) puis par
+domaine ; classification déterministe (REPLIED / BOUNCED / AUTO_REPLY /
+NEEDS_REVIEW) ; une réponse non rattachée n'est attribuée à personne.
+
+**Aucun envoi possible.** `GmailOutboundProvider` refuse (`OUTBOUND_DISABLED`)
+dans le transport lui-même tant que `ATLAS_OUTBOUND_ENABLED` n'est pas vrai,
+avant toute politique et quel que soit le jeton — un jeton portant
+`gmail.send` par accident n'y change rien ; la politique d'envoi bloque encore
+en `INTERNAL_TEST_MODE`, et le daemon n'a qu'un fournisseur à blanc hors
+PRODUCTION.
+
 ## Premier lancement sûr (§68)
 
 1. `npm run atlas:status` (ou, sur le VPS, `bash deployment/vps-check.sh`) →

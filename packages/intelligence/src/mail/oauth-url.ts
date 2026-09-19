@@ -1,5 +1,6 @@
 import { AtlasError } from '@atlas/core';
 import { GMAIL_READONLY_SCOPE } from './gmail.ts';
+import { GMAIL_SEND_SCOPE_URI } from './types.ts';
 
 /**
  * L'URL de consentement Google, construite et vérifiée avant d'être ouverte.
@@ -146,5 +147,30 @@ export function validateAuthorizeUrl(
 
 /** L'URL de boucle locale, pour un port attribué par le système. */
 export const loopbackRedirectUri = (port: number): string => `http://127.0.0.1:${port}/callback`;
+
+/**
+ * Ce qu'une autorisation demande, et ce qu'elle accepte de recevoir.
+ *
+ * Deux modes, parce que l'envoi est une décision à part. La lecture suffit à
+ * rattacher les réponses ; c'est la première phase, et elle se donne seule :
+ * `readonly` ne demande que gmail.readonly et REFUSE un jeton qui porterait
+ * davantage — Google reconduit parfois un consentement plus large donné
+ * auparavant au même client. `with-send` ajoute gmail.send, pour le jour où
+ * l'envoi approuvé sera décidé. Jamais gmail.modify, jamais mail.google.com.
+ */
+export type GmailAuthMode = 'readonly' | 'with-send';
+
+export function gmailScopesFor(mode: GmailAuthMode): { requested: readonly string[]; accepted: readonly string[] } {
+  const scopes = mode === 'with-send' ? [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE_URI] : [GMAIL_READONLY_SCOPE];
+  return { requested: scopes, accepted: scopes };
+}
+
+/** `--with-send` ou `--scope=send` demandent l'envoi ; tout le reste est lecture seule. */
+export function parseGmailAuthMode(argv: readonly string[]): GmailAuthMode {
+  if (argv.includes('--with-send')) return 'with-send';
+  const scope = argv.find((a) => a.startsWith('--scope='))?.slice('--scope='.length).trim().toLowerCase();
+  if (scope === 'send' || scope === 'with-send' || scope === 'readonly+send') return 'with-send';
+  return 'readonly';
+}
 
 export { GMAIL_READONLY_SCOPE };

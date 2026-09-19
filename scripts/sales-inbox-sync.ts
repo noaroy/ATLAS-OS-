@@ -18,7 +18,7 @@
  *   npm run sales:inbox-sync -- --fixture fixtures/inbox.json
  */
 import { readFileSync } from 'node:fs';
-import { createLogger, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, loadAtlasEnv, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
   GmailInboxProvider,
@@ -45,7 +45,9 @@ const has = (name: string) => process.argv.includes(`--${name}`);
 
 const logger = createLogger({ level: 'error', pretty: false });
 const fixturePath = flag('fixture');
-const dbPath = process.env.ATLAS_DB_PATH ?? 'data/atlas.db';
+// La base vient de la config — ATLAS_DB_PATH compris — jamais d'un repli relatif au cwd.
+const config = loadConfig(process.cwd());
+const dbPath = config.paths.databaseFile;
 
 /**
  * Une boîte figée n'écrit pas dans la base de production.

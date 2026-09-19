@@ -4,6 +4,10 @@ import {
   buildGmailAuthorizeUrl, validateAuthorizeUrl, loopbackRedirectUri,
   GMAIL_READONLY_SCOPE, GOOGLE_AUTH_ENDPOINT,
 } from '../src/index.ts';
+import { gmailScopesFor, parseGmailAuthMode } from '../src/mail/oauth-url.ts';
+import { GMAIL_SEND_SCOPE_URI } from '../src/mail/types.ts';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 /**
  * L'URL de consentement, vérifiée sans ouvrir de navigateur.
@@ -163,5 +167,34 @@ describe('l’adresse de retour en boucle locale', () => {
     // Le code d'autorisation ne transite par aucun serveur tiers, et le flux
     // OOB déprécié n'est pas utilisé.
     assert.ok(!uri.includes('urn:ietf:wg:oauth:2.0:oob'));
+  });
+});
+
+describe('les modes d’autorisation : la lecture seule d’abord, l’envoi sur demande explicite', () => {
+  test('par défaut, seule gmail.readonly est demandée — et seule elle est acceptée', () => {
+    const mode = parseGmailAuthMode(['node', 'gmail-authorize.ts']);
+    assert.equal(mode, 'readonly');
+    const { requested, accepted } = gmailScopesFor(mode);
+    assert.deepEqual([...requested], [GMAIL_READONLY_SCOPE]);
+    assert.deepEqual([...accepted], [GMAIL_READONLY_SCOPE]);
+    assert.ok(!accepted.includes(GMAIL_SEND_SCOPE_URI), 'un jeton portant l’envoi sera refusé en phase lecture seule');
+  });
+
+  test('--with-send (ou --scope=send) ajoute gmail.send, et rien d’autre', () => {
+    for (const argv of [['--with-send'], ['--scope=send'], ['--scope=readonly+send']]) {
+      const { requested, accepted } = gmailScopesFor(parseGmailAuthMode(argv));
+      assert.deepEqual([...requested], [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE_URI], argv.join(' '));
+      assert.deepEqual([...accepted], [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE_URI]);
+      assert.ok(!requested.some((s) => /gmail\.modify|mail\.google\.com/.test(s)));
+    }
+    assert.equal(parseGmailAuthMode(['--scope=readonly']), 'readonly');
+  });
+
+  test('gmail:authorize construit sa demande à partir du mode, pas d’une liste figée avec l’envoi', () => {
+    const source = readFileSync(join(resolve(import.meta.dirname, '../../..'), 'scripts', 'gmail-authorize.ts'), 'utf8');
+    assert.match(source, /const MODE = parseGmailAuthMode\(process\.argv\);/);
+    assert.match(source, /gmailScopesFor\(MODE\)\.accepted/);
+    assert.ok(!/const ACCEPTED_SCOPES = \[GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE\]/.test(source), 'plus de liste figée lecture+envoi');
+    assert.ok(!/process\.exit\(1\)/.test(source), 'aucune sortie forcée après le réseau');
   });
 });

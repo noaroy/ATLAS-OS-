@@ -25,20 +25,24 @@ import { randomBytes, createHash } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig } from '../packages/core/src/index.ts';
-import { GMAIL_READONLY_SCOPE } from '../packages/intelligence/src/mail/gmail.ts';
 import { GMAIL_SEND_SCOPE } from '../packages/intelligence/src/mail/outbound.ts';
+import {
+  buildGmailAuthorizeUrl, loopbackRedirectUri, gmailScopesFor, parseGmailAuthMode,
+} from '../packages/intelligence/src/mail/oauth-url.ts';
 
 /**
- * Les seules portées qu'ATLAS accepte de détenir.
+ * Les portées demandées et acceptées, selon le mode.
  *
- * Lire pour rattacher les réponses, envoyer pour répondre après approbation
- * humaine. Rien d'autre : ni modification d'étiquette, ni suppression, ni accès
- * complet à la boîte.
+ *   npm run gmail:authorize                 lecture seule (gmail.readonly) — la phase 1
+ *   npm run gmail:authorize -- --with-send  lecture et envoi (gmail.send en plus)
+ *
+ * En lecture seule, un jeton qui porterait l'envoi — consentement antérieur
+ * reconduit par Google — est refusé et rien n'est écrit : on ne détient pas un
+ * droit qu'on n'a pas demandé. Rien d'autre dans les deux cas : ni modification
+ * d'étiquette, ni suppression, ni accès complet à la boîte.
  */
-const ACCEPTED_SCOPES = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE];
-import {
-  buildGmailAuthorizeUrl, loopbackRedirectUri,
-} from '../packages/intelligence/src/mail/oauth-url.ts';
+const MODE = parseGmailAuthMode(process.argv);
+const ACCEPTED_SCOPES = [...gmailScopesFor(MODE).accepted];
 
 /**
  * Ouvrir une URL dans le navigateur, sans passer par un shell.
@@ -79,8 +83,9 @@ loadConfig(process.cwd());
 
 const c = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[32m', red: '\x1b[31m', amber: '\x1b[33m' };
 
-console.log(`\n  ${c.bold}AUTORISATION GMAIL — LECTURE ET ENVOI${c.reset}`);
+console.log(`\n  ${c.bold}AUTORISATION GMAIL — ${MODE === 'with-send' ? 'LECTURE ET ENVOI' : 'LECTURE SEULE'}${c.reset}`);
 for (const portee of ACCEPTED_SCOPES) console.log(`  portée demandée : ${portee}`);
+if (MODE === 'readonly') console.log(`  ${c.dim}(pour demander aussi l’envoi, plus tard : npm run gmail:authorize -- --with-send)${c.reset}`);
 console.log();
 
 const clientId = process.env.GMAIL_CLIENT_ID?.trim();
@@ -95,7 +100,7 @@ if (!clientId || !clientSecret) {
   console.log('    2. APIs & Services → Credentials → Create credentials');
   console.log('       → OAuth client ID → type « Desktop app »');
   console.log('    3. OAuth consent screen → ajoutez votre adresse en « Test user »');
-  console.log('       et n’ajoutez QUE la portée .../auth/gmail.readonly\n');
+  console.log(`       et n’ajoutez QUE la portée .../auth/gmail.readonly${MODE === 'with-send' ? ' (et .../auth/gmail.send)' : ''}\n`);
   console.log(`  Puis, dans ${ENV_FILE} (ignoré par Git) :`);
   console.log('    GMAIL_CLIENT_ID=…apps.googleusercontent.com');
   console.log('    GMAIL_CLIENT_SECRET=…\n');
@@ -137,7 +142,7 @@ const received = await new Promise<{ code: string; redirectUri: string }>((resol
     res.end(
       error || !code || returned !== state
         ? '<h1>Autorisation refusée</h1><p>Vous pouvez fermer cet onglet.</p>'
-        : '<h1>ATLAS est autorisé en lecture seule</h1><p>Vous pouvez fermer cet onglet.</p>',
+        : `<h1>ATLAS est autorisé${MODE === 'with-send' ? ' en lecture et envoi' : ' en lecture seule'}</h1><p>Vous pouvez fermer cet onglet.</p>`,
     );
     server.close();
 
@@ -190,118 +195,132 @@ const received = await new Promise<{ code: string; redirectUri: string }>((resol
   }, 300_000).unref();
 });
 
-// ── Échange du code ─────────────────────────────────────────────────────────
-const redirectUri = received.redirectUri;
-const tokenResponse = await fetch(TOKEN_URL, {
-  method: 'POST',
-  headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  body: new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    code: received.code,
-    code_verifier: verifier,
-    grant_type: 'authorization_code',
-    redirect_uri: redirectUri,
-  }),
-});
-
-if (!tokenResponse.ok) {
-  console.error(`\n  ${c.red}Échange refusé (HTTP ${tokenResponse.status}).${c.reset}`);
-  console.error('  Vérifiez que le client OAuth est bien de type « Desktop app ».\n');
-  process.exit(1);
-}
-
-const token = (await tokenResponse.json()) as {
-  access_token?: string; refresh_token?: string; scope?: string;
-};
-
-// ── Vérification de la portée réellement accordée ───────────────────────────
-//
-// La liste blanche compte deux entrées, et pas une de plus. `gmail.send` permet
-// d'expédier un message ; elle ne permet ni de lire un brouillon d'autrui, ni de
-// modifier une étiquette, ni de supprimer quoi que ce soit. `gmail.modify` et
-// `mail.google.com` restent refusées : elles donneraient sur la boîte entière un
-// pouvoir qu'aucune fonction d'ATLAS ne demande.
-//
-// Le refus porte sur ce que Google a *réellement accordé*, pas sur ce qui a été
-// demandé. Google reconduit parfois un consentement plus large donné auparavant
-// au même client, et un jeton trop puissant obtenu par inadvertance reste un
-// jeton trop puissant.
-const granted = (token.scope ?? '').split(/\s+/).filter(Boolean);
-console.log(`  portée accordée : ${granted.join(', ') || '(aucune)'}`);
-
-const extra = granted.filter((scope) => !ACCEPTED_SCOPES.includes(scope));
-if (extra.length > 0 || granted.length === 0) {
-  console.error(`\n  ${c.red}CONNEXION REFUSÉE${c.reset}`);
-  console.error(`  Google a accordé : ${granted.join(', ') || 'rien'}`);
-  console.error(`  En trop          : ${extra.join(', ') || '(aucune portée accordée)'}`);
-  console.error(`  ATLAS n'accepte que : ${ACCEPTED_SCOPES.join(', ')}\n`);
-  console.error('  Un jeton qui peut lire les brouillons, étiqueter ou supprimer');
-  console.error('  ne doit pas exister sur cette machine.');
-  console.error('  Révoquez l’accès sur https://myaccount.google.com/permissions,');
-  console.error('  puis recommencez en ne cochant que la lecture et l’envoi.\n');
-  console.error('  Rien n’a été écrit.\n');
-  process.exit(1);
-}
-
-const peutEnvoyer = granted.includes(GMAIL_SEND_SCOPE);
-
-if (!token.refresh_token) {
-  console.error(`\n  ${c.red}Aucun jeton de rafraîchissement rendu.${c.reset}`);
-  console.error('  Révoquez l’accès sur https://myaccount.google.com/permissions puis recommencez :');
-  console.error('  Google ne le renvoie qu’au premier consentement.\n');
-  process.exit(1);
-}
-
-// L'adresse de la boîte, lue plutôt que demandée : une faute de frappe dans
-// GMAIL_USER ferait échouer chaque synchronisation sans dire pourquoi.
-let mailbox = 'inconnue';
-try {
-  const profile = await fetch(PROFILE_URL, {
-    headers: { authorization: `Bearer ${token.access_token}` },
+/*
+ * À partir d'ici le réseau a parlé : plus aucun `process.exit`. Sous Windows,
+ * sortir de force avec une connexion encore ouverte fait tomber libuv
+ * (« UV_HANDLE_CLOSING ») — un jeton refusé finissait en trace, pas en code 1.
+ */
+process.exitCode = await (async (): Promise<number> => {
+  // ── Échange du code ─────────────────────────────────────────────────────────
+  const redirectUri = received.redirectUri;
+  const tokenResponse = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code: received.code,
+      code_verifier: verifier,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    }),
   });
-  if (profile.ok) mailbox = ((await profile.json()) as { emailAddress?: string }).emailAddress ?? 'inconnue';
-} catch {
-  // Sans importance : l'adresse peut être renseignée à la main.
-}
 
-console.log(`  boîte           : ${mailbox}`);
-console.log(
-  `  ${c.green}portée conforme${c.reset} — lecture`
-  + `${peutEnvoyer ? ' et envoi (soumis à approbation humaine)' : ' seule'}.\n`,
-);
+  if (!tokenResponse.ok) {
+    console.error(`\n  ${c.red}Échange refusé (HTTP ${tokenResponse.status}).${c.reset}`);
+    console.error('  Vérifiez que le client OAuth est bien de type « Desktop app ».\n');
+    return 1;
+  }
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-const answer = (await rl.question(`  Écrire le jeton dans ${ENV_FILE} ? [o/N] `)).trim().toLowerCase();
-rl.close();
+  const token = (await tokenResponse.json()) as {
+    access_token?: string; refresh_token?: string; scope?: string;
+  };
 
-if (answer !== 'o' && answer !== 'oui' && answer !== 'y') {
-  console.log('\n  Rien écrit. Le jeton est perdu ; relancez la commande si besoin.\n');
-  process.exit(0);
-}
+  // ── Vérification de la portée réellement accordée ───────────────────────────
+  //
+  // La liste blanche compte deux entrées, et pas une de plus. `gmail.send` permet
+  // d'expédier un message ; elle ne permet ni de lire un brouillon d'autrui, ni de
+  // modifier une étiquette, ni de supprimer quoi que ce soit. `gmail.modify` et
+  // `mail.google.com` restent refusées : elles donneraient sur la boîte entière un
+  // pouvoir qu'aucune fonction d'ATLAS ne demande.
+  //
+  // Le refus porte sur ce que Google a *réellement accordé*, pas sur ce qui a été
+  // demandé. Google reconduit parfois un consentement plus large donné auparavant
+  // au même client, et un jeton trop puissant obtenu par inadvertance reste un
+  // jeton trop puissant.
+  const granted = (token.scope ?? '').split(/\s+/).filter(Boolean);
+  console.log(`  portée accordée : ${granted.join(', ') || '(aucune)'}`);
 
-// Écriture sans jamais afficher la valeur.
-const existing = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : '';
-const withoutOld = existing
-  .split(/\r?\n/)
-  .filter((line) => !/^\s*(GMAIL_REFRESH_TOKEN|GMAIL_USER)\s*=/.test(line))
-  .join('\n')
-  .replace(/\n+$/, '');
+  const extra = granted.filter((scope) => !ACCEPTED_SCOPES.includes(scope));
+  if (extra.length > 0 || granted.length === 0) {
+    console.error(`\n  ${c.red}CONNEXION REFUSÉE${c.reset}`);
+    console.error(`  Google a accordé : ${granted.join(', ') || 'rien'}`);
+    console.error(`  En trop          : ${extra.join(', ') || '(aucune portée accordée)'}`);
+    console.error(`  ATLAS n'accepte que : ${ACCEPTED_SCOPES.join(', ')}\n`);
+    console.error(MODE === 'readonly' && extra.includes(GMAIL_SEND_SCOPE)
+      ? '  Un consentement antérieur portait l’envoi : en phase lecture seule, ATLAS ne le garde pas.'
+      : '  Un jeton qui peut lire les brouillons, étiqueter ou supprimer');
+    if (!(MODE === 'readonly' && extra.includes(GMAIL_SEND_SCOPE))) console.error('  ne doit pas exister sur cette machine.');
+    console.error('  Révoquez l’accès sur https://myaccount.google.com/permissions,');
+    console.error(`  puis recommencez en ne cochant que ${MODE === 'with-send' ? 'la lecture et l’envoi' : 'la lecture'}.\n`);
+    console.error('  Rien n’a été écrit.\n');
+    return 1;
+  }
 
-writeFileSync(
-  ENV_FILE,
-  `${withoutOld}${withoutOld ? '\n' : ''}` +
-    `# Jeton Gmail en lecture seule — obtenu le ${new Date().toISOString().slice(0, 10)}.\n` +
-    `# Ce fichier est ignoré par Git. Ne le partagez pas, ne le commitez pas.\n` +
-    `GMAIL_REFRESH_TOKEN=${token.refresh_token}\n` +
-    `GMAIL_USER=${mailbox}\n`,
-  'utf8',
-);
+  const peutEnvoyer = granted.includes(GMAIL_SEND_SCOPE);
 
-console.log(`\n  ${c.green}Écrit dans ${ENV_FILE}${c.reset} — GMAIL_REFRESH_TOKEN, GMAIL_USER`);
-console.log(`  ${c.dim}Le jeton n'a été affiché nulle part.${c.reset}\n`);
-console.log('  Vérifiez, puis synchronisez :');
-console.log('    npm run gmail:check');
-console.log('    npm run sales:inbox-sync -- --allow-production\n');
+  if (!token.refresh_token) {
+    console.error(`\n  ${c.red}Aucun jeton de rafraîchissement rendu.${c.reset}`);
+    console.error('  Révoquez l’accès sur https://myaccount.google.com/permissions puis recommencez :');
+    console.error('  Google ne le renvoie qu’au premier consentement.\n');
+    return 1;
+  }
+
+  // L'adresse de la boîte, lue plutôt que demandée : une faute de frappe dans
+  // GMAIL_USER ferait échouer chaque synchronisation sans dire pourquoi.
+  let mailbox = 'inconnue';
+  try {
+    const profile = await fetch(PROFILE_URL, {
+      headers: { authorization: `Bearer ${token.access_token}` },
+    });
+    if (profile.ok) mailbox = ((await profile.json()) as { emailAddress?: string }).emailAddress ?? 'inconnue';
+  } catch {
+    // Sans importance : l'adresse peut être renseignée à la main.
+  }
+
+  console.log(`  boîte           : ${mailbox}`);
+  console.log(
+    `  ${c.green}portée conforme${c.reset} — lecture`
+    + `${peutEnvoyer ? ' et envoi (soumis à approbation humaine)' : ' seule'}.\n`,
+  );
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await rl.question(`  Écrire le jeton dans ${ENV_FILE} ? [o/N] `)).trim().toLowerCase();
+  rl.close();
+
+  if (answer !== 'o' && answer !== 'oui' && answer !== 'y') {
+    console.log('\n  Rien écrit. Le jeton est perdu ; relancez la commande si besoin.\n');
+    return 0;
+  }
+
+  // Écriture sans jamais afficher la valeur.
+  const existing = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : '';
+  const withoutOld = existing
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(GMAIL_REFRESH_TOKEN|GMAIL_USER)\s*=/.test(line))
+    .join('\n')
+    .replace(/\n+$/, '');
+
+  writeFileSync(
+    ENV_FILE,
+    `${withoutOld}${withoutOld ? '\n' : ''}` +
+      `# Jeton Gmail ${peutEnvoyer ? 'lecture et envoi' : 'en lecture seule'} — obtenu le ${new Date().toISOString().slice(0, 10)}.\n` +
+      `# Ce fichier est ignoré par Git. Ne le partagez pas, ne le commitez pas.\n` +
+      `GMAIL_REFRESH_TOKEN=${token.refresh_token}\n` +
+      `GMAIL_USER=${mailbox}\n`,
+    'utf8',
+  );
+
+  console.log(`\n  ${c.green}Écrit dans ${ENV_FILE}${c.reset} — GMAIL_REFRESH_TOKEN, GMAIL_USER`);
+  console.log(`  ${c.dim}Le jeton n'a été affiché nulle part.${c.reset}\n`);
+  console.log('  Vérifiez, sans rien envoyer :');
+  console.log('    npm run gmail:check          # jeton, portées, boîte');
+  console.log('    npm run gmail:read-check     # les derniers en-têtes, lecture seule\n');
+  console.log('  Pour le VPS : recopiez à la main GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET,');
+  console.log('  GMAIL_REFRESH_TOKEN et GMAIL_USER dans /opt/atlas/.env (chmod 600), jamais');
+  console.log('  dans le dépôt ; puis « docker compose … up -d atlas » recrée le conteneur.');
+  console.log('  Là-bas : bash deployment/atlas-cli.sh gmail-check\n');
+  return 0;
+})();
 
 void appendFileSync;

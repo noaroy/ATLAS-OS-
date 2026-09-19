@@ -772,6 +772,8 @@ export const cc = {
 export type DashboardRange = '7d' | '30d' | 'all';
 
 export interface SystemLight { state: 'ok' | 'warn' | 'down' | 'off'; detail: string }
+export type GmailStatusCode = 'READY' | 'READY_IDLE' | 'DOWN' | 'STALE' | 'UNKNOWN' | 'OFF';
+export interface GmailLight extends SystemLight { code: GmailStatusCode; lastAttemptAt: string | null }
 
 export interface SalesDashboard {
   generatedAt: string;
@@ -808,7 +810,7 @@ export interface SalesDashboard {
   }>;
   hotLeadsTotal: number;
   system: {
-    search: SystemLight; llm: SystemLight; gmail: SystemLight; workers: SystemLight; database: SystemLight;
+    search: SystemLight; llm: SystemLight; gmail: GmailLight; workers: SystemLight; database: SystemLight;
     outbound: { enabled: boolean; mode: string; paused: boolean; pauseReason: string | null; window: string; windowOpen: boolean };
     lastCycleAt: string | null;
     openInsights: number;

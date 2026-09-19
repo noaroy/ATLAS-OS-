@@ -1,5 +1,5 @@
 import type { AtlasConfig } from '@atlas/core';
-import type { Repositories } from '@atlas/data';
+import type { Repositories, TaskRow, FrictionEvent } from '@atlas/data';
 import {
   classifyReplyIntent,
   funnelRates,
@@ -13,7 +13,7 @@ import {
   type SalesFunnelCounts,
 } from '@atlas/departments';
 import { GmailInboxProvider } from '@atlas/intelligence';
-import { readGlobalPause, gatherSalesStats, sendPolicyOf, SALES_SETTINGS } from './sales-engine.ts';
+import { readGlobalPause, gatherSalesStats, sendPolicyOf, SALES_SETTINGS, SALES_ENGINE_TASKS } from './sales-engine.ts';
 
 /**
  * La page unique. Une lecture, sept sections, dans l'ordre où l'on se pose
@@ -115,7 +115,7 @@ export interface SalesDashboard {
   system: {
     search: SystemLight;
     llm: SystemLight;
-    gmail: SystemLight;
+    gmail: GmailLight;
     workers: SystemLight;
     database: SystemLight;
     outbound: { enabled: boolean; mode: string; paused: boolean; pauseReason: string | null; window: string; windowOpen: boolean };
@@ -128,6 +128,117 @@ export interface SalesDashboard {
 export interface SystemLight {
   state: 'ok' | 'warn' | 'down' | 'off';
   detail: string;
+}
+
+/**
+ * Ce que le feu Gmail sait dire, et rien de plus.
+ *
+ *   READY       la dernière tentative a lu la boîte et s'est bien terminée ;
+ *   READY_IDLE  identifiants présents, rien à synchroniser (aucune conversation
+ *               ouverte) : la boîte va bien, il n'y a pas de travail — ce n'est
+ *               pas une panne ;
+ *   DOWN        la dernière tentative a réellement échoué : jeton refusé, API
+ *               injoignable, réseau — ou le daemon ne voit pas les identifiants ;
+ *   STALE       la dernière tentative est trop ancienne pour conclure ;
+ *   UNKNOWN     aucune tentative jamais consignée : rien ne permet de conclure ;
+ *   OFF         Gmail n'est pas configuré ici.
+ */
+export type GmailStatusCode = 'READY' | 'READY_IDLE' | 'DOWN' | 'STALE' | 'UNKNOWN' | 'OFF';
+
+export interface GmailLight extends SystemLight {
+  code: GmailStatusCode;
+  /** La tentative qui fonde le verdict ; null quand il n'y en a aucune. */
+  lastAttemptAt: string | null;
+}
+
+/** Tout ce qui, en base, témoigne d'une tentative de lecture de la boîte. */
+export interface GmailEvidence {
+  /** Les quatre variables sont présentes dans *ce* processus. */
+  configured: boolean;
+  /** La dernière tâche de lecture terminée par le daemon, réussie ou abandonnée. */
+  lastTask: TaskRow | null;
+  /** La dernière friction GMAIL_UNAVAILABLE : un échec réel, daté. */
+  lastFailure: FrictionEvent | null;
+  /** Les échecs de l'heure, pour signaler un service qui hoquette. */
+  failuresInHour: number;
+  /** Le curseur de lecture : la preuve qu'un lot a été lu jusqu'au bout. */
+  checkpoint: { lastSyncedAt: string; messagesSeen: number } | null;
+  now: Date;
+}
+
+/** Au-delà, une preuve ne dit plus rien du présent : la cadence est de 15 min. */
+export const GMAIL_EVIDENCE_MAX_AGE_MINUTES = 90;
+
+/** Le motif que le worker consigne quand la boîte est illisible faute d'identifiants. */
+const GMAIL_NOT_CONFIGURED_PREFIX = 'GMAIL_NOT_CONFIGURED';
+
+/**
+ * Le feu Gmail, depuis les preuves — et seulement depuis elles.
+ *
+ * La règle qui a manqué : « rien à synchroniser » n'est pas « impossible de
+ * synchroniser ». Le tableau confondait les deux dès qu'une friction datait
+ * de l'heure, et affichait DOWN sur une boîte authentifiée à laquelle il ne
+ * manquait qu'une conversation. Ici, c'est la *dernière* tentative qui parle,
+ * par ce qu'elle a constaté : lu, rien à lire, ou échoué — et son âge.
+ */
+export function gmailLightOf(evidence: GmailEvidence): GmailLight {
+  if (!evidence.configured) return { state: 'off', code: 'OFF', detail: 'Gmail non configuré', lastAttemptAt: null };
+
+  type Attempt = { at: string; outcome: 'SYNCED' | 'IDLE' | 'FAILED'; detail: string };
+  const attempts: Attempt[] = [];
+
+  const task = evidence.lastTask;
+  if (task?.finishedAt) {
+    const result = task.result ?? {};
+    const skipped = typeof result.skipped === 'string' ? result.skipped : null;
+    if (task.status !== 'DONE') {
+      attempts.push({ at: task.finishedAt, outcome: 'FAILED', detail: task.errorMessage ?? task.errorCode ?? 'échec sans motif' });
+    } else if (result.ran === true) {
+      attempts.push({ at: task.finishedAt, outcome: 'SYNCED', detail: `${Number(result.scanned ?? 0)} message(s) lu(s)` });
+    } else if (result.configured === false || skipped?.startsWith(GMAIL_NOT_CONFIGURED_PREFIX)) {
+      attempts.push({ at: task.finishedAt, outcome: 'FAILED', detail: skipped ?? GMAIL_NOT_CONFIGURED_PREFIX });
+    } else {
+      attempts.push({ at: task.finishedAt, outcome: 'IDLE', detail: skipped ?? 'rien à synchroniser' });
+    }
+  }
+  if (evidence.lastFailure) {
+    attempts.push({ at: evidence.lastFailure.createdAt, outcome: 'FAILED', detail: evidence.lastFailure.detail ?? 'GMAIL_UNAVAILABLE' });
+  }
+  if (evidence.checkpoint) {
+    attempts.push({ at: evidence.checkpoint.lastSyncedAt, outcome: 'SYNCED', detail: `curseur à jour, ${evidence.checkpoint.messagesSeen} message(s) vu(s) en tout` });
+  }
+
+  const last = attempts.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0))[0];
+  if (!last) {
+    return {
+      state: 'warn', code: 'UNKNOWN', lastAttemptAt: null,
+      detail: 'jamais vérifié : aucune lecture tentée — gmail-check éprouve le jeton, le daemon lit toutes les 15 min',
+    };
+  }
+
+  const age = Math.max(0, minutesAgo(last.at, evidence.now) ?? 0);
+  const ago = `il y a ${humanMinutes(age)}`;
+  if (last.outcome === 'FAILED') {
+    // Le daemon dit « pas d'identifiants » alors que ce processus les voit :
+    // il tourne avec un environnement plus ancien que le fichier .env.
+    const daemonBlind = last.detail.startsWith(GMAIL_NOT_CONFIGURED_PREFIX);
+    return {
+      state: 'down', code: 'DOWN', lastAttemptAt: last.at,
+      detail: daemonBlind
+        ? `le daemon ne voit pas les identifiants (${last.detail}) alors qu’ils sont présents ici : il tourne avec un environnement antérieur, à redémarrer · constaté ${ago}`
+        : `dernière tentative échouée ${ago} : ${last.detail}`,
+    };
+  }
+  if (age > GMAIL_EVIDENCE_MAX_AGE_MINUTES) {
+    return {
+      state: 'warn', code: 'STALE', lastAttemptAt: last.at,
+      detail: `aucune lecture depuis ${humanMinutes(age)} (cadence attendue 15 min) · dernier constat : ${last.outcome === 'SYNCED' ? 'synchronisation réussie' : 'rien à synchroniser'}`,
+    };
+  }
+  const flapping = evidence.failuresInHour > 0 ? ` · ${evidence.failuresInHour} échec(s) dans l’heure` : '';
+  return last.outcome === 'SYNCED'
+    ? { state: flapping ? 'warn' : 'ok', code: 'READY', lastAttemptAt: last.at, detail: `synchronisation réussie ${ago} · ${last.detail}${flapping}` }
+    : { state: flapping ? 'warn' : 'ok', code: 'READY_IDLE', lastAttemptAt: last.at, detail: `identifiants présents · ${last.detail} · passage ${ago}${flapping}` };
 }
 
 const rangeSince = (range: DashboardRange, now: Date): string | null =>
@@ -317,6 +428,7 @@ export function buildSalesDashboard(
   const lastCycle = repos.settings.get<{ at: string } | null>(SALES_SETTINGS.LAST_CYCLES, null);
   const gmailConfigured = options.gmailConfigured ?? new GmailInboxProvider({ logger: silentLogger }).status().configured;
   const checkpoint = repos.conversations.syncCheckpoint('gmail', mailbox);
+  const gmailFailures = frictions.filter((f) => f.kind === 'GMAIL_UNAVAILABLE');
   const detail: string[] = [];
 
   const search: SystemLight = config.search.provider === 'none'
@@ -329,13 +441,16 @@ export function buildSalesDashboard(
     : recent('LLM_FAILURE') >= 3
       ? { state: 'warn', detail: `${recent('LLM_FAILURE')} échecs de modèle dans l'heure` }
       : { state: 'ok', detail: 'live' };
-  const gmail: SystemLight = !gmailConfigured
-    ? { state: 'off', detail: 'Gmail non configuré' }
-    : recent('GMAIL_UNAVAILABLE') > 0
-      ? { state: 'down', detail: 'synchronisation impossible dans l’heure' }
-      : checkpoint && (minutesAgo(checkpoint.lastSyncedAt, now) ?? 0) > 90
-        ? { state: 'warn', detail: `dernière lecture il y a ${humanMinutes(minutesAgo(checkpoint.lastSyncedAt, now))}` }
-        : { state: 'ok', detail: checkpoint ? `lu il y a ${humanMinutes(minutesAgo(checkpoint.lastSyncedAt, now))}` : 'prêt, jamais lu' };
+  const gmail = gmailLightOf({
+    configured: gmailConfigured,
+    lastTask: repos.tasks.lastFinishedOfType(SALES_ENGINE_TASKS.REPLY_SYNC),
+    // La friction la plus récente, quelle que soit son ancienneté : c'est la
+    // *dernière tentative* qui décide, pas la fenêtre d'une heure.
+    lastFailure: repos.salesEngine.frictions({ kind: 'GMAIL_UNAVAILABLE', limit: 1 })[0] ?? null,
+    failuresInHour: gmailFailures.length,
+    checkpoint,
+    now,
+  });
   const workers: SystemLight = !daemon || daemon.stoppedAt
     ? { state: 'down', detail: daemon ? `daemon arrêté ${daemon.stoppedAt?.slice(0, 16)}` : 'aucun daemon n’a jamais tourné' }
     : daemonAge !== null && daemonAge > 5

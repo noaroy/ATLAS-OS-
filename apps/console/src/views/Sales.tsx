@@ -298,7 +298,7 @@ export function SalesView() {
               const l = LIGHT[light.state];
               return (
                 <span key={key} title={light.detail} className={`cc-light cc-light--${l.tone}`}>
-                  {key === 'search' ? 'Search' : key === 'llm' ? 'LLM' : key === 'gmail' ? 'Gmail' : key === 'workers' ? 'Workers' : 'Database'} {l.glyph}
+                  {key === 'search' ? 'Search' : key === 'llm' ? 'LLM' : key === 'gmail' ? `Gmail ${system.gmail.code}` : key === 'workers' ? 'Workers' : 'Database'} {l.glyph}
                 </span>
               );
             })}

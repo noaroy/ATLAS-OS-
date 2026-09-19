@@ -405,10 +405,15 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
       return { kind: 'FAILED', errorCode: 'GMAIL_SYNC_FAILED', errorMessage: detail };
     }
     if (!report.ran) {
-      if (!provider.status().configured) {
+      // Deux « rien à faire » qui ne se ressemblent pas : sans identifiants, la
+      // boîte est illisible — friction, pour la ligne SYSTÈME. Sans conversation
+      // ouverte, il n'y a simplement rien à rapprocher : la boîte va bien, le
+      // passage est consigné comme tel, et ce n'est une panne pour personne.
+      const configured = provider.status().configured;
+      if (!configured) {
         repos.salesEngine.recordFriction({ kind: 'GMAIL_UNAVAILABLE', detail: report.skipped });
       }
-      return { kind: 'DONE', result: { ran: false, skipped: report.skipped } };
+      return { kind: 'DONE', result: { ran: false, configured, skipped: report.skipped } };
     }
     const consequences = report.imported.map((reply) => ({ domain: reply.domain, ...applyReplyConsequences(repos, reply) }));
     return {

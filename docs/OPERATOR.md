@@ -259,6 +259,19 @@ Rattachement par fil (`threadId`, `In-Reply-To`/`References`) puis par
 domaine ; classification déterministe (REPLIED / BOUNCED / AUTO_REPLY /
 NEEDS_REVIEW) ; une réponse non rattachée n'est attribuée à personne.
 
+**Ce que dit la ligne `Gmail` d'`atlas-status`.** C'est la *dernière*
+tentative de lecture qui parle — celle du daemon (toutes les 15 min) ou
+d'`inbox-sync` — par ce qu'elle a constaté, jamais l'absence de travail :
+
+| Code | Sens | Quoi faire |
+|---|---|---|
+| `READY` | la dernière lecture a parcouru la boîte et s'est bien terminée | rien |
+| `READY_IDLE` | identifiants présents, **aucune conversation ouverte : rien à synchroniser** — la boîte n'est pas en panne, elle n'a pas de travail | rien ; `gmail-check` éprouve le jeton si besoin |
+| `DOWN` | la dernière tentative a réellement échoué (jeton refusé, API, réseau), motif affiché — ou *le daemon ne voit pas les identifiants* alors que la commande les voit : le conteneur `atlas` tourne avec un environnement antérieur au `.env` | lire le motif ; `$COMPOSE up -d atlas` recrée le conteneur avec le `.env` courant |
+| `STALE` | aucune lecture depuis plus de 90 min : la preuve est trop vieille pour conclure | `daemon-check` — le daemon tourne-t-il ? |
+| `UNKNOWN` | aucune tentative jamais consignée | attendre un cycle, ou `inbox-sync` |
+| `OFF` | Gmail non configuré ici | — |
+
 **Aucun envoi possible.** `GmailOutboundProvider` refuse (`OUTBOUND_DISABLED`)
 dans le transport lui-même tant que `ATLAS_OUTBOUND_ENABLED` n'est pas vrai,
 avant toute politique et quel que soit le jeton — un jeton portant

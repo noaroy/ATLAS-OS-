@@ -91,7 +91,10 @@ console.log(`    ${'Daemon'.padEnd(14)}${feu(board.system.workers.state)}   ${c.
 console.log(`    ${'Workers'.padEnd(14)}${feu(board.system.workers.state)}   ${c.dim}${Object.keys(repos.tasks.countByStatus()).length ? 'file lue' : 'file vide'}${c.reset}`);
 console.log(`    ${'Search'.padEnd(14)}${feu(board.system.search.state)}   ${c.dim}${board.system.search.detail}${c.reset}`);
 console.log(`    ${'LLM'.padEnd(14)}${feu(board.system.llm.state)}   ${c.dim}${board.system.llm.detail}${c.reset}`);
-console.log(`    ${'Gmail'.padEnd(14)}${feu(board.system.gmail.state)}   ${c.dim}${board.system.gmail.detail}${c.reset}`);
+// Gmail dit son état en toutes lettres : READY, READY_IDLE, DOWN, STALE,
+// UNKNOWN, OFF — « rien à synchroniser » n'est pas « impossible de synchroniser ».
+const gmailTint = { ok: c.green, warn: c.amber, down: c.red, off: c.dim }[board.system.gmail.state];
+console.log(`    ${'Gmail'.padEnd(14)}${gmailTint}${board.system.gmail.code}${c.reset}   ${c.dim}${board.system.gmail.detail}${c.reset}`);
 console.log(`    ${'Database'.padEnd(14)}${feu(board.system.database.state)}   ${c.dim}${config.paths.databaseFile}${c.reset}`);
 const outboundActive = board.system.outbound.enabled && !board.system.outbound.paused && board.system.outbound.mode === 'PRODUCTION';
 console.log(`    ${'Outbound'.padEnd(14)}${outboundActive ? `${c.green}ACTIVE` : `${c.amber}PAUSED`}${c.reset}   ${c.dim}${board.system.detail.join(' · ') || `fenêtre ${board.system.outbound.window}`}${c.reset}`);

@@ -225,7 +225,10 @@ export {
   type GlobalPause, type DiscoveryResult, type SalesEngineDeps, type SendCycleReport, type ScheduleReport,
   type RecommendationDecision,
 } from './sales-engine.ts';
-export { buildSalesDashboard, type SalesDashboard, type DashboardRange, type SystemLight } from './sales-dashboard.ts';
+export {
+  buildSalesDashboard, gmailLightOf, GMAIL_EVIDENCE_MAX_AGE_MINUTES,
+  type SalesDashboard, type DashboardRange, type SystemLight, type GmailLight, type GmailStatusCode, type GmailEvidence,
+} from './sales-dashboard.ts';
 export {
   classifyDaemonRun, deploymentEvidence, summariseReadiness, DAEMON_STALE_AFTER_MS, DEPLOYMENT_AREAS, LIVE_AREA,
   type DaemonRunView, type DaemonRunState, type DeploymentArtefacts, type EvidenceItem, type CheckVerdict, type CheckLine, type LiveContext, type ReadinessSummary,

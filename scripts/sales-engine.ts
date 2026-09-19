@@ -100,7 +100,8 @@ function status(): void {
   if (d.hotLeads.length === 0) console.log(`    ${c.dim}aucune${c.reset}`);
 
   const sys = d.system;
-  console.log(`\n  ${c.bold}SYSTÈME${c.reset}  Search ${feu(sys.search.state)}  LLM ${feu(sys.llm.state)}  Gmail ${feu(sys.gmail.state)}  Workers ${feu(sys.workers.state)}  Database ${feu(sys.database.state)}`);
+  console.log(`\n  ${c.bold}SYSTÈME${c.reset}  Search ${feu(sys.search.state)}  LLM ${feu(sys.llm.state)}  Gmail ${feu(sys.gmail.state)} ${c.dim}${sys.gmail.code}${c.reset}  Workers ${feu(sys.workers.state)}  Database ${feu(sys.database.state)}`);
+  console.log(`    ${c.dim}Gmail ${sys.gmail.code} · ${sys.gmail.detail}${c.reset}`);
   console.log(`    ${c.dim}Outbound ${sys.outbound.enabled && !sys.outbound.paused && sys.outbound.mode === 'PRODUCTION' ? 'ACTIVE' : 'PAUSED'} · ${sys.outbound.mode} · fenêtre ${sys.outbound.window} ${sys.outbound.windowOpen ? '(ouverte)' : '(fermée)'}${sys.lastCycleAt ? ` · dernier cycle ${sys.lastCycleAt.slice(11, 16)} UTC` : ' · aucun cycle encore'}${c.reset}`);
   for (const line of sys.detail) console.log(`    ${c.dim}${line}${c.reset}`);
   console.log(`\n  ${c.dim}MESSAGES SENT: 0 (cette commande n'envoie rien)${c.reset}\n`);

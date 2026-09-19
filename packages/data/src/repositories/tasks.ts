@@ -675,6 +675,24 @@ export class TaskRepository {
     return row ? toTask(row) : null;
   }
 
+  /**
+   * La dernière tâche d'un type qui s'est terminée — réussie ou abandonnée.
+   *
+   * Une reprise programmée n'est pas terminée : elle n'a pas de `finished_at`
+   * et ne compte pas ici. C'est ce qui permet de lire, pour un cycle
+   * périodique, ce que sa dernière tentative aboutie a réellement constaté.
+   */
+  lastFinishedOfType(taskType: string): TaskRow | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM tasks
+          WHERE task_type = ? AND finished_at IS NOT NULL AND status IN ('DONE', 'FAILED')
+          ORDER BY finished_at DESC LIMIT 1`,
+      )
+      .get(taskType) as Record<string, unknown> | undefined;
+    return row ? toTask(row) : null;
+  }
+
   lastCompleted(): TaskRow | null {
     const row = this.db
       .prepare("SELECT * FROM tasks WHERE status = 'DONE' ORDER BY finished_at DESC LIMIT 1")

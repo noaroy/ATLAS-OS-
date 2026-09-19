@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { createLogger, loadConfig, nowIso } from '../packages/core/src/index.ts';
-import { createRepositories, snapshotDatabase, type Repositories } from '../packages/data/src/index.ts';
+import { createRepositories, proveReadonly, type Repositories } from '../packages/data/src/index.ts';
 
 const c = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
@@ -120,11 +120,18 @@ const restored = join(scratch, 'restored.db');
  * sans rien apprendre. On l'eprouve donc pour ce qu'elle est : un fichier qui
  * doit se restaurer — non vide, integre, lisible domaine par domaine.
  *
- * La fidelite du mecanisme, elle, s'eprouve sur un instantane pris a
- * l'instant, en lecture seule sur la source : restaure dans un fichier
- * temporaire, il doit rendre exactement ce que la source contient au meme
- * moment. Si un ecrivain passe entre les deux lectures, on recommence une
- * fois ; la source n'est jamais touchee.
+ * La fidelite du mecanisme, elle, s'eprouve sans course : la source est
+ * ouverte en LECTURE SEULE (SQLITE_OPEN_READONLY), une transaction de lecture
+ * y est ouverte — sous WAL, elle fige ce que cette connexion voit pendant que
+ * le daemon continue d'ecrire —, les domaines sont mesures dans cette
+ * transaction, et l'instantane est pris par l'API de sauvegarde de SQLite
+ * DEPUIS CETTE MEME CONNEXION : il copie exactement le meme etat. Restaure
+ * dans un fichier temporaire, il doit rendre ce que la transaction a lu — a
+ * l'unite pres, quel que soit le nombre d'ecrivains a cote.
+ *
+ * « Base principale intacte » ne signifie plus « le fichier n'a pas change de
+ * taille » — sur une base vivante, il change. Il signifie : cette epreuve n'a
+ * rien ecrit, et SQLite le prouve en refusant une ecriture d'essai.
  */
 const fresh = join(scratch, 'fresh.db');
 const freshRestored = join(scratch, 'fresh-restored.db');
@@ -158,7 +165,6 @@ try {
   rows.push({ name: 'taille (octets)', source: String(statSync(config.paths.databaseFile).size), restored: String(bytes), equal: bytes > 0 });
 
   // La sauvegarde stockée : chaque domaine se lit — c'est sa restaurabilité.
-  const mainBefore = statSync(config.paths.databaseFile);
   {
     const copy = createRepositories(restored, logger);
     try {
@@ -170,38 +176,46 @@ try {
     }
   }
 
-  // L'instantané frais, restauré, comparé à la source au même instant.
-  // Un écrivain concurrent peut passer entre les deux lectures : un second
-  // essai lève le doute. La source n'est ouverte qu'en lecture.
-  let essai = 0;
-  for (;;) {
-    essai += 1;
-    for (const f of [fresh, freshRestored]) if (existsSync(f)) rmSync(f);
-    snapshotDatabase(config.paths.databaseFile, fresh);
+  // L'instantané frais : une transaction de lecture sur la source en lecture
+  // seule, les mesures dedans, la copie depuis la même connexion — donc du
+  // même état. Aucune course possible avec le daemon, et rien d'écrit.
+  const source = createRepositories(config.paths.databaseFile, logger, { readonly: true });
+  let commitsAutres = 0;
+  try {
+    const preuve = proveReadonly(source.db);
+    rows.push({ name: 'source ouverte en lecture seule', source: 'SQLITE_OPEN_READONLY', restored: preuve.readonly ? 'refus constaté' : 'ÉCRITURE ACCEPTÉE', equal: preuve.readonly });
+    console.log(`  ${c.dim}${preuve.detail}${c.reset}`);
+
+    const versionAvant = source.db.pragma('data_version', { simple: true }) as number;
+    source.db.exec('BEGIN');
+    const mesuresSource = DOMAINS.map((d) => ({ name: d.name, value: String(d.measure(source)) }));
+    const runSource = daemonFingerprint(source);
+    await source.db.backup(fresh);
+    source.db.exec('COMMIT');
+    // Les commits d'autres connexions pendant l'épreuve : une information,
+    // jamais un échec — c'est le signe d'une base vivante.
+    commitsAutres = Math.max(0, (source.db.pragma('data_version', { simple: true }) as number) - versionAvant);
+
     copyFileSync(fresh, freshRestored);
-    const source = createRepositories(config.paths.databaseFile, logger);
     const copy = createRepositories(freshRestored, logger);
-    const tentative: typeof rows = [];
     try {
-      for (const domain of DOMAINS) {
-        const inCopy = domain.measure(copy);
-        const inSource = domain.measure(source);
-        tentative.push({ name: domain.name, source: String(inSource), restored: String(inCopy), equal: inSource === inCopy });
+      for (const [i, domain] of DOMAINS.entries()) {
+        const inCopy = String(domain.measure(copy));
+        const inSource = mesuresSource[i]!.value;
+        rows.push({ name: domain.name, source: inSource, restored: inCopy, equal: inSource === inCopy });
       }
-      const runSource = daemonFingerprint(source);
       const runCopy = daemonFingerprint(copy);
-      tentative.push({ name: 'dernier run du daemon', source: runSource.slice(0, 22), restored: runCopy.slice(0, 22), equal: runSource === runCopy });
+      rows.push({ name: 'dernier run du daemon', source: runSource.slice(0, 22), restored: runCopy.slice(0, 22), equal: runSource === runCopy });
     } finally {
-      source.close();
       copy.close();
     }
-    if (tentative.every((r) => r.equal) || essai >= 2) { rows.push(...tentative); break; }
-    console.log(`  ${c.dim}la source a bougé pendant la lecture : nouvel instantané${c.reset}`);
+  } finally {
+    source.close();
   }
-  const mainAfter = statSync(config.paths.databaseFile);
   rows.push({
-    name: 'base principale intacte', source: String(mainBefore.size), restored: String(mainAfter.size),
-    equal: mainBefore.size === mainAfter.size,
+    name: 'écritures de l’épreuve sur la source', source: 'aucune',
+    restored: commitsAutres > 0 ? `aucune · ${commitsAutres} commit(s) d’autres processus pendant l’épreuve` : 'aucune',
+    equal: true,
   });
 
   const divergents = rows.filter((r) => !r.equal);
@@ -220,7 +234,7 @@ try {
     ? 'base source illisible ou vide : aucune comparaison possible'
     : divergents.length > 0
       ? `divergence(s) : ${divergents.map((d) => `${d.name} ${d.restored}≠${d.source}`).join(' ; ')}`
-      : `sauvegarde stockée restaurable ; instantané frais : ${rows.length - 2} domaine(s) identiques à la source`;
+      : `sauvegarde stockée restaurable ; instantané frais : ${DOMAINS.length + 1} domaine(s) identiques à la source (lecture seule prouvée${commitsAutres > 0 ? `, base vivante : ${commitsAutres} commit(s) concurrents` : ''})`;
 
   const width = Math.max(...rows.map((r) => r.name.length));
   for (const row of rows) {

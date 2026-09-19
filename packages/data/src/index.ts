@@ -1,5 +1,5 @@
 import type { Logger } from '@atlas/core';
-import { openDatabase, type Db } from './database.ts';
+import { openDatabase, type Db, type OpenOptions } from './database.ts';
 import { UserRepository } from './repositories/users.ts';
 import { SettingsRepository } from './repositories/settings.ts';
 import { AgentRepository, BuildingRepository } from './repositories/agents.ts';
@@ -111,8 +111,8 @@ export interface Repositories {
   close(): void;
 }
 
-export function createRepositories(databaseFile: string, logger: Logger): Repositories {
-  const db = openDatabase(databaseFile, logger);
+export function createRepositories(databaseFile: string, logger: Logger, options: OpenOptions = {}): Repositories {
+  const db = openDatabase(databaseFile, logger, options);
   const skills = new SkillRepository(db);
 
   // Agents resolve their tool allow-list through the skill registry, so a

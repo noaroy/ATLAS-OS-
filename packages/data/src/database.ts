@@ -14,8 +14,35 @@ export type Db = Database.Database;
  * reads during writes, backups are a file copy, and there is no external
  * service to keep alive on the VPS — which directly serves the 24/7 goal.
  */
-export function openDatabase(file: string, logger: Logger): Db {
+export interface OpenOptions {
+  /**
+   * Lecture seule, au sens de SQLite (SQLITE_OPEN_READONLY) : toute écriture
+   * — INSERT, UPDATE, PRAGMA persistant, VACUUM, migration — est refusée par
+   * le moteur lui-même, pas par notre discipline. C'est ce qu'une épreuve
+   * (restauration, instantané) doit exiger d'une base vivante qu'un daemon
+   * écrit en même temps : on la lit, et l'on ne peut pas la toucher.
+   */
+  readonly?: boolean;
+}
+
+export function openDatabase(file: string, logger: Logger, options: OpenOptions = {}): Db {
   const log = logger.child({ scope: 'db' });
+  if (options.readonly) {
+    const db = new Database(file, { readonly: true });
+    // Rien ici n'écrit : busy_timeout, temp_store et mmap sont propres à la
+    // connexion. journal_mode et synchronous ne se posent pas — la base est
+    // déjà en WAL, et une connexion en lecture n'a pas de durabilité à régler.
+    db.pragma('busy_timeout = 5000');
+    db.pragma('temp_store = MEMORY');
+    db.pragma('mmap_size = 268435456');
+    try {
+      assertSchemaCurrent(db);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    return db;
+  }
   const db = new Database(file);
 
   db.pragma('journal_mode = WAL');
@@ -28,6 +55,43 @@ export function openDatabase(file: string, logger: Logger): Db {
 
   migrate(db, log);
   return db;
+}
+
+/**
+ * En lecture seule on ne migre pas ; on vérifie que rien n'est à migrer. Une
+ * base en retard se lirait avec des colonnes manquantes — mieux vaut le dire.
+ */
+function assertSchemaCurrent(db: Db): void {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").all();
+  const applied = tables.length === 0
+    ? new Set<number>()
+    : new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => (r as { version: number }).version));
+  const pending = MIGRATIONS.filter((m) => !applied.has(m.version)).map((m) => m.version);
+  if (pending.length > 0) {
+    throw new AtlasError('INVALID_STATE', `base en retard de migration (${pending.join(', ')} manquante(s)) : elle ne se lit pas en lecture seule avant d’avoir été ouverte en écriture`, { details: { reason: 'SCHEMA_BEHIND', pending } });
+  }
+}
+
+/**
+ * Une écriture d'essai que SQLite doit refuser.
+ *
+ * La preuve qu'une connexion est en lecture seule ne se déclare pas : elle
+ * se constate. Un UPDATE qui ne touche aucune ligne (WHERE 0) demande
+ * pourtant une transaction d'écriture ; sur une connexion SQLITE_OPEN_READONLY
+ * il tombe en SQLITE_READONLY, et c'est ce refus qu'on rapporte. Sur une
+ * connexion en écriture il passerait — sans rien changer — et la preuve
+ * échouerait : c'est bien ce qu'on veut savoir.
+ */
+export function proveReadonly(db: Db): { readonly: boolean; detail: string } {
+  try {
+    db.prepare('UPDATE schema_migrations SET version = version WHERE 0').run();
+    return { readonly: false, detail: 'une écriture d’essai a été ACCEPTÉE : la connexion n’est pas en lecture seule' };
+  } catch (error) {
+    const code = (error as { code?: string }).code ?? '';
+    return code === 'SQLITE_READONLY'
+      ? { readonly: true, detail: 'écriture d’essai refusée par SQLite (SQLITE_READONLY)' }
+      : { readonly: false, detail: `écriture d’essai refusée pour une autre raison (${code || 'inconnue'})` };
+  }
 }
 
 function migrate(db: Db, log: Logger): void {

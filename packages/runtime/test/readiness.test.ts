@@ -235,7 +235,9 @@ describe('le script atlas-production-check ne porte plus les verdicts d’avant 
     const daemonCheck = readFileSync(join(ROOT, 'scripts', 'daemon-main-db-check.ts'), 'utf8');
     assert.match(daemonCheck, /snapshotDatabase\(sourcePath, dbPath\)/, 'le daemon d’épreuve tourne sur un instantané, jamais sur la source');
     const restoreCheck = readFileSync(join(ROOT, 'scripts', 'restore-check.ts'), 'utf8');
-    assert.match(restoreCheck, /snapshotDatabase\(config\.paths\.databaseFile, fresh\)/);
+    assert.match(restoreCheck, /createRepositories\(config\.paths\.databaseFile, logger, \{ readonly: true \}\)/, 'la source est ouverte en lecture seule');
+    assert.match(restoreCheck, /await source\.db\.backup\(fresh\)/, 'l’instantané vient de la même connexion, dans la même transaction de lecture');
+    assert.ok(!/statSync\(config\.paths\.databaseFile\)\.size === /.test(restoreCheck) && !/mainBefore\.size === mainAfter\.size/.test(restoreCheck), 'plus de comparaison de taille de fichier sur une base vivante');
     const wrapper = readFileSync(join(ROOT, 'deployment', 'atlas-cli.sh'), 'utf8');
     assert.match(wrapper, /daemon-check\)\s+printf 'atlas:daemon-check'/);
   });

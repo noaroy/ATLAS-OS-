@@ -1,6 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -88,6 +88,70 @@ describe('épreuves gratuites sur une base vivante', () => {
     const recu = JSON.parse(readFileSync(join(dataDir, 'backups', 'restore-check.json'), 'utf8')) as { ok: boolean; detail: string };
     assert.equal(recu.ok, true, recu.detail);
     assert.ok(!existsSync(join(dataDir, 'restored.db')), 'rien n’est restauré à côté de la base');
+  });
+
+  test('restore-check pendant qu’un autre processus écrit : la source est lue en lecture seule, l’épreuve passe, rien d’elle n’y entre', async () => {
+    // Un écrivain concurrent, légitime : le daemon d'un serveur vivant, en miniature.
+    const writer = createRepositories(db, logger);
+    const tachesAvant = compte(db, 'tasks');
+    let ecrites = 0;
+    const cadence = setInterval(() => {
+      writer.tasks.create({ taskType: 'DEMO_SLEEP', department: 'BACKGROUND', workerType: 'DETERMINISTIC', payload: { i: ecrites } });
+      ecrites += 1;
+    }, 5);
+    let sortie = '';
+    let code: number | null = null;
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, ATLAS_DATA_DIR: dataDir, ATLAS_BACKUP_DIR: join(dataDir, 'backups'), ATLAS_LOG_LEVEL: 'error' };
+      delete env.ATLAS_DB_PATH;
+      const child = spawn(process.execPath, ['--import', 'tsx', join('scripts', 'restore-check.ts')], { cwd: ROOT, env });
+      child.stdout.on('data', (d) => { sortie += String(d); });
+      child.stderr.on('data', (d) => { sortie += String(d); });
+      code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    } finally {
+      clearInterval(cadence);
+      writer.close();
+    }
+    // Sous Windows, chaque commit coûte des dizaines de millisecondes : le
+    // nombre importe peu, seule compte la concurrence réelle pendant l'épreuve.
+    assert.ok(ecrites >= 3, `l’écrivain a bien écrit pendant l’épreuve (${ecrites} tâches)`);
+    assert.equal(code, 0, sortie);
+    assert.match(sortie, /RESTAURATION VÉRIFIÉE/);
+    assert.match(sortie, /écriture d’essai refusée par SQLite \(SQLITE_READONLY\)/, 'la lecture seule est prouvée, pas déclarée');
+    assert.match(sortie, /écritures de l’épreuve sur la source\s+aucune/);
+    assert.ok(!/DIVERGE/.test(sortie), 'aucune divergence : la copie est prise dans la même transaction de lecture que les mesures');
+    // La source : intègre, et n'a reçu que les lignes de l'écrivain — pas une de l'épreuve.
+    const d = new Database(db, { readonly: true });
+    try {
+      assert.deepEqual(d.prepare('PRAGMA integrity_check').all(), [{ integrity_check: 'ok' }]);
+    } finally { d.close(); }
+    assert.equal(compte(db, 'tasks'), tachesAvant + ecrites);
+    const recu = JSON.parse(readFileSync(join(dataDir, 'backups', 'restore-check.json'), 'utf8')) as { ok: boolean; detail: string };
+    assert.equal(recu.ok, true, recu.detail);
+    hashAvant = sha256(db); // la base a légitimement changé : l'épreuve suivante repart de là
+  });
+
+  test('snapshotDatabase pendant qu’un autre processus écrit : image intègre, cohérente avec un instant de la source', async () => {
+    const writer = createRepositories(db, logger);
+    const avant = compte(db, 'tasks');
+    let ecrites = 0;
+    const cadence = setInterval(() => { writer.tasks.create({ taskType: 'DEMO_SLEEP', department: 'BACKGROUND', workerType: 'DETERMINISTIC', payload: {} }); ecrites += 1; }, 2);
+    const cible = join(dir, 'snap-concurrent.db');
+    try {
+      await new Promise((r) => setTimeout(r, 30));
+      snapshotDatabase(db, cible);
+      await new Promise((r) => setTimeout(r, 30));
+    } finally {
+      clearInterval(cadence);
+      writer.close();
+    }
+    const apres = compte(db, 'tasks');
+    const dansImage = compte(cible, 'tasks');
+    const img = new Database(cible, { readonly: true });
+    try { assert.deepEqual(img.prepare('PRAGMA integrity_check').all(), [{ integrity_check: 'ok' }]); } finally { img.close(); }
+    assert.ok(dansImage >= avant && dansImage <= apres, `l’image porte un instant de la source (${avant} ≤ ${dansImage} ≤ ${apres})`);
+    assert.ok(ecrites > 0);
+    hashAvant = sha256(db);
   });
 
   test('daemon-check : tourne sur un instantané — aucune tâche ni tour de daemon n’entre dans la source, le reçu le dit', () => {

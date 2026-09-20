@@ -9,6 +9,7 @@ import {
   HOT_LEAD_INTENTS,
   isWithinSendWindow,
   sameMailbox,
+  isTechnicalDomain,
   type ReplyIntent,
   type SalesFunnelCounts,
 } from '@atlas/departments';
@@ -266,7 +267,10 @@ export function buildSalesDashboard(
   const prospects = repos.sales.discoveredSince(since);
   const attributions = repos.salesEngine.attributions({ segmentId, contactedSince: null });
   const attributedDomains = segmentId ? new Set(attributions.map((a) => a.domain)) : null;
-  const inScope = (domain: string | null): boolean => !attributedDomains || (domain !== null && attributedDomains.has(domain));
+  // Le périmètre : le segment demandé, et jamais une entité technique — le
+  // self-test Gmail reste en base pour l'audit, pas dans un chiffre d'affaires.
+  const inScope = (domain: string | null): boolean =>
+    !isTechnicalDomain(domain) && (!attributedDomains || (domain !== null && attributedDomains.has(domain)));
 
   const scopedProspects = prospects.filter((p) => inScope(p.domain));
   const discovered = scopedProspects.length;
@@ -403,7 +407,7 @@ export function buildSalesDashboard(
   // ── À faire ─────────────────────────────────────────────────────────────
   const approvals = repos.salesLoop.draftsInState('READY_FOR_APPROVAL').length
     + allProspects.filter((p) => p.state === 'READY_FOR_REVIEW').length;
-  const followUpsDue = repos.salesLoop.domainsInState('FOLLOW_UP_REQUIRED').length;
+  const followUpsDue = repos.salesLoop.domainsInState('FOLLOW_UP_REQUIRED').filter((d) => !isTechnicalDomain(d)).length;
   const proposedRecommendations = repos.salesEngine.recommendations({ status: 'PROPOSED', limit: 100 }).length;
   const segmentsToApprove = config.sales.engineMode === 'PRODUCTION'
     ? repos.salesEngine.segments({ status: ['TESTING', 'VALIDATED', 'SCALE'] }).filter((s) => !s.approvedForSend).length

@@ -8,7 +8,7 @@ import {
   deriveConversationState, replyHistory, evaluateFollowUp,
   classifyActionChannel, classifyRecipientString, actionLabelFor,
   classifyRecipientDomain, classifyContactIntent, outreachSuitability,
-  countryFit, looksMultinational, ATLAS_SALES_ICP,
+  countryFit, looksMultinational, ATLAS_SALES_ICP, isTechnicalEntity,
   type ActionChannel, type DomainMatch,
   type ConversationEvent, type ConversationStatus,
 } from '@atlas/departments';
@@ -64,7 +64,8 @@ function dossiers(repos: Repositories, config: AtlasConfig, today: string): Doss
   );
 
   return repos.sales.ledgerDomains()
-    .filter((entry) => entry.kind === 'CONTACTED')
+    // Un dossier est une entreprise réelle : le self-test Gmail n'en est pas un.
+    .filter((entry) => entry.kind === 'CONTACTED' && !isTechnicalEntity(entry))
     .map((entry) => {
       const conversation = conversations.get(entry.domain);
       const events = conversation ? repos.conversations.eventsFor(conversation.id) : [];

@@ -22,6 +22,7 @@ import {
   DEFAULT_STRATEGY,
   HOT_LEAD_INTENTS,
   STOP_FOLLOW_UP_INTENTS,
+  isTechnicalDomain,
   type LoopState,
   type ReplyIntent,
   type SendPolicy,
@@ -438,6 +439,8 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     let due = 0;
     let forbidden = 0;
     for (const domain of domains) {
+      // Le self-test n'est relancé par personne : il ne compte pas comme un silence.
+      if (isTechnicalDomain(domain)) continue;
       const contactedOn = repos.salesLoop.historyFor(domain).find((h) => h.toState === 'CONTACTED')?.occurredAt.slice(0, 10);
       if (!contactedOn) continue;
       const suppressed = repos.salesEngine.isSuppressed({ domain }).suppressed;

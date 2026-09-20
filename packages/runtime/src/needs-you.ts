@@ -2,6 +2,7 @@ import type { Repositories } from '@atlas/data';
 import {
   deriveConversationState,
   recommendedActionFor,
+  isTechnicalEntity,
   type ConversationEvent,
   type ConversationStatus,
 } from '@atlas/departments';
@@ -74,7 +75,11 @@ export function collectNeedsYou(options: NeedsYouOptions): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
 
   // --- Réponses de prospects et clients ---
+  //
+  // Une conversation technique (le self-test Gmail) n'attend rien de personne :
+  // elle reste en base pour l'audit, jamais dans la liste de ce qu'il faut faire.
   for (const conversation of repos.conversations.all()) {
+    if (isTechnicalEntity(conversation)) continue;
     const events = repos.conversations.eventsFor(conversation.id).map((e) => ({
       kind: e.kind,
       classification: e.classification,
@@ -200,6 +205,7 @@ export function todaySnapshot(repos: Repositories, today?: string): TodaySnapsho
   let replies = 0;
   let positive = 0;
   for (const conversation of repos.conversations.all()) {
+    if (isTechnicalEntity(conversation)) continue;
     const events = repos.conversations.eventsFor(conversation.id);
     if (events.length === 0) continue;
     const state = deriveConversationState(
@@ -219,7 +225,7 @@ export function todaySnapshot(repos: Repositories, today?: string): TodaySnapsho
   }
 
   return {
-    contacted: repos.sales.ledgerDomains().filter((d) => d.kind === 'CONTACTED').length,
+    contacted: repos.sales.ledgerDomains().filter((d) => d.kind === 'CONTACTED' && !isTechnicalEntity(d)).length,
     replies,
     positiveReplies: positive,
     paidClients: orders.length,
@@ -269,6 +275,7 @@ export function pipelineSnapshot(repos: Repositories, today?: string): PipelineS
 
   let interested = 0;
   for (const conversation of repos.conversations.all()) {
+    if (isTechnicalEntity(conversation)) continue;
     const events = repos.conversations.eventsFor(conversation.id);
     if (events.length === 0) continue;
     const state = deriveConversationState(
@@ -288,7 +295,7 @@ export function pipelineSnapshot(repos: Repositories, today?: string): PipelineS
   return {
     discovered,
     qualified,
-    contacted: ledger.filter((d) => d.kind === 'CONTACTED').length,
+    contacted: ledger.filter((d) => d.kind === 'CONTACTED' && !isTechnicalEntity(d)).length,
     interested,
     preview: -1,
     paid: repos.orders.listOrders(200).filter((o) => o.paymentStatus === 'CONFIRMED').length,

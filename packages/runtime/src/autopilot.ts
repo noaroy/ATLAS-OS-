@@ -723,6 +723,23 @@ export async function runAutopilotCycle(
       }
     }
 
+    // ── Les actions dont la condition a disparu ─────────────────────────────
+    //
+    // Une action sans tâche — décision du fondateur, proposée, bloquée — ne
+    // vit que par l'occasion qui l'a créée. Si plus aucune source ne la
+    // propose, la condition a disparu : traitée par quelqu'un, ou devenue sans
+    // objet. Elle se ferme avec ce motif, et n'entre pas dans le délai de
+    // « déjà fait » : si l'occasion revient, elle est reproposée. Rien n'est
+    // effacé — relevé en production : le self-test Gmail restait en tête des
+    // priorités après avoir cessé d'être une occasion commerciale.
+    const proposedFingerprints = new Set(proposals.map((p) => fingerprintOf(p)));
+    for (const action of repos.autopilot.openActions()) {
+      if (action.taskId || proposedFingerprints.has(action.fingerprint)) continue;
+      const reason = 'condition disparue : plus proposée par aucune source (traitée, ou sans objet)';
+      repos.autopilot.transition(action.id, 'DONE', { reason, result: { resolvedBy: 'autopilot', stale: true }, at: now.toISOString() });
+      verified.push({ actionId: action.id, objective: action.objective, from: action.status, to: 'DONE', reason });
+    }
+
     // ── PRIORISER ───────────────────────────────────────────────────────────
     const recent = [...repos.autopilot.openActions(), ...repos.autopilot.resolvedSince(new Date(now.getTime() - 7 * 86_400_000).toISOString(), 50)];
     const shares = allocationShares(recent);
@@ -749,7 +766,7 @@ export async function runAutopilotCycle(
       const open = repos.autopilot.openByFingerprint(fingerprint);
       if (open) { decisions.push({ objective: p.objective, category: p.category, score, decision: 'DUPLICATE', reason: `déjà ouverte (${open.status}, ${open.id})`, actionId: open.id }); continue; }
       const last = repos.autopilot.lastResolvedByFingerprint(fingerprint);
-      if (last?.status === 'DONE' && last.resolvedAt && now.getTime() - Date.parse(last.resolvedAt) < DONE_RECENTLY_MS) {
+      if (last?.status === 'DONE' && !last.result?.stale && last.resolvedAt && now.getTime() - Date.parse(last.resolvedAt) < DONE_RECENTLY_MS) {
         decisions.push({ objective: p.objective, category: p.category, score, decision: 'DONE_RECENTLY', reason: `terminée ${last.resolvedAt.slice(11, 16)} UTC : inutile de refaire`, actionId: last.id });
         continue;
       }

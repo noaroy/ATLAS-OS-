@@ -340,6 +340,19 @@ bash deployment/atlas-cli.sh send-approved --file=out/self-test.json --send   # 
 Sans terminal (cron, script), `--yes` tient lieu de confirmation — tapé par
 une personne ; il ne touche pas à la garde de lot.
 
+**L'unique exception du self-test.** Avant de relancer quelqu'un, ATLAS
+cherche dans la boîte les messages `from:<domaine du destinataire>` et refuse
+s'il en trouve (« à lire avant de relancer »). Pour le self-test, ce domaine
+est `gmail.com` : la recherche ramène la boîte entière et bloquait l'envoi.
+Cette seule recherche est ignorée quand **les quatre** conditions sont
+réunies — `ATLAS_ENGINE_MODE=INTERNAL_TEST`, destinataire = `GMAIL_USER`
+(trim + minuscules), `domain` **exactement** `selftest.atlas.invalid`,
+`purpose: FIRST_TOUCH`. Rien d'autre n'est ignoré : porte, garde de lot,
+registre, déjà parti, clé d'idempotence, approbation, réservation,
+confirmation, transport. Un prospect en `@gmail.com` reste soumis à la
+recherche ; PRODUCTION n'a aucune exception ; le second lancement du
+self-test reste BLOCKED (`deja contactee`).
+
 ## Premier lancement sûr (§68)
 
 1. `npm run atlas:status` (ou, sur le VPS, `bash deployment/vps-check.sh`) →

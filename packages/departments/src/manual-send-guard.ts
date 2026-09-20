@@ -57,6 +57,45 @@ export const sameAddress = (a: string | null | undefined, b: string | null | und
   return na.length > 0 && na === normaliseAddress(b);
 };
 
+/**
+ * Le domaine réservé au self-test : une clé de registre qui ne ressemble à
+ * aucun prospect. Il n'ouvre rien d'autre que l'exception ci-dessous.
+ */
+export const SELF_TEST_DOMAIN = 'selftest.atlas.invalid';
+
+export interface SelfTestCandidate {
+  domain: string;
+  recipient: string;
+  purpose?: 'FIRST_TOUCH' | 'FOLLOW_UP';
+}
+
+/**
+ * Le self-test isolé : le seul message pour lequel la recherche générique
+ * de réponses « par domaine du destinataire » n'a pas de sens.
+ *
+ * Relevé en production (v4.5.4) : le self-test vers GMAIL_USER dérivait
+ * `gmail.com` du destinataire, cherchait `from:gmail.com` dans la boîte, y
+ * trouvait dix messages quelconques et refusait « à lire avant de relancer ».
+ * La garde est juste pour un prospect — même un prospect en @gmail.com — et
+ * absurde pour soi-même : personne ne « répond » au self-test avant qu'il
+ * parte.
+ *
+ * Quatre conditions, toutes exactes, aucune configurable : INTERNAL_TEST,
+ * destinataire = GMAIL_USER (trim + minuscules), domaine = SELF_TEST_DOMAIN
+ * strictement, premier contact. Une seule manque : pas d'exception, la garde
+ * s'applique comme à n'importe qui. PRODUCTION n'a pas d'exception du tout.
+ */
+export function isIsolatedSelfTest(input: {
+  engineMode: 'INTERNAL_TEST' | 'PRODUCTION';
+  gmailUser: string | null | undefined;
+  item: SelfTestCandidate;
+}): boolean {
+  return input.engineMode === 'INTERNAL_TEST'
+    && sameAddress(input.item.recipient, input.gmailUser)
+    && input.item.domain === SELF_TEST_DOMAIN
+    && input.item.purpose === 'FIRST_TOUCH';
+}
+
 export function evaluateManualSendLot(input: ManualSendLotInput): ManualSendLotVerdict {
   if (!input.send) return { allowed: true, blocks: [], selfTest: false };
 

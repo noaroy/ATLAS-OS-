@@ -1,6 +1,6 @@
 import { sendKey, type Repositories } from '@atlas/data';
 import type { MailInboxProvider, MailOutboundProvider } from '@atlas/intelligence';
-import { replyHistory, canTransitionLoop, evaluateManualSendLot, type ManualSendLotVerdict } from '@atlas/departments';
+import { replyHistory, canTransitionLoop, evaluateManualSendLot, isIsolatedSelfTest, type ManualSendLotVerdict } from '@atlas/departments';
 
 /**
  * Le chemin manuel d'envoi, tel que `scripts/sales-send-approved.ts` le joue.
@@ -150,19 +150,29 @@ export async function runManualSendLot(options: ManualSendOptions): Promise<Manu
     // Lu dans Gmail sur le domaine réel du destinataire, pas sur celui du
     // registre : les deux diffèrent pour trois de ces entreprises, et chercher
     // au mauvais endroit ferait conclure au silence quelqu'un qui a écrit.
+    //
+    // Une seule exception, étroite : le self-test isolé (INTERNAL_TEST, vers
+    // GMAIL_USER, domaine réservé, premier contact). Pour lui, « from:gmail.com »
+    // ramène la boîte entière et ne dit rien d'une réponse — relevé en
+    // production : dix messages quelconques bloquaient le self-test. Tout le
+    // reste s'applique à lui comme aux autres : registre, déjà parti, clé,
+    // approbation, réservation, transport.
+    const selfTestIsole = isIsolatedSelfTest({ engineMode: options.engineMode, gmailUser: boite, item: relance });
     const domaineReel = relance.recipient.split('@')[1] ?? relance.domain;
-    let recus: Awaited<ReturnType<typeof inbox.list>> = [];
-    try {
-      recus = await inbox.list({
-        rawFilter: `from:${domaineReel}`, max: 20, since: '2026-01-01T00:00:00.000Z',
-      });
-    } catch (err) {
-      bloquer(nom, `boîte illisible : ${err instanceof Error ? err.message.slice(0, 60) : err}`);
-      continue;
-    }
-    if (recus.length > 0) {
-      bloquer(nom, `${recus.length} message(s) reçu(s) de ${domaineReel} — à lire avant de relancer`);
-      continue;
+    if (!selfTestIsole) {
+      let recus: Awaited<ReturnType<typeof inbox.list>> = [];
+      try {
+        recus = await inbox.list({
+          rawFilter: `from:${domaineReel}`, max: 20, since: '2026-01-01T00:00:00.000Z',
+        });
+      } catch (err) {
+        bloquer(nom, `boîte illisible : ${err instanceof Error ? err.message.slice(0, 60) : err}`);
+        continue;
+      }
+      if (recus.length > 0) {
+        bloquer(nom, `${recus.length} message(s) reçu(s) de ${domaineReel} — à lire avant de relancer`);
+        continue;
+      }
     }
 
     const conversation = repos.conversations.byDomain(relance.domain);
@@ -310,7 +320,7 @@ export async function runManualSendLot(options: ManualSendOptions): Promise<Manu
           recordedAt: new Date().toISOString(),
         });
       }
-      emit({ nom, verdict: 'SENT', motif: `${relance.recipient} · ${recu.externalMessageId}` });
+      emit({ nom, verdict: 'SENT', motif: `${relance.recipient} · ${recu.externalMessageId}${selfTestIsole ? ' · self-test isolé' : ''}` });
     } catch (err) {
       const motif = err instanceof Error ? err.message.slice(0, 100) : String(err);
       repos.salesLoop.recordSendResult({

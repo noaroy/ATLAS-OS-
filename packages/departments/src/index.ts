@@ -567,6 +567,6 @@ export * from './client-triage.ts';
 
 export * from './sales-engine.ts';
 export {
-  evaluateManualSendLot, normaliseAddress, sameAddress, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE,
-  type ManualSendLotInput, type ManualSendLotVerdict, type ManualSendBlock, type ManualSendBlockCode,
+  evaluateManualSendLot, isIsolatedSelfTest, normaliseAddress, sameAddress, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE, SELF_TEST_DOMAIN,
+  type ManualSendLotInput, type ManualSendLotVerdict, type ManualSendBlock, type ManualSendBlockCode, type SelfTestCandidate,
 } from './manual-send-guard.ts';

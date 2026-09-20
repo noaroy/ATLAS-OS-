@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createLogger } from '../../core/src/logger.ts';
 import { createRepositories, sendKey, type Repositories } from '../../data/src/index.ts';
-import { FixtureInboxProvider, GmailOutboundProvider, GMAIL_SEND_SCOPE } from '../../intelligence/src/index.ts';
-import { evaluateManualSendLot, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE, sameAddress } from '../../departments/src/index.ts';
+import { FixtureInboxProvider, GmailOutboundProvider, GMAIL_SEND_SCOPE, mailMessage, type MailInboxProvider, type MailMessage, type MailQuery } from '../../intelligence/src/index.ts';
+import { evaluateManualSendLot, isIsolatedSelfTest, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE, SELF_TEST_DOMAIN, sameAddress } from '../../departments/src/index.ts';
 import { runManualSendLot, type ManualSendItem } from '../src/manual-send.ts';
 
 /**
@@ -80,13 +80,37 @@ afterEach(() => {
 });
 
 const envois = () => reseau.filter((r) => r.url.includes('gmail.googleapis.com'));
-const run = (lot: ManualSendItem[], options: { engineMode?: 'INTERNAL_TEST' | 'PRODUCTION'; outboundEnabled?: boolean; send?: boolean; mailbox?: string } = {}) => {
+const run = (lot: ManualSendItem[], options: { engineMode?: 'INTERNAL_TEST' | 'PRODUCTION'; outboundEnabled?: boolean; send?: boolean; mailbox?: string; inbox?: MailInboxProvider } = {}) => {
   const outboundEnabled = options.outboundEnabled ?? true;
   return runManualSendLot({
     repos, lot, send: options.send ?? true, engineMode: options.engineMode ?? 'INTERNAL_TEST', outboundEnabled,
-    mailbox: options.mailbox ?? GMAIL_USER, inbox: new FixtureInboxProvider([]), outbound: transport(outboundEnabled),
+    mailbox: options.mailbox ?? GMAIL_USER, inbox: options.inbox ?? new FixtureInboxProvider([]), outbound: transport(outboundEnabled),
   });
 };
+
+/**
+ * Une boîte qui répond comme Gmail à `from:<domaine>` : les messages dont
+ * l'expéditeur porte ce domaine. C'est exactement la requête que la garde
+ * « à lire avant de relancer » envoie — et, pour un self-test vers
+ * @gmail.com, celle qui ramenait la boîte entière.
+ */
+class GmailLikeInbox implements MailInboxProvider {
+  readonly id = 'gmail';
+  readonly requetes: string[] = [];
+  constructor(private readonly messages: readonly MailMessage[]) {}
+  status() { return { configured: true, code: 'GMAIL_READY', detail: 'boîte test', scopes: [] }; }
+  async list(query: MailQuery = {}): Promise<MailMessage[]> {
+    this.requetes.push(query.rawFilter ?? '');
+    const from = /^from:(\S+)$/.exec(query.rawFilter ?? '')?.[1];
+    if (from) return this.messages.filter((m) => m.from.toLowerCase().endsWith(`@${from.toLowerCase()}`) || m.from.toLowerCase().endsWith(`@${from.toLowerCase()}>`));
+    return [];
+  }
+}
+
+/** Dix messages quelconques venus de @gmail.com — la boîte réelle du relevé. */
+const boiteGmail = () => new GmailLikeInbox(Array.from({ length: 10 }, (_, i) => mailMessage({
+  messageId: `quelconque-${i}`, from: `Personne ${i} <personne${i}@gmail.com>`, subject: `sujet ${i}`, receivedAt: '2026-09-1' + (i % 9) + 'T09:00:00.000Z',
+})));
 
 /** Rien n'a été réservé, écrit ni consigné pour ce lot. */
 const assertRienEcrit = (lot: ManualSendItem[]) => {
@@ -302,5 +326,101 @@ describe('le script, lancé comme l’opérateur le lance (base temporaire, sans
     assert.match(r.out, /NOTE avec --send, INTERNAL_TEST_RECIPIENT_BLOCKED refuserait tout le lot/);
     assert.match(r.out, /BLOCKED {2}Acme Industrie — envoi non autorisé : OUTBOUND_DISABLED/);
     assert.deepEqual(r.ecrits, { envois: 0, registre: 0, brouillons: 0, reservations: 0 });
+  });
+});
+
+describe('8. l’unique exception : le self-test isolé face à une boîte pleine de @gmail.com (relevé v4.5.4)', () => {
+  test('la règle pure : quatre conditions exactes, et aucune de moins', () => {
+    const item = { domain: SELF_TEST_DOMAIN, recipient: GMAIL_USER, purpose: 'FIRST_TOUCH' as const };
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item }), true);
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: ' NOAROY@gmail.com ', item: { ...item, recipient: 'NoaRoy@GMAIL.com' } }), true, 'trim + minuscules sur l’adresse');
+    assert.equal(isIsolatedSelfTest({ engineMode: 'PRODUCTION', gmailUser: GMAIL_USER, item }), false, 'PRODUCTION : aucune exception');
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item: { ...item, recipient: 'contact@acme-industrie.fr' } }), false);
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item: { ...item, domain: 'gmail.com' } }), false, 'un autre domaine : pas d’exception');
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item: { ...item, domain: 'Selftest.atlas.invalid' } }), false, 'le domaine est exact, pas normalisé');
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item: { ...item, purpose: 'FOLLOW_UP' } }), false);
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: GMAIL_USER, item: { domain: SELF_TEST_DOMAIN, recipient: GMAIL_USER } }), false, 'sans purpose explicite : pas d’exception');
+    assert.equal(isIsolatedSelfTest({ engineMode: 'INTERNAL_TEST', gmailUser: '', item }), false);
+  });
+
+  test('self-test + dix messages de gmail.com dans la boîte : la recherche par domaine est ignorée, tout le reste joue, SENT', async () => {
+    const boite = boiteGmail();
+    const rapport = await run([selfTest()], { inbox: boite });
+    assert.equal(rapport.refused, false);
+    assert.deepEqual(rapport.results.map((r) => r.verdict), ['SENT'], JSON.stringify(rapport.results));
+    assert.match(rapport.results[0]!.motif, /self-test isolé$/);
+    assert.ok(!boite.requetes.includes('from:gmail.com'), 'la requête générique from:gmail.com n’a pas été posée');
+    assert.deepEqual(envois().map((e) => e.to), [GMAIL_USER]);
+    assert.equal(repos.salesLoop.sentSince(EPOCH), 1);
+    assert.equal(repos.sales.ledgerFor(SELF_TEST_DOMAIN)?.kind, 'CONTACTED', 'registre : inchangé dans son rôle');
+    const cle = sendKey({ domain: SELF_TEST_DOMAIN, recipient: GMAIL_USER, subject: 'ATLAS — self-test', body: 'Premier envoi réel, vers moi-même.', purpose: 'FIRST_TOUCH' });
+    assert.equal(repos.salesLoop.sendOutcome(cle).sent, true, 'réservation + issue consignées : l’idempotence n’est pas contournée');
+    assert.equal(repos.salesLoop.draftsInState('SENT').length, 1, 'brouillon approuvé puis parti');
+  });
+
+  test('un prospect réel en @gmail.com : la garde des messages reçus reste active — en PRODUCTION comme avant', async () => {
+    const boite = boiteGmail();
+    const lot = [externe({ domain: 'acme-industrie.fr', recipient: 'jean.acme@gmail.com' })];
+    const rapport = await run(lot, { engineMode: 'PRODUCTION', inbox: boite });
+    assert.equal(rapport.refused, false);
+    assert.equal(rapport.results[0]!.verdict, 'BLOCKED');
+    assert.match(rapport.results[0]!.motif, /^10 message\(s\) reçu\(s\) de gmail\.com — à lire avant de relancer$/);
+    assert.ok(boite.requetes.includes('from:gmail.com'), 'la requête générique a bien été posée');
+    assert.deepEqual(envois(), []);
+    assertRienEcrit(lot);
+  });
+
+  test('domaine selftest.atlas.invalid mais destinataire ≠ GMAIL_USER : INTERNAL_TEST_RECIPIENT_BLOCKED, avant tout', async () => {
+    const boite = boiteGmail();
+    const lot = [selfTest({ recipient: 'contact@acme-industrie.fr' })];
+    const rapport = await run(lot, { inbox: boite });
+    assert.equal(rapport.refused, true);
+    assert.deepEqual(rapport.guard.blocks.map((b) => b.code), [INTERNAL_TEST_RECIPIENT_BLOCKED]);
+    assert.deepEqual(boite.requetes, [], 'la boîte n’a même pas été lue');
+    assert.deepEqual(reseau, []);
+    assertRienEcrit(lot);
+  });
+
+  test('GMAIL_USER mais domaine ≠ selftest.atlas.invalid : pas d’exception, la garde des messages reçus bloque', async () => {
+    const boite = boiteGmail();
+    const lot = [selfTest({ domain: 'gmail.com', companyName: 'moi, sous un autre domaine' })];
+    const rapport = await run(lot, { inbox: boite });
+    assert.equal(rapport.refused, false, 'la garde de lot laisse passer : destinataire = GMAIL_USER');
+    assert.equal(rapport.results[0]!.verdict, 'BLOCKED');
+    assert.match(rapport.results[0]!.motif, /10 message\(s\) reçu\(s\) de gmail\.com/);
+    assert.ok(boite.requetes.includes('from:gmail.com'));
+    assert.deepEqual(envois(), []);
+    assertRienEcrit(lot);
+  });
+
+  test('self-test en FOLLOW_UP : pas d’exception — et le registre le refuse de toute façon', async () => {
+    const boite = boiteGmail();
+    const rapport = await run([selfTest({ purpose: 'FOLLOW_UP' })], { inbox: boite });
+    assert.equal(rapport.results[0]!.verdict, 'BLOCKED');
+    assert.match(rapport.results[0]!.motif, /absente du registre/);
+    assert.deepEqual(envois(), []);
+  });
+
+  test('porte fermée : OUTBOUND_DISABLED avant tout, boîte jamais lue', async () => {
+    const boite = boiteGmail();
+    const lot = [selfTest()];
+    const rapport = await run(lot, { outboundEnabled: false, inbox: boite });
+    assert.equal(rapport.refused, true);
+    assert.deepEqual(rapport.guard.blocks.map((b) => b.code), ['OUTBOUND_DISABLED']);
+    assert.deepEqual(boite.requetes, []);
+    assert.deepEqual(reseau, []);
+    assertRienEcrit(lot);
+  });
+
+  test('le self-test envoyé deux fois : un seul envoi, MESSAGES SENT reste 1, second lancement BLOCKED', async () => {
+    const premier = await run([selfTest()], { inbox: boiteGmail() });
+    assert.equal(premier.results[0]!.verdict, 'SENT');
+    const second = await run([selfTest()], { inbox: boiteGmail() });
+    assert.equal(second.refused, false);
+    assert.equal(second.results[0]!.verdict, 'BLOCKED');
+    assert.match(second.results[0]!.motif, /deja contactee le \d{4}-\d{2}-\d{2}/);
+    assert.equal(envois().length, 1);
+    assert.equal(repos.salesLoop.sentSince(EPOCH), 1);
+    assert.deepEqual(repos.salesLoop.realSentSince(EPOCH), { real: 1, simulated: 0, unattributed: 0 });
   });
 });

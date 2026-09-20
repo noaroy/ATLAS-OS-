@@ -174,7 +174,12 @@ describe('ce module n’envoie rien', () => {
         // `eventsSince` lit les événements de toutes les conversations depuis
         // une date : la matière du tableau de bord. Lecture seule.
         'all', 'alreadyImported', 'byDomain', 'eventsFor', 'eventsSince', 'knownMessageIds',
-        'knownThreadIds', 'ledgerFollowUpFor', 'logImport', 'open', 'recordInboundEvent',
+        'knownThreadIds', 'ledgerFollowUpFor', 'logImport', 'open',
+        // `outboundReceipts` lit les accusés d'envoi (SENT, identifiants rendus)
+        // rattachés à la conversation : le fil d'un premier contact est connu
+        // avant toute réponse. Lecture seule — l'envoi lui-même vit ailleurs.
+        'outboundReceipts',
+        'recordInboundEvent',
         'syncCheckpoint',
       ],
     );

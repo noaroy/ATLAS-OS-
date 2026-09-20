@@ -108,6 +108,9 @@ const report = await syncSalesInbox(repos, provider, {
   mailbox: boiteSurveillee || 'inconnue',
   since: flag('since'),
   max: Number(flag('max') ?? MAX_MESSAGES_PER_SYNC),
+  // Le mode du moteur : seul INTERNAL_TEST peut lire la réponse du self-test
+  // isolé ; en PRODUCTION, nos propres messages restent écartés à la requête.
+  engineMode: config.sales.engineMode,
 });
 
 if (!report.ran) {

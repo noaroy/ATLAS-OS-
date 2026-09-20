@@ -465,6 +465,23 @@ export class SalesLoopRepository {
   }
 
   /**
+   * Les identifiants que le fournisseur a rendus pour nos envois réels.
+   *
+   * Un message qui porte l'un d'eux est le nôtre, quoi qu'en disent ses
+   * étiquettes ou son expéditeur : il ne peut jamais devenir une réponse.
+   */
+  sentExternalMessageIds(): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT external_message_id FROM outbound_send_events
+            WHERE phase = 'SENT' AND external_message_id IS NOT NULL`,
+        )
+        .all() as Array<{ external_message_id: string }>
+    ).map((r) => r.external_message_id);
+  }
+
+  /**
    * Les messages réellement partis — et, à part, ceux qui n'ont jamais quitté
    * la machine.
    *

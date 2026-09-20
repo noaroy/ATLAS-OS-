@@ -25,6 +25,21 @@ export class FixtureInboxProvider implements MailInboxProvider {
   async list(query: MailQuery = {}): Promise<MailMessage[]> {
     let messages = [...this.messages];
     if (query.since) messages = messages.filter((m) => m.receivedAt >= query.since!);
+    // Comme Gmail : nos propres messages (SENT, DRAFT) ne sont pas rendus sans
+    // qu'on les demande. Une boîte figée qui les rendrait quand même ferait
+    // passer des tests sur un chemin que le vrai fournisseur ne prend pas.
+    if (!query.includeOwnMessages) {
+      messages = messages.filter((m) => !m.labels.includes('SENT') && !m.labels.includes('DRAFT'));
+    }
+    // Le sous-ensemble de la syntaxe Gmail dont la synchronisation se sert :
+    // `from:` et `to:` (l'adresse est contenue), en conjonction. Le reste est
+    // ignoré — une boîte figée n'est pas un moteur de recherche.
+    for (const term of (query.rawFilter ?? '').split(/\s+/).filter(Boolean)) {
+      const [key, value = ''] = term.split(':', 2) as [string, string?];
+      const needle = value.toLowerCase();
+      if (key === 'from') messages = messages.filter((m) => m.from.toLowerCase().includes(needle));
+      if (key === 'to') messages = messages.filter((m) => m.to.some((t) => t.toLowerCase().includes(needle)));
+    }
     // `!== undefined` et non la verite du nombre : `max: 0` est une demande de
     // zero message, pas une absence de plafond. Le raccourci rendait toute la
     // boite a qui n'en voulait aucune -- et un fixture qui ne respecte pas son

@@ -266,3 +266,69 @@ describe('une entreprise, une conversation', () => {
     assert.ok(result.confidence > 0.95);
   });
 });
+
+describe('les accusés d’envoi appartiennent à la conversation', () => {
+  /**
+   * Relevé en production (v4.5.4) : le premier contact était parti — vrais
+   * identifiants Gmail dans `outbound_send_events` — avant que la conversation
+   * n'existe (`outbound_sends.conversation_id = null`). La conversation, ouverte
+   * ensuite depuis le registre, ne connaissait ni le fil ni le message : la
+   * réponse dans ce même fil restait non rattachée.
+   */
+  const claim = (domain: string, over: Partial<Parameters<typeof repos.salesLoop.claimSend>[0]> = {}) =>
+    repos.salesLoop.claimSend({ domain, recipient: `contact@${domain}`, subject: 'premier contact', body: 'Bonjour.', purpose: 'FIRST_TOUCH', claimedBy: 'test', ...over });
+
+  test('un envoi réservé avant la conversation, sur le même domaine, lui appartient — avec ses identifiants réels', () => {
+    const reserve = claim('nordpack.se');
+    assert.equal(reserve.claimed, true);
+    repos.salesLoop.recordSendResult({ idempotencyKey: reserve.idempotencyKey, phase: 'SENT', externalMessageId: '1a0bf72634a525e5', externalThreadId: '1a0bf72634a525e5' });
+    const { conversation, created } = repos.conversations.open({ domain: 'nordpack.se', companyName: 'Nordpack', destination: 'contact@nordpack.se', source: 'registre' });
+    assert.equal(created, true);
+    assert.deepEqual(repos.conversations.eventsFor(conversation.id), [], 'aucun événement : rien n’a encore été reçu');
+    const receipts = repos.conversations.outboundReceipts(conversation.id);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]!.externalMessageId, '1a0bf72634a525e5');
+    assert.equal(receipts[0]!.externalThreadId, '1a0bf72634a525e5');
+    assert.equal(receipts[0]!.recipient, 'contact@nordpack.se');
+    assert.equal(receipts[0]!.purpose, 'FIRST_TOUCH');
+    assert.deepEqual(repos.conversations.knownThreadIds(conversation.id), ['1a0bf72634a525e5'], 'le fil est connu avant toute réponse');
+    assert.deepEqual(repos.conversations.knownMessageIds(conversation.id), ['1a0bf72634a525e5']);
+    // Et c'est ce qui rattache la première réponse par le fil — la piste la plus sûre.
+    const result = matchIncoming({ from: 'Anna <anna@nordpack.se>', threadId: '1a0bf72634a525e5' }, candidates());
+    assert.equal(result.method, 'THREAD');
+    assert.equal(result.candidate?.companyName, 'Nordpack');
+  });
+
+  test('un envoi réservé avec la conversation la désigne directement ; celui d’un autre domaine ne lui appartient pas', () => {
+    const conversation = repos.conversations.byDomain('nordpack.se')!;
+    const relance = claim('nordpack.se', { conversationId: conversation.id, subject: 'relance', purpose: 'FOLLOW_UP' });
+    repos.salesLoop.recordSendResult({ idempotencyKey: relance.idempotencyKey, phase: 'SENT', externalMessageId: 'msg-relance', externalThreadId: 'thr-relance' });
+    const autre = claim('autre-societe.fi');
+    repos.salesLoop.recordSendResult({ idempotencyKey: autre.idempotencyKey, phase: 'SENT', externalMessageId: 'msg-autre', externalThreadId: 'thr-autre' });
+    const ids = repos.conversations.outboundReceipts(conversation.id).map((r) => r.externalMessageId);
+    assert.deepEqual(ids, ['1a0bf72634a525e5', 'msg-relance']);
+    assert.ok(!repos.conversations.knownThreadIds(conversation.id).includes('thr-autre'));
+  });
+
+  test('un échec, ou un SENT sans identifiant, n’est pas une graine : rien à rattacher', () => {
+    const conversation = repos.conversations.byDomain('nordpack.se')!;
+    const echec = claim('nordpack.se', { subject: 'échec' });
+    repos.salesLoop.recordSendResult({ idempotencyKey: echec.idempotencyKey, phase: 'FAILED', error: 'HTTP 500' });
+    const sansAccuse = claim('nordpack.se', { subject: 'sans accusé' });
+    repos.salesLoop.recordSendResult({ idempotencyKey: sansAccuse.idempotencyKey, phase: 'SENT' });
+    const ids = repos.conversations.outboundReceipts(conversation.id).map((r) => r.externalMessageId);
+    assert.deepEqual(ids, ['1a0bf72634a525e5', 'msg-relance']);
+  });
+
+  test('la table des réservations reste immuable : le rattachement se résout à la lecture, il ne réécrit rien', () => {
+    const db = new Database(join(dir, 'test.db'));
+    assert.throws(() => db.prepare("UPDATE outbound_sends SET conversation_id = 'x'").run(), /ne se modifie pas/);
+    db.close();
+  });
+
+  test('nos envois réels se reconnaissent par leur identifiant, quelle que soit la conversation', () => {
+    const ids = repos.salesLoop.sentExternalMessageIds();
+    assert.ok(ids.includes('1a0bf72634a525e5') && ids.includes('msg-relance') && ids.includes('msg-autre'));
+    assert.equal(ids.length, new Set(ids).size);
+  });
+});

@@ -48,6 +48,19 @@ export interface ConversationEventRow {
   recordedAt: string;
 }
 
+/**
+ * Un accusé d'envoi réel — SENT, avec l'identifiant que le fournisseur a
+ * rendu — rattaché à une conversation.
+ */
+export interface OutboundReceipt {
+  idempotencyKey: string;
+  recipient: string;
+  purpose: string;
+  externalMessageId: string;
+  externalThreadId: string | null;
+  sentAt: string;
+}
+
 export interface MailImportEntry {
   provider: string;
   externalMessageId: string;
@@ -375,9 +388,57 @@ export class ConversationRepository {
       });
   }
 
-  /** Les fils déjà rattachés à une entreprise — première piste de rapprochement. */
+  /**
+   * Les accusés d'envoi réels de cette conversation.
+   *
+   * Un envoi appartient à la conversation quand `outbound_sends.conversation_id`
+   * la désigne — ou, s'il a été réservé avant qu'elle n'existe (un premier
+   * contact ouvre la conversation *après* être parti), quand il porte son
+   * domaine. `outbound_sends` est immuable par déclencheur : on ne recopie pas
+   * l'identifiant après coup, on résout à la lecture, et comme un domaine n'a
+   * qu'une conversation la résolution est sans ambiguïté.
+   *
+   * Seuls comptent les SENT avec un identifiant rendu par le fournisseur : un
+   * échec n'a pas de fil, et un accusé sans identifiant ne prouve rien.
+   *
+   * Relevé en production (v4.5.4) : le self-test était parti avec ses vrais
+   * identifiants Gmail dans `outbound_send_events`, la conversation existait,
+   * mais elle ne « connaissait » ni le fil ni le message — et la réponse dans
+   * ce même fil est restée non rattachée.
+   */
+  outboundReceipts(conversationId: string): OutboundReceipt[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.idempotency_key, s.recipient, s.purpose,
+                e.external_message_id, e.external_thread_id, e.occurred_at
+           FROM outbound_send_events e
+           JOIN outbound_sends s ON s.idempotency_key = e.idempotency_key
+           JOIN sales_conversations c ON c.id = ?
+          WHERE e.phase = 'SENT' AND e.external_message_id IS NOT NULL
+            AND (s.conversation_id = c.id OR (s.conversation_id IS NULL AND s.domain = c.canonical_domain))
+          ORDER BY e.occurred_at ASC`,
+      )
+      .all(conversationId) as Array<{
+        idempotency_key: string; recipient: string; purpose: string;
+        external_message_id: string; external_thread_id: string | null; occurred_at: string;
+      }>;
+    return rows.map((r) => ({
+      idempotencyKey: r.idempotency_key, recipient: r.recipient, purpose: r.purpose,
+      externalMessageId: r.external_message_id, externalThreadId: r.external_thread_id, sentAt: r.occurred_at,
+    }));
+  }
+
+  /**
+   * Les fils déjà rattachés à une entreprise — première piste de rapprochement.
+   *
+   * Ceux des événements entrants, et ceux que nos propres envois ont
+   * ouverts : le fil d'un premier contact est connu dès l'accusé d'envoi, avant
+   * toute réponse. C'est ce qui rattache la première réponse d'un prospect
+   * par le fil — la piste la plus sûre — au lieu de son adresse ou de son
+   * domaine.
+   */
   knownThreadIds(conversationId: string): string[] {
-    return (
+    const events = (
       this.db
         .prepare(
           `SELECT DISTINCT external_thread_id FROM sales_conversation_events
@@ -385,10 +446,14 @@ export class ConversationRepository {
         )
         .all(conversationId) as Array<{ external_thread_id: string }>
     ).map((row) => row.external_thread_id);
+    const receipts = this.outboundReceipts(conversationId)
+      .map((r) => r.externalThreadId)
+      .filter((id): id is string => id !== null);
+    return [...new Set([...events, ...receipts])];
   }
 
   knownMessageIds(conversationId: string): string[] {
-    return (
+    const events = (
       this.db
         .prepare(
           `SELECT DISTINCT external_message_id FROM sales_conversation_events
@@ -396,6 +461,8 @@ export class ConversationRepository {
         )
         .all(conversationId) as Array<{ external_message_id: string }>
     ).map((row) => row.external_message_id);
+    const receipts = this.outboundReceipts(conversationId).map((r) => r.externalMessageId);
+    return [...new Set([...events, ...receipts])];
   }
 
   ledgerFollowUpFor(conversationId: string): string | null {

@@ -284,6 +284,10 @@ les verrous d'exploitation. Une porte fermée n'est pas une portée manquante.
 | `ENGINE_MODE` | `PAUSED` en `INTERNAL_TEST` (la politique d'envoi refuse tout envoi réel, le daemon n'a qu'un expéditeur à blanc) ; `PASS` en `PRODUCTION` |
 | `MESSAGES_SENT` | les messages réellement partis d'après le registre — les accusés `dry-run-N` de l'expéditeur à blanc sont comptés à part |
 
+Le curseur, le journal d'import et le registre ne se touchent jamais à la
+main : une réponse jamais consignée se découvre au passage suivant, dans le
+recouvrement.
+
 La ligne de synthèse `GMAIL_SEND = AUTH_READY · OUTBOUND PAUSED · ENGINE PAUSED ·
 MESSAGES SENT 0` est l'état attendu avant le premier envoi réel : tout est
 autorisé, rien n'est ouvert. Le contrôle ne passe jamais par le transport pour
@@ -352,6 +356,40 @@ registre, déjà parti, clé d'idempotence, approbation, réservation,
 confirmation, transport. Un prospect en `@gmail.com` reste soumis à la
 recherche ; PRODUCTION n'a aucune exception ; le second lancement du
 self-test reste BLOCKED (`deja contactee`).
+
+**La réponse au self-test, et comment elle se lit.** Répondre au self-test
+depuis Gmail écrit *de* GMAIL_USER *à* GMAIL_USER : le message porte à la
+fois SENT et INBOX. Le listing normal l'écarte (`-in:sent -in:draft`, inchangé
+en PRODUCTION) et la garde de direction le classerait sortant. Deux faits
+généraux et une exception étroite ferment la boucle :
+
+- la conversation connaît le fil dès l'accusé d'envoi : les identifiants
+  Gmail consignés dans `outbound_send_events` (SENT, non nuls) comptent parmi
+  ses fils connus, y compris quand l'envoi a été réservé avant qu'elle
+  n'existe — c'est vrai pour tout prospect, et c'est ce qui rattache une
+  première réponse **par le fil** ;
+- un message qui porte l'identifiant d'un de nos envois est le nôtre, quoi
+  qu'en disent ses étiquettes : jamais une réponse ;
+- **seulement** en `INTERNAL_TEST`, avec une conversation `selftest.atlas.invalid`
+  portant un accusé d'envoi réel vers GMAIL_USER (premier contact), la
+  synchronisation ajoute une seconde lecture, la plus étroite possible —
+  `from:GMAIL_USER to:GMAIL_USER` — et un message de ce fil-là, de ma boîte
+  vers ma boîte, qui n'est pas un de nos envois, passe le rapprochement
+  normal (THREAD) et la classification normale. Une note à soi-même dans un
+  autre fil, un message envoyé à quelqu'un d'autre, un prospect hébergé chez
+  Gmail : rien ne change pour eux.
+
+Validation, sur la base telle qu'elle est (curseur en place, journal intact,
+sans renvoyer le self-test — la réponse est dans le recouvrement de 6 h) :
+```bash
+bash deployment/atlas-cli.sh inbox-sync
+#   NOS PROPRES ENVOIS   ≥ 1   (l'original, écarté : accusé d'envoi consigné)
+#   MATCHED TO OUTREACH  1
+#   NEW EVENTS           1
+#   HUMAN REPLIES        1     (une réponse très courte peut tomber en À LIRE : NEEDS_REVIEW, rattachée quand même)
+bash deployment/atlas-cli.sh sales-inbox         # ATLAS self-test : REPLIED (ou NEEDS_REVIEW), source « gmail (THREAD) »
+bash deployment/atlas-cli.sh inbox-sync          # second passage : NEW EVENTS 0 · DUPLICATES SKIPPED ≥ 1
+```
 
 ## Premier lancement sûr (§68)
 

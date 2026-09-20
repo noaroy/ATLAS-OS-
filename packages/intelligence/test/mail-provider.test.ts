@@ -229,3 +229,72 @@ describe('le plafond du fournisseur de fixture', () => {
     assert.equal((await provider.list({})).length, 3);
   });
 });
+
+describe('ce que la requête Gmail écarte, et quand elle ne l’écarte pas', () => {
+  /**
+   * `-in:sent -in:draft` économise et protège : nos propres messages ne
+   * remontent pas. C'est le chemin par défaut, et il ne bouge pas. Seul un
+   * appelant qui le demande explicitement (`includeOwnMessages`) les obtient —
+   * la synchronisation ne le fait que pour le self-test isolé, en INTERNAL_TEST.
+   */
+  const ENV = {
+    GMAIL_CLIENT_ID: 'id', GMAIL_CLIENT_SECRET: 'secret', GMAIL_REFRESH_TOKEN: 'jeton', GMAIL_USER: 'noaroy@gmail.com',
+  } as NodeJS.ProcessEnv;
+  const originalFetch = globalThis.fetch;
+
+  /** Un Gmail factice qui n'a aucun message, et qui note la requête `q` reçue. */
+  const captureQueries = () => {
+    const queries: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      if (url.href === 'https://oauth2.googleapis.com/token') {
+        return new Response(JSON.stringify({ access_token: 'acces', expires_in: 3600, scope: GMAIL_READONLY_SCOPE }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/messages')) {
+        queries.push(url.searchParams.get('q') ?? '');
+        return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`appel inattendu : ${url.href}`);
+    }) as typeof fetch;
+    return queries;
+  };
+
+  test('par défaut, la requête porte -in:sent -in:draft ; avec includeOwnMessages elle ne le porte plus — et seulement alors', async () => {
+    const queries = captureQueries();
+    try {
+      const provider = new GmailInboxProvider({ logger, env: ENV });
+      await provider.list({ since: '2026-09-20T00:00:00.000Z' });
+      await provider.list({ since: '2026-09-20T00:00:00.000Z', includeOwnMessages: true, rawFilter: 'from:noaroy@gmail.com to:noaroy@gmail.com' });
+      await provider.list({});
+      assert.equal(queries.length, 3);
+      assert.match(queries[0]!, /^-in:sent -in:draft after:\d+$/);
+      assert.ok(!queries[1]!.includes('-in:sent'), 'le self-test lit aussi nos propres messages');
+      assert.match(queries[1]!, /^from:noaroy@gmail\.com to:noaroy@gmail\.com after:\d+$/, 'et seulement ceux de notre boîte vers notre boîte');
+      assert.equal(queries[2], '-in:sent -in:draft', 'sans option, le filtre revient : rien de global n’a bougé');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('la boîte figée se comporte comme Gmail sur ce qui compte', () => {
+  const messages = [
+    mailMessage({ messageId: 'in-1', from: 'jean@acme.fr', to: ['noaroy@gmail.com'], labels: ['INBOX'] }),
+    mailMessage({ messageId: 'own-1', from: 'noaroy@gmail.com', to: ['jean@acme.fr'], labels: ['SENT'] }),
+    mailMessage({ messageId: 'self-1', from: 'noaroy@gmail.com', to: ['noaroy@gmail.com'], labels: ['SENT', 'INBOX'] }),
+    mailMessage({ messageId: 'draft-1', from: 'noaroy@gmail.com', to: ['x@y.fr'], labels: ['DRAFT'] }),
+  ];
+
+  test('sans includeOwnMessages, SENT et DRAFT ne remontent pas ; avec, ils remontent', async () => {
+    const provider = new FixtureInboxProvider(messages);
+    assert.deepEqual((await provider.list()).map((m) => m.messageId), ['in-1']);
+    assert.deepEqual((await provider.list({ includeOwnMessages: true })).map((m) => m.messageId), ['in-1', 'own-1', 'self-1', 'draft-1']);
+  });
+
+  test('`from:` et `to:` restreignent comme Gmail — la lecture du self-test ne ramène que la boîte vers elle-même', async () => {
+    const provider = new FixtureInboxProvider(messages);
+    const selfAddressed = await provider.list({ includeOwnMessages: true, rawFilter: 'from:noaroy@gmail.com to:noaroy@gmail.com' });
+    assert.deepEqual(selfAddressed.map((m) => m.messageId), ['self-1']);
+    assert.deepEqual((await provider.list({ rawFilter: 'from:acme.fr' })).map((m) => m.messageId), ['in-1']);
+  });
+});

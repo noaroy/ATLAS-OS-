@@ -1,10 +1,13 @@
 import { canonicalDomainOf } from '@atlas/core';
-import type { Repositories } from '@atlas/data';
+import type { Repositories, OutboundReceipt } from '@atlas/data';
 import type { MailInboxProvider, MailMessage } from '@atlas/intelligence';
 import {
   classifyInbound,
   matchIncoming,
   directionOf,
+  sameMailbox,
+  sameAddress,
+  SELF_TEST_DOMAIN,
   type InboundKind,
   type MatchCandidate,
 } from '@atlas/departments';
@@ -85,6 +88,74 @@ export interface InboxSyncOptions {
   mailbox: string;
   since?: string | null;
   max?: number;
+  /**
+   * Le mode du moteur. Absent, on se comporte comme en PRODUCTION : aucune
+   * exception. Seul INTERNAL_TEST peut ouvrir la lecture du self-test isolé.
+   */
+  engineMode?: 'INTERNAL_TEST' | 'PRODUCTION';
+}
+
+/**
+ * Le périmètre exact dans lequel un message venu de notre propre boîte peut
+ * être lu comme une réponse : les fils que le self-test isolé a ouverts.
+ */
+export interface SelfTestReplyScope {
+  conversationId: string;
+  threadIds: ReadonlySet<string>;
+}
+
+/**
+ * Le self-test isolé a-t-il le droit d'être lu ?
+ *
+ * Le self-test (v4.5.4) écrit de GMAIL_USER à GMAIL_USER ; la réponse, dans
+ * le même fil, porte donc à la fois SENT et INBOX. Le listing normal l'écarte
+ * (`-in:sent -in:draft`), et la garde de direction l'écarterait ensuite. Les
+ * deux ont raison pour tout prospect ; pour ce seul fil, elles rendent la
+ * boucle impossible à fermer — relevé en production : 145 messages lus,
+ * 0 rattaché, la réponse jamais consignée.
+ *
+ * Quatre conditions, toutes exactes, aucune configurable :
+ *   · ATLAS_ENGINE_MODE=INTERNAL_TEST — en PRODUCTION, jamais ;
+ *   · une conversation dont le domaine est exactement SELF_TEST_DOMAIN ;
+ *   · un accusé d'envoi réel (SENT, identifiants rendus) de cette
+ *     conversation, adressé à GMAIL_USER (trim + minuscules), premier contact ;
+ *   · et ce sont *ces* fils-là, pas d'autres, qui s'ouvrent.
+ */
+export function selfTestReplyScope(input: {
+  engineMode: 'INTERNAL_TEST' | 'PRODUCTION' | undefined;
+  mailbox: string;
+  conversations: ReadonlyArray<{ id: string; canonicalDomain: string }>;
+  receiptsOf: (conversationId: string) => OutboundReceipt[];
+}): SelfTestReplyScope | null {
+  if (input.engineMode !== 'INTERNAL_TEST') return null;
+  const conversation = input.conversations.find((c) => c.canonicalDomain === SELF_TEST_DOMAIN);
+  if (!conversation) return null;
+  const threadIds = new Set(
+    input.receiptsOf(conversation.id)
+      .filter((r) => r.purpose === 'FIRST_TOUCH' && sameAddress(r.recipient, input.mailbox) && r.externalThreadId)
+      .map((r) => r.externalThreadId!),
+  );
+  return threadIds.size > 0 ? { conversationId: conversation.id, threadIds } : null;
+}
+
+/**
+ * Ce message de notre propre boîte est-il la réponse du self-test ?
+ *
+ * Même boîte à l'expédition et à la réception, fil connu du self-test, et un
+ * identifiant qui n'est pas celui d'un de nos envois. Un message à soi-même
+ * dans un autre fil, ou vers quelqu'un d'autre, reste ce qu'il est : le nôtre.
+ */
+export function isSelfTestReply(input: {
+  scope: SelfTestReplyScope | null;
+  mailbox: string;
+  message: Pick<MailMessage, 'messageId' | 'threadId' | 'from' | 'to'>;
+  ownSentIds: ReadonlySet<string>;
+}): boolean {
+  const { scope, message } = input;
+  if (!scope || !message.threadId || !scope.threadIds.has(message.threadId)) return false;
+  if (input.ownSentIds.has(message.messageId)) return false;
+  if (!input.mailbox.trim() || !sameMailbox(message.from, input.mailbox)) return false;
+  return message.to.some((to) => sameMailbox(to, input.mailbox));
 }
 
 export async function syncSalesInbox(
@@ -106,10 +177,16 @@ export async function syncSalesInbox(
   }
 
   // Les entreprises à qui l'on a écrit, avec ce qu'il faut pour rapprocher.
+  // Une conversation dont la destination est notre propre boîte (le self-test)
+  // ne peut pas être reconnue par cette adresse : tout message qui nous est
+  // adressé la « cite ». Pour le rapprochement, elle n'a pas d'adresse — seul
+  // son fil la désigne.
   const candidates: MatchCandidate[] = repos.conversations.all().map((conversation) => ({
     canonicalDomain: conversation.canonicalDomain,
     companyName: conversation.companyName,
-    outreachDestination: conversation.destination,
+    outreachDestination: conversation.destination && mailbox.trim() && sameMailbox(conversation.destination, mailbox)
+      ? null
+      : conversation.destination,
     knownThreadIds: repos.conversations.knownThreadIds(conversation.id),
     knownMessageIds: repos.conversations.knownMessageIds(conversation.id),
   }));
@@ -127,7 +204,28 @@ export async function syncSalesInbox(
   report.checkpoint = checkpoint?.lastReceivedAt ?? null;
   report.ran = true;
 
+  // Nos envois réels, par l'identifiant que le fournisseur a rendu : quoi
+  // qu'en disent étiquettes ou expéditeur, un message qui le porte est le
+  // nôtre et ne devient jamais une réponse.
+  const ownSentIds = new Set(repos.salesLoop.sentExternalMessageIds());
+  const selfTest = selfTestReplyScope({
+    engineMode: options.engineMode, mailbox,
+    conversations: repos.conversations.all(),
+    receiptsOf: (conversationId) => repos.conversations.outboundReceipts(conversationId),
+  });
+
+  // Le listing normal ne change pas : nos propres messages restent écartés à
+  // la requête. Le self-test isolé, quand il est autorisé, ajoute une seconde
+  // lecture, la plus étroite possible — les messages de notre boîte vers
+  // notre boîte — et rien d'autre de ce que nous avons écrit ne remonte.
   const messages: MailMessage[] = await provider.list({ since, max: options.max });
+  if (selfTest) {
+    const seen = new Set(messages.map((m) => m.messageId));
+    const selfAddressed = await provider.list({
+      since, max: 50, includeOwnMessages: true, rawFilter: `from:${mailbox} to:${mailbox}`,
+    });
+    for (const m of selfAddressed) if (!seen.has(m.messageId)) { seen.add(m.messageId); messages.push(m); }
+  }
 
   for (const message of messages) {
     report.scanned += 1;
@@ -142,9 +240,18 @@ export async function syncSalesInbox(
      * fil, et le fil nous est connu parce que *nous* l'avons ouvert : nos
      * propres courriers y correspondaient parfaitement et revenaient classés
      * REPLIED. Le message sortant est journalisé comme ignoré, jamais effacé.
+     *
+     * Un accusé d'envoi consigné tranche avant toute lecture des étiquettes :
+     * c'est notre message, point. Puis la direction ; et une seule réponse
+     * venue de notre boîte passe — celle du self-test isolé, sur son fil.
      */
-    const direction = directionOf({ from: message.from, labels: message.labels, mailbox });
-    if (direction.direction === 'OUTBOUND') {
+    const ownSend = ownSentIds.has(message.messageId);
+    const direction = ownSend
+      ? { direction: 'OUTBOUND' as const, reason: `accusé d’envoi consigné pour ${message.messageId}` }
+      : directionOf({ from: message.from, labels: message.labels, mailbox });
+    const selfTestReply = !ownSend && direction.direction === 'OUTBOUND'
+      && isSelfTestReply({ scope: selfTest, mailbox, message, ownSentIds });
+    if (direction.direction === 'OUTBOUND' && !selfTestReply) {
       report.outbound += 1;
       repos.conversations.logImport({
         provider: provider.id,
@@ -249,7 +356,7 @@ export async function syncSalesInbox(
       classification: verdict.classification,
       companyName: conversation.companyName,
       subject: message.subject,
-      detail: match.method,
+      detail: selfTestReply ? `${match.method} · réponse du self-test isolé` : match.method,
     });
     report.imported.push({
       eventId: event.id,

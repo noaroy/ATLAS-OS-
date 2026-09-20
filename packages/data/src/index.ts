@@ -179,6 +179,7 @@ export { SalesRepository } from './repositories/sales.ts';
 export {
   ConversationRepository,
   type SalesConversation,
+  type OutboundReceipt,
   type ConversationEventRow,
 } from './repositories/conversations.ts';
 export type {

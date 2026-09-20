@@ -394,7 +394,7 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     const provider = inbox();
     let report: InboxSyncReport;
     try {
-      report = await syncSalesInbox(repos, provider, { mailbox: process.env.GMAIL_USER?.trim() ?? '' });
+      report = await syncSalesInbox(repos, provider, { mailbox: process.env.GMAIL_USER?.trim() ?? '', engineMode: config.sales.engineMode });
     } catch (error) {
       // Réseau, jeton expiré, quota : la boîte n'est pas lisible maintenant.
       // La friction est consignée pour la ligne SYSTÈME, et la tâche échoue

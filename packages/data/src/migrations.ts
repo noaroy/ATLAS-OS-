@@ -2377,4 +2377,72 @@ CREATE TABLE IF NOT EXISTS sales_lead_reviews (
 );
 `,
   },
+  {
+    version: 37,
+    name: 'autopilot-control-loop',
+    sql: `
+-- --- L'Autopilot : la boucle de controle, et sa memoire -------------------
+--
+-- Un cycle observe l'etat reel, diagnostique, propose, priorise, confie ce
+-- qui est sur a un worker, verifie, apprend. Chaque cycle est ecrit pour etre
+-- relu : ce qu'il a vu, considere, decide, cree, execute, depense. Une action
+-- porte une empreinte stable ; tant qu'elle n'est pas resolue, une seconde
+-- action de meme empreinte est refusee par l'index partiel — pas par la
+-- vigilance de celui qui ecrit.
+--
+-- Aucune de ces tables n'envoie, ne paie, ne deploie : l'Autopilot cree des
+-- taches dans la file existante, sous ses gardes existantes, et laisse au
+-- fondateur ce qui exige une personne.
+CREATE TABLE IF NOT EXISTS autopilot_cycles (
+  id                   TEXT PRIMARY KEY,
+  started_at           TEXT NOT NULL,
+  finished_at          TEXT,
+  -- RUNNING · DONE · FAILED · INTERRUPTED
+  status               TEXT NOT NULL,
+  trigger              TEXT NOT NULL,
+  observations_json    TEXT NOT NULL DEFAULT '{}',
+  opportunities_json   TEXT NOT NULL DEFAULT '[]',
+  decisions_json       TEXT NOT NULL DEFAULT '[]',
+  actions_created_json TEXT NOT NULL DEFAULT '[]',
+  executed_json        TEXT NOT NULL DEFAULT '[]',
+  estimated_cost_usd   REAL NOT NULL DEFAULT 0,
+  actual_cost_usd      REAL,
+  summary              TEXT,
+  error                TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_autopilot_cycles_started ON autopilot_cycles(started_at);
+CREATE TABLE IF NOT EXISTS autopilot_actions (
+  id                      TEXT PRIMARY KEY,
+  fingerprint             TEXT NOT NULL,
+  cycle_id                TEXT NOT NULL REFERENCES autopilot_cycles(id),
+  objective               TEXT NOT NULL,
+  -- REVENUE · BLOCKED_WORK · DISCOVERY · CONVERSION · RELIABILITY · OPTIMIZATION · EXPLORATION
+  category                TEXT NOT NULL,
+  -- EXPLOIT · OPTIMIZE · EXPLORE
+  allocation              TEXT NOT NULL,
+  -- PROPOSED · APPROVED · QUEUED · RUNNING · VERIFYING · DONE · REJECTED · BLOCKED · WAITING_HUMAN
+  status                  TEXT NOT NULL,
+  score                   REAL NOT NULL,
+  proposal_json           TEXT NOT NULL,
+  recommended_agent       TEXT NOT NULL,
+  requires_human_approval INTEGER NOT NULL DEFAULT 1,
+  reason                  TEXT NOT NULL,
+  task_id                 TEXT,
+  result_json             TEXT,
+  rejection_reason        TEXT,
+  estimated_cost_usd      REAL NOT NULL DEFAULT 0,
+  actual_cost_usd         REAL,
+  parent_action_id        TEXT,
+  depth                   INTEGER NOT NULL DEFAULT 0,
+  created_at              TEXT NOT NULL,
+  updated_at              TEXT NOT NULL,
+  resolved_at             TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_autopilot_actions_open
+  ON autopilot_actions(fingerprint)
+  WHERE status IN ('PROPOSED', 'APPROVED', 'QUEUED', 'RUNNING', 'VERIFYING', 'BLOCKED', 'WAITING_HUMAN');
+CREATE INDEX IF NOT EXISTS idx_autopilot_actions_status ON autopilot_actions(status, score);
+CREATE INDEX IF NOT EXISTS idx_autopilot_actions_task ON autopilot_actions(task_id);
+`,
+  },
 ];

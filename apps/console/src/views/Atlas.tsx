@@ -91,7 +91,11 @@ export function AtlasView() {
   }
   if (!overview) return <Spinner />;
 
-  const { today, pipeline, needsYou, agents, system, autonomy } = overview;
+  const { today, pipeline, needsYou, agents, system, autonomy, autopilot } = overview;
+  const autopilotLabel: Record<typeof autopilot.status, string> = {
+    ACTIVE: 'au travail', PAUSED: 'en pause', IDLE: 'en veille', NEVER_RAN: 'jamais lancé',
+  };
+  const when = (iso: string | null): string => (iso ? iso.slice(0, 16).replace('T', ' ') + ' UTC' : '—');
 
   return (
     <div className="atlas-view">
@@ -141,6 +145,48 @@ export function AtlasView() {
               : undefined}
           />
         </div>
+      </Panel>
+
+      {/* L'Autopilot, en mots d'affaires : ce qu'il vise, ce qu'il fait, ce qu'il attend de vous. */}
+      <Panel title={`Autopilot — ${autopilotLabel[autopilot.status]}`}>
+        <p className="muted small">Dernier cycle : {when(autopilot.lastCycleAt)}</p>
+        {autopilot.topObjective ? (
+          <div className="autopilot-top">
+            <strong>Objectif du moment</strong>
+            <p>{autopilot.topObjective}</p>
+            {autopilot.topReason && <p className="muted small">{autopilot.topReason}</p>}
+          </div>
+        ) : (
+          <Empty title="Rien à faire de plus." hint="L’état réel ne révèle aucune occasion : rien n’est créé pour remplir la file." />
+        )}
+        <div className="stat-grid">
+          <StatCard label="En cours" value={formatNumber(autopilot.inProgress.length)} />
+          <StatCard label="Terminé (7 j)" value={formatNumber(autopilot.completedRecently.length)} />
+          <StatCard label="Attend votre décision" value={formatNumber(autopilot.waitingFounder.length)} />
+          <StatCard
+            label="Dépense IA estimée"
+            value={`${autopilot.estimatedSpendUsd.toFixed(2)} $`}
+            hint={autopilot.actualSpendUsd === null ? 'réelle : N/A' : `réelle : ${autopilot.actualSpendUsd.toFixed(4)} $`}
+          />
+        </div>
+        {autopilot.waitingFounder.length > 0 && (
+          <ul className="needs-list">
+            {autopilot.waitingFounder.map((item) => (
+              <li key={item.id} className="needs-item needs-item--outreach">
+                <p className="needs-what">{item.objective}</p>
+                <dl className="needs-detail"><dt>Pourquoi</dt><dd>{item.reason}</dd></dl>
+                {item.command && <code className="needs-action">{item.command}</code>}
+              </li>
+            ))}
+          </ul>
+        )}
+        {autopilot.inProgress.length > 0 && (
+          <ul className="system-list">
+            {autopilot.inProgress.map((item) => (
+              <li key={item.id}><span className="system-dot system-dot--ok" /><strong>{item.objective}</strong><span className="muted">en cours</span></li>
+            ))}
+          </ul>
+        )}
       </Panel>
 
       <Panel title="Pipeline">

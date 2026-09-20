@@ -391,6 +391,86 @@ bash deployment/atlas-cli.sh sales-inbox         # ATLAS self-test : REPLIED (ou
 bash deployment/atlas-cli.sh inbox-sync          # second passage : NEW EVENTS 0 · DUPLICATES SKIPPED ≥ 1
 ```
 
+## L'Autopilot : la boucle de contrôle
+
+ATLAS doit devenir une machine à revenu qui tourne seule ; la mesure est
+**€ générés / € investis / heure de fondateur**. L'Autopilot est le plan de
+contrôle des moteurs existants — il n'en ajoute aucun :
+
+```
+OBSERVER → DIAGNOSTIQUER → PROPOSER → PRIORISER → CONFIER → VÉRIFIER → APPRENDRE → dormir
+```
+
+**Ce qu'il fait.** Il lit l'état réel (prospects, registre, conversations,
+recommandations, missions, file de tâches, ingénierie, fournisseurs, dépense
+IA, santé, décisions en attente, état de l'envoi), en tire des occasions
+d'agir, les classe par un **score déterministe** (revenu direct › travail
+bloqué › découverte › conversion › fiabilité › optimisation › exploration ;
++ valeur et urgence, − coût, temps de fondateur, risque, irréversibilité),
+pose dans la file existante les tâches **sûres** (lecture de boîte, mesures,
+signalement des relances, découverte sous budget, analyses, revues, chaîne
+d'ingénierie jusqu'à un diff en attente), vérifie ce qu'il a confié au cycle
+suivant, et écrit tout : chaque cycle est relisible après coup
+(`npm run autopilot:report`). Cibles glissantes 70 % exploiter / 20 %
+optimiser / 10 % explorer — jamais forcées, jamais du travail pour remplir la
+file : sans occasion révélée par l'état réel, rien n'est créé, et cela se dit.
+
+**Ce qu'il ne fait jamais seul** — ces portes rendent l'action
+`WAITING_HUMAN`, toujours : envoyer une première campagne externe, lever
+`ATLAS_OUTBOUND_ENABLED`, payer, détruire des données de production, changer
+une politique de sécurité ou un secret, augmenter un budget, déployer en
+production, engager ATLAS vis-à-vis d'un tiers. Il ne pose **jamais**
+`SALES_SEND`. Il ne dépense pas lui-même : ce sont les workers qui servent
+ses tâches, sous les plafonds existants (budget IA quotidien, coût par tâche,
+profondeur et nombre par chaîne), plus un plafond par cycle
+(`ATLAS_AUTOPILOT_MAX_CYCLE_COST_USD`). Fournisseur absent, budget épuisé,
+type de tâche hors de la liste sûre : **BLOCKED**, jamais « à peu près ».
+
+```bash
+npm run autopilot:once      # un cycle borné, à la main — imprime Observed / Top opportunities / Actions created / Executed / Needs founder / Learned / Estimated spend
+npm run autopilot:status    # dernier cycle, objectif du moment, en cours, terminé, pour vous, dépense estimée et réelle
+npm run autopilot:queue     # la file, avec le motif de chaque action (--status=WAITING_HUMAN, --limit=N)
+npm run autopilot:report    # les derniers cycles : considéré, décidé, confié (--limit=N)
+bash deployment/atlas-cli.sh autopilot-once   # idem sur le VPS, base canonique
+```
+
+**Cadencement.** `ATLAS_AUTOPILOT_ENABLED=false` par défaut : rien ne tourne
+sans vous. À `true`, le daemon embarqué joue un cycle toutes les
+`ATLAS_AUTOPILOT_CYCLE_MINUTES` (30) — une tâche `AUTOPILOT_CYCLE` à clé de
+période, comme les cycles commerciaux. `autopilot:once` fonctionne quelle que
+soit cette valeur.
+
+**Pause et arrêt.** `npm run autopilot -- pause "motif"` : les cycles
+continuent d'observer et de proposer, mais ne confient plus rien (les
+actions restent `PROPOSED`). `npm run autopilot -- resume` reprend. Couper
+tout à fait : `ATLAS_AUTOPILOT_ENABLED=false` et recréer le conteneur. Les
+tâches déjà posées suivent leur vie dans la file (`npm run atlas:task`).
+
+**Approbation humaine.** Une action `WAITING_HUMAN` porte la commande à taper
+(`npm run sales:inbox`, `npm run sales:loop -- drafts`, `npm run atlas:apply
+-- list`…) ; faire la chose change l'état réel, et le cycle suivant le voit.
+Pour clore explicitement : `npm run autopilot -- decide <id> done|reject
+--reason=…`. Rien n'est jamais décidé à votre place.
+
+**Chaîne d'ingénierie.** Une friction répétée devient une revue
+(`ARCHITECTURE_REVIEW` → OpenAI), Hermes route les suites (`ENGINEERING_CHANGE`
+→ Claude Code, tests, revue, correction) sous les bornes de chaîne existantes,
+et l'action passe `WAITING_HUMAN — READY_FOR_HUMAN_DEPLOYMENT` dès qu'un diff
+est prêt : le dépôt ne bouge pas sans vous.
+
+**Reprise et retour en arrière.** Un cycle interrompu (arrêt du processus)
+est marqué `INTERRUPTED` au cycle suivant, jamais effacé ; les actions
+confiées sont revérifiées depuis la file. Une action ouverte de même
+empreinte n'est jamais dupliquée (index partiel en base) ; une action
+terminée n'est pas refaite avant six heures. Rien à défaire : l'Autopilot
+n'écrit que des cycles, des actions et des tâches — supprimer une action se
+fait par `decide <id> reject`, jamais en base.
+
+**Points d'extension.** Une source d'occasions (`OpportunitySource`) publie
+des propositions dans le cycle sous son nom ; c'est par là que le moteur
+d'expansion de prospects, le moteur de déclencheurs et l'apprentissage du
+revenu entreront, sans toucher au cycle.
+
 ## Premier lancement sûr (§68)
 
 1. `npm run atlas:status` (ou, sur le VPS, `bash deployment/vps-check.sh`) →

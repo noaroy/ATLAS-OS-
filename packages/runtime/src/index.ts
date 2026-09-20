@@ -235,3 +235,13 @@ export {
   classifyDaemonRun, deploymentEvidence, summariseReadiness, gmailSendReadiness, DAEMON_STALE_AFTER_MS, DEPLOYMENT_AREAS, LIVE_AREA, GMAIL_AUTH_AREA, GMAIL_SEND_AREA,
   type DaemonRunView, type DaemonRunState, type DeploymentArtefacts, type EvidenceItem, type CheckVerdict, type CheckLine, type LiveContext, type ReadinessSummary, type GmailSendReadinessInput,
 } from './readiness.ts';
+export {
+  runAutopilotCycle, observeAtlas, summariseAutopilot, createAutopilotHandlers, scheduleAutopilotCycle,
+  priorityScore, worthDoing, decideAutonomy, fingerprintOf, allocationShares, allocationAdjustment, verdictFromTasks,
+  readAutopilotPause, setAutopilotPause,
+  DEFAULT_OPPORTUNITY_SOURCES, revenueLoopSource, SAFE_AUTONOMOUS_TASK_TYPES, HUMAN_GATES, ALLOCATION_OF, ALLOCATION_TARGET,
+  AUTOPILOT_TASK_TYPE, AUTOPILOT_SETTINGS, MAX_ACTION_DEPTH,
+  type AutopilotProposal, type AutopilotObservation, type AutopilotCycleReport, type AutopilotSummary, type OpportunitySource,
+  type OpportunityContext, type AutopilotCategory, type Allocation, type ValueBand, type Urgency, type RiskBand, type Reversibility,
+  type HumanGate, type AutopilotExecution, type AutopilotDecision, type AutonomyVerdict, type AutopilotPause, type ProviderReadiness,
+} from './autopilot.ts';

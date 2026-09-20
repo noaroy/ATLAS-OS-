@@ -181,6 +181,17 @@ export interface AtlasOverview {
   }>;
   system: Array<{ name: string; state: 'OK' | 'ATTENTION' | 'ABSENT'; detail: string }>;
   autonomy: { level: number; label: string; description: string };
+  autopilot: {
+    status: 'ACTIVE' | 'PAUSED' | 'IDLE' | 'NEVER_RAN';
+    lastCycleAt: string | null;
+    topObjective: string | null;
+    topReason: string | null;
+    inProgress: Array<{ id: string; objective: string; status: string }>;
+    completedRecently: Array<{ id: string; objective: string; resolvedAt: string | null }>;
+    waitingFounder: Array<{ id: string; objective: string; reason: string; command: string | null }>;
+    estimatedSpendUsd: number;
+    actualSpendUsd: number | null;
+  };
   advanced: {
     taskStates: Record<string, number>;
     workspaces: Record<string, number>;

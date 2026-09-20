@@ -286,6 +286,8 @@
 .atlas-status--action { background: rgba(248, 81, 73, 0.16); color: #f85149; }
 
 .needs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.autopilot-top { margin: 0 0 1rem; padding: 0.75rem 1rem; border-radius: 6px; border-left: 3px solid #3fb950; background: rgba(255, 255, 255, 0.02); }
+.autopilot-top p { margin: 0.25rem 0 0; }
 .needs-item {
   padding: 0.85rem 1rem; border-radius: 6px;
   border-left: 3px solid var(--border, #30363d);

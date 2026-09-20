@@ -1,7 +1,7 @@
 import { canRunProvider, AUTONOMY_LEVELS, type AtlasConfig } from '@atlas/core';
 import type { Repositories } from '@atlas/data';
 import {
-  collectNeedsYou, todaySnapshot, pipelineSnapshot, inspectRepo, detectClaudeCode,
+  collectNeedsYou, todaySnapshot, pipelineSnapshot, inspectRepo, detectClaudeCode, summariseAutopilot,
 } from '@atlas/runtime';
 
 /**
@@ -46,6 +46,18 @@ export interface AtlasOverview {
   }>;
   system: Array<{ name: string; state: 'OK' | 'ATTENTION' | 'ABSENT'; detail: string }>;
   autonomy: { level: number; label: string; description: string };
+  /** L'Autopilot, en mots d'affaires : ce qu'il vise, ce qu'il fait, ce qu'il attend de vous. */
+  autopilot: {
+    status: 'ACTIVE' | 'PAUSED' | 'IDLE' | 'NEVER_RAN';
+    lastCycleAt: string | null;
+    topObjective: string | null;
+    topReason: string | null;
+    inProgress: Array<{ id: string; objective: string; status: string }>;
+    completedRecently: Array<{ id: string; objective: string; resolvedAt: string | null }>;
+    waitingFounder: Array<{ id: string; objective: string; reason: string; command: string | null }>;
+    estimatedSpendUsd: number;
+    actualSpendUsd: number | null;
+  };
   /** Les chiffres bruts, pour l'onglet avancé. Jamais sur l'écran principal. */
   advanced: {
     taskStates: Record<string, number>;
@@ -236,6 +248,15 @@ export function buildAtlasOverview(
     agents,
     system,
     autonomy: { level: level.level, label: level.label, description: level.description },
+    autopilot: (() => {
+      const s = summariseAutopilot(repos, config);
+      return {
+        status: s.status, lastCycleAt: s.lastCycleAt, topObjective: s.topObjective, topReason: s.topReason,
+        inProgress: s.inProgress.map((a) => ({ id: a.id, objective: a.objective, status: a.status })),
+        completedRecently: s.completedRecently, waitingFounder: s.waitingFounder,
+        estimatedSpendUsd: s.estimatedSpendUsd, actualSpendUsd: s.actualSpendUsd,
+      };
+    })(),
     advanced: {
       taskStates: repos.tasks.countByStatus(),
       workspaces: repos.tasks.workspaceCounts(),

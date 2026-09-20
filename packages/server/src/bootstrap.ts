@@ -37,6 +37,8 @@ import {
   createWorkerRegistry,
   createSalesEngineHandlers,
   scheduleSalesCycle,
+  createAutopilotHandlers,
+  scheduleAutopilotCycle,
   DEMO_HANDLERS,
   type RecoveryReport,
 } from '@atlas/runtime';
@@ -328,10 +330,14 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   // dans le superviseur. Les deux se coupent d'un seul réglage.
   const salesEnabled = config.sales.engineEnabled && options.daemon === true;
   const salesHandlers = createSalesEngineHandlers({ repos, config, logger, sourceRoot: process.cwd() });
+  // L'Autopilot : un cycle est une tâche déterministe ; son cadencement ne
+  // s'active que par ATLAS_AUTOPILOT_ENABLED, dans le même daemon embarqué.
+  const autopilotHandlers = createAutopilotHandlers({ repos, config, logger, cwd: process.cwd() });
+  const autopilotEnabled = config.autopilot.enabled && options.daemon === true;
   const workers = createWorkerRegistry({
-    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers }, workspaceRoot: process.cwd(),
+    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers }, workspaceRoot: process.cwd(),
   });
-  const daemon = salesEnabled
+  const daemon = salesEnabled || autopilotEnabled
     ? new AtlasDaemon({ repos, registry: workers.registry, logger, owner: `atlas-server#${process.pid}` })
     : null;
 
@@ -347,6 +353,7 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
     village,
     settings,
     salesScheduler: salesEnabled ? (now) => scheduleSalesCycle(repos, config, now) : undefined,
+    autopilotScheduler: autopilotEnabled ? (now) => scheduleAutopilotCycle(repos, config, now) : undefined,
   });
 
   seed(repos, config, logger);

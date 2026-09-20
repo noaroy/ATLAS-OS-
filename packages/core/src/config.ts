@@ -254,6 +254,17 @@ const envSchema = z.object({
 
   ATLAS_HEARTBEAT_MS: intish(30_000, 1_000, 600_000),
 
+  // ─── L'Autopilot : la boucle de controle ──────────────────────────────
+  // Faux par defaut : le cadencement automatique des cycles est une decision
+  // d'exploitation. `autopilot:once` joue un cycle a la main, quelle que soit
+  // cette valeur. Les plafonds bornent ce qu'un cycle peut confier aux
+  // workers ; ils ne remplacent aucun plafond de depense existant.
+  ATLAS_AUTOPILOT_ENABLED: boolish(false),
+  ATLAS_AUTOPILOT_CYCLE_MINUTES: intish(30, 5, 1_440),
+  ATLAS_AUTOPILOT_MAX_DISPATCH_PER_CYCLE: intish(3, 0, 20),
+  ATLAS_AUTOPILOT_MAX_OPEN_ACTIONS: intish(12, 1, 100),
+  ATLAS_AUTOPILOT_MAX_CYCLE_COST_USD: floatish(0.5, 0, 20),
+
   // ─── La boucle commerciale autonome ───────────────────────────────────
   // Le verrou d'approbation est le seul reglage dont la valeur par defaut
   // engage quelqu'un : il vaut `true`, et le passer a `false` autorise ATLAS
@@ -501,6 +512,14 @@ export interface AtlasConfig {
     claudeCodeTimeoutMs: number;
   };
   runtime: { heartbeatMs: number };
+  /** L'Autopilot : la boucle de controle, et ce qu'un cycle a le droit de confier. */
+  autopilot: {
+    enabled: boolean;
+    cycleMinutes: number;
+    maxDispatchPerCycle: number;
+    maxOpenActions: number;
+    maxCycleCostUsd: number;
+  };
   log: { level: 'debug' | 'info' | 'warn' | 'error'; pretty: boolean };
 }
 
@@ -810,6 +829,13 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       claudeCodeTimeoutMs: e.ATLAS_CLAUDE_CODE_TIMEOUT_MS,
     },
     runtime: { heartbeatMs: e.ATLAS_HEARTBEAT_MS },
+    autopilot: {
+      enabled: e.ATLAS_AUTOPILOT_ENABLED,
+      cycleMinutes: e.ATLAS_AUTOPILOT_CYCLE_MINUTES,
+      maxDispatchPerCycle: e.ATLAS_AUTOPILOT_MAX_DISPATCH_PER_CYCLE,
+      maxOpenActions: e.ATLAS_AUTOPILOT_MAX_OPEN_ACTIONS,
+      maxCycleCostUsd: e.ATLAS_AUTOPILOT_MAX_CYCLE_COST_USD,
+    },
     log: { level: e.ATLAS_LOG_LEVEL, pretty: e.ATLAS_LOG_PRETTY },
   };
 

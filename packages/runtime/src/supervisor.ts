@@ -29,6 +29,11 @@ export interface SupervisorDeps {
    * Absent, aucun cycle commercial n'est cadencé — c'est le cas des tests.
    */
   salesScheduler?: (now: Date) => { created: string[]; existing: string[] };
+  /**
+   * Le cadencement de l'Autopilot, quand ATLAS_AUTOPILOT_ENABLED est vrai.
+   * Même mécanisme : une tâche à clé de période, servie par le daemon.
+   */
+  autopilotScheduler?: (now: Date) => { created: string[]; existing: string[] };
 }
 
 /**
@@ -212,6 +217,23 @@ export class RuntimeSupervisor {
           name: 'Sales engine scheduler',
           description:
             'Pose les cycles du moteur commercial (lecture de la boîte, envois approuvés, relances, découverte, mesures, recommandations) avec des clés de période : rien n’est créé deux fois.',
+          trigger: { type: 'schedule', cron: '*/5 * * * *', timezone: 'UTC' },
+        },
+        async () => {
+          const report = schedule(new Date());
+          return { created: report.created.length, existing: report.existing.length };
+        },
+      );
+    }
+
+    if (this.deps.autopilotScheduler) {
+      const schedule = this.deps.autopilotScheduler;
+      automation.registerInternal(
+        'atlas.autopilot-scheduler',
+        {
+          name: 'Autopilot scheduler',
+          description:
+            'Pose le cycle de contrôle de l’Autopilot (observer, proposer, prioriser, confier ce qui est sûr, vérifier, apprendre) avec une clé de période : rien n’est créé deux fois, rien n’est envoyé.',
           trigger: { type: 'schedule', cron: '*/5 * * * *', timezone: 'UTC' },
         },
         async () => {

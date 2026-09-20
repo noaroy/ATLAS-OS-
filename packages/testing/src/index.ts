@@ -334,6 +334,8 @@ export function makeTestConfig(
       claudeCodeTimeoutMs: 900_000,
     },
     runtime: { heartbeatMs: 60_000 },
+    // L'Autopilot ne se cadence pas dans les tests : un cycle se joue à la main.
+    autopilot: { enabled: false, cycleMinutes: 30, maxDispatchPerCycle: 3, maxOpenActions: 12, maxCycleCostUsd: 0.5 },
     log: { level: 'error', pretty: false },
   };
 }

@@ -18,6 +18,7 @@ import { LlmCallRepository } from './repositories/llm-calls.ts';
 import { OrderRepository } from './repositories/orders.ts';
 import { SalesRepository } from './repositories/sales.ts';
 import { ConversationRepository } from './repositories/conversations.ts';
+import { AutopilotRepository } from './repositories/autopilot.ts';
 
 export {
   SalesLoopRepository,
@@ -108,6 +109,7 @@ export interface Repositories {
   toolCalls: ToolCallRepository;
   decisions: DecisionRepository;
   salesEngine: SalesEngineRepository;
+  autopilot: AutopilotRepository;
   close(): void;
 }
 
@@ -155,6 +157,7 @@ export function createRepositories(databaseFile: string, logger: Logger, options
     toolCalls: new ToolCallRepository(db),
     decisions: new DecisionRepository(db),
     salesEngine: new SalesEngineRepository(db),
+    autopilot: new AutopilotRepository(db),
     close() {
       // A WAL checkpoint on shutdown keeps the main file self-contained, so a
       // backup taken right after a stop is complete on its own.
@@ -195,4 +198,7 @@ export {
   type CreateTaskInput,
   type ClaimResult,
 } from './repositories/tasks.ts';
-
+export {
+  AutopilotRepository, OPEN_ACTION_STATUSES,
+  type AutopilotCycle, type AutopilotAction, type AutopilotActionStatus, type AutopilotCycleStatus,
+} from './repositories/autopilot.ts';

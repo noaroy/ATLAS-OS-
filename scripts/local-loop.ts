@@ -5,9 +5,10 @@
  * existante, servie par le même daemon et les mêmes garde-fous que la
  * production (worktree isolé, chemins autorisés vérifiés, budget de diff,
  * tests) — juste bornée à cet objectif précis et rendue au terminal au lieu
- * d'être laissée à un daemon qui tourne indéfiniment. Après chaque tour, l'état
- * de la tâche est relu ; la boucle s'arrête dès qu'il devient terminal, ou aux
- * plafonds (tours, minutes).
+ * d'être laissée à un daemon qui tourne indéfiniment. La logique elle-même vit
+ * dans `runLocalObjectiveLoop` (`packages/runtime/src/local-loop.ts`) — ce
+ * script n'est qu'un habillage CLI, pour que la boucle maîtresse puisse
+ * l'appeler directement, sans sous-processus.
  *
  * Rien n'est appliqué au dépôt principal : un diff prêt attend une décision
  * humaine.
@@ -18,7 +19,7 @@
  */
 import { createLogger, loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
-import { AtlasDaemon, createWorkerRegistry, verdictFromTasks, checkCommand } from '../packages/runtime/src/index.ts';
+import { createWorkerRegistry, runLocalObjectiveLoop } from '../packages/runtime/src/index.ts';
 
 loadAtlasEnv();
 
@@ -39,13 +40,6 @@ if (!objective || !pathsArg) {
 }
 const allowedPaths = pathsArg.split(',').map((p) => p.trim()).filter(Boolean);
 const testCommands = flags('test');
-for (const command of testCommands) {
-  const verdict = checkCommand(command);
-  if (!verdict.allowed) {
-    console.error(`  commande de test refusée : ${verdict.reason}`);
-    process.exit(1);
-  }
-}
 
 const config = loadConfig(process.cwd());
 const logger = createLogger({ level: 'info', pretty: true });
@@ -54,65 +48,46 @@ const repos = createRepositories(config.paths.databaseFile, logger);
 const { registry, live } = createWorkerRegistry({ config, logger, repos, workspaceRoot: process.cwd() });
 logger.info(live ? 'appels réels : cette boucle sera facturée' : 'mode figé : ATLAS_AI_LIVE=false, aucun appel payant', {});
 
-const created = repos.tasks.create({
-  taskType: 'ENGINEERING_CHANGE',
-  department: 'ENGINEERING',
-  workerType: 'CLAUDE',
-  priority: Number(flag('priority') ?? 80),
-  maxAttempts: Number(flag('max-attempts') ?? 2),
-  payload: {
-    objective,
-    allowed_paths: allowedPaths,
-    test_commands: testCommands,
-    ...(flag('acceptance') ? { acceptance_criteria: flag('acceptance') } : {}),
-  },
-});
-console.log(`\n  ${c.bold}BOUCLE LOCALE${c.reset}  tâche ${created.task.taskId} ${created.created ? 'créée' : 'réutilisée (même clé)'} — ${created.task.status}`);
-console.log(`  objectif : ${objective}`);
-console.log(`  chemins  : ${allowedPaths.join(', ')}${testCommands.length ? `\n  tests    : ${testCommands.join(' · ')}` : ''}\n`);
-
-const maxCyclesTotal = Number(flag('max-cycles') ?? 40);
-const maxWallMinutes = Number(flag('max-wall-minutes') ?? 30);
-const deadlineAt = Date.now() + maxWallMinutes * 60_000;
-
-let currentDaemon: AtlasDaemon | null = null;
 let manualStop = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    manualStop = true;
-    currentDaemon?.requestStop(`signal ${signal}`);
-  });
+  process.on(signal, () => { manualStop = true; });
 }
 
-let cyclesUsed = 0;
-let lastVerdict = verdictFromTasks(repos, repos.tasks.byId(created.task.taskId)!);
-const TERMINAL = new Set(['DONE', 'WAITING_HUMAN', 'BLOCKED']);
-
 try {
-  while (cyclesUsed < maxCyclesTotal && Date.now() < deadlineAt && !manualStop && !TERMINAL.has(lastVerdict.status)) {
-    currentDaemon = new AtlasDaemon({
-      repos, registry, logger, owner: 'local-loop',
-      workerTypes: ['CLAUDE'], maxCycles: 1, maxIdleMs: 3_000,
-    });
-    const stats = await currentDaemon.run();
-    cyclesUsed += stats.cycles;
-    lastVerdict = verdictFromTasks(repos, repos.tasks.byId(created.task.taskId)!);
-    console.log(`  ${c.dim}tour ${cyclesUsed} · ${lastVerdict.status} · ${lastVerdict.reason}${c.reset}`);
+  console.log(`\n  ${c.bold}BOUCLE LOCALE${c.reset}`);
+  console.log(`  objectif : ${objective}`);
+  console.log(`  chemins  : ${allowedPaths.join(', ')}${testCommands.length ? `\n  tests    : ${testCommands.join(' · ')}` : ''}\n`);
+
+  let report;
+  try {
+    report = await runLocalObjectiveLoop(
+      { repos, registry, logger },
+      {
+        objective, allowedPaths, testCommands,
+        acceptanceCriteria: flag('acceptance') ?? undefined,
+        priority: Number(flag('priority') ?? 80),
+        maxAttempts: Number(flag('max-attempts') ?? 2),
+        maxCycles: Number(flag('max-cycles') ?? 40),
+        maxWallMs: Number(flag('max-wall-minutes') ?? 30) * 60_000,
+        shouldStop: () => manualStop,
+      },
+    );
+  } catch (error) {
+    console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
   }
 
-  const task = repos.tasks.byId(created.task.taskId)!;
-  console.log(`\n  ${c.bold}RÉSULTAT${c.reset}  ${cyclesUsed} tour(s)`);
-  const tint = lastVerdict.status === 'DONE' ? c.green : lastVerdict.status === 'BLOCKED' ? c.red : c.amber;
-  console.log(`  état  : ${tint}${lastVerdict.status}${c.reset} — ${lastVerdict.reason}`);
-  if (lastVerdict.costUsd !== null) console.log(`  coût  : ${lastVerdict.costUsd.toFixed(4)} $`);
+  console.log(`\n  ${c.bold}RÉSULTAT${c.reset}  tâche ${report.taskId} · ${report.cyclesUsed} tour(s)`);
+  const tint = report.verdict.status === 'DONE' ? c.green : report.verdict.status === 'BLOCKED' ? c.red : c.amber;
+  console.log(`  état  : ${tint}${report.verdict.status}${c.reset} — ${report.verdict.reason}`);
+  if (report.verdict.costUsd !== null) console.log(`  coût  : ${report.verdict.costUsd.toFixed(4)} $`);
 
-  const workspace = repos.tasks.workspaceFor(task.taskId);
-  if (workspace && (workspace.state === 'READY_FOR_REVIEW' || workspace.state === 'APPROVED_TO_APPLY')) {
-    console.log(`\n  diff prêt (${workspace.state}) — ${workspace.filesChanged} fichier(s), ${workspace.diffLines} ligne(s)`);
-    console.log(`  npm run atlas:task -- show ${task.taskId}`);
+  if (report.workspace && (report.workspace.state === 'READY_FOR_REVIEW' || report.workspace.state === 'APPROVED_TO_APPLY')) {
+    console.log(`\n  diff prêt (${report.workspace.state}) — ${report.workspace.filesChanged} fichier(s), ${report.workspace.diffLines} ligne(s)`);
+    console.log(`  npm run atlas:task -- show ${report.taskId}`);
     console.log(`  npm run atlas:apply -- list          # relecture puis application, geste humain`);
-  } else if (!TERMINAL.has(lastVerdict.status)) {
-    console.log(`\n  non résolu dans les bornes de ce lancement (${manualStop ? 'arrêt demandé' : Date.now() >= deadlineAt ? 'délai atteint' : 'plafond de tours atteint'}) — relancer la même commande reprend là où c'est resté :`);
+  } else if (report.stopped !== 'RESOLVED') {
+    console.log(`\n  non résolu dans les bornes de ce lancement (${{ MAX_CYCLES: 'plafond de tours atteint', MAX_WALL_MS: 'délai atteint', MANUAL_STOP: 'arrêt demandé' }[report.stopped]}) — relancer la même commande reprend là où c'est resté :`);
     console.log(`  npm run local:loop -- --objective="${objective}" --paths=${pathsArg}${testCommands.map((t) => ` --test="${t}"`).join('')}`);
   }
   console.log(`\n  Rien n'est appliqué au dépôt principal. MESSAGES SENT: 0\n`);

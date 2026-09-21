@@ -75,6 +75,7 @@
     "autopilot:report": "tsx scripts/autopilot.ts report",
     "local:loop": "tsx scripts/local-loop.ts",
     "collab:loop": "tsx scripts/collab-loop.ts",
+    "master:loop": "tsx scripts/master-loop.ts",
     "atlas:task": "tsx scripts/atlas-task.ts",
     "atlas:report": "tsx scripts/atlas-report.ts",
     "atlas:apply": "tsx scripts/atlas-apply.ts",

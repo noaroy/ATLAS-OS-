@@ -250,3 +250,15 @@ export {
   runCollabLoop,
   type CollabLoopDeps, type CollabLoopOptions, type CollabLoopReport, type CollabTurn,
 } from './collab-loop.ts';
+
+export {
+  runLocalObjectiveLoop,
+  type LocalLoopDeps, type LocalLoopOptions, type LocalLoopReport, type LocalLoopVerdict,
+  type LocalLoopWorkspace, type LocalLoopStopReason,
+} from './local-loop.ts';
+
+export {
+  runMasterLoop,
+  type MasterLoopDeps, type MasterLoopOptions, type MasterLoopReport,
+  type MasterCycleRecord, type MasterDecision, type MasterFinalStatus,
+} from './master-loop.ts';

@@ -245,3 +245,8 @@ export {
   type OpportunityContext, type AutopilotCategory, type Allocation, type ValueBand, type Urgency, type RiskBand, type Reversibility,
   type HumanGate, type AutopilotExecution, type AutopilotDecision, type AutonomyVerdict, type AutopilotPause, type ProviderReadiness,
 } from './autopilot.ts';
+
+export {
+  runCollabLoop,
+  type CollabLoopDeps, type CollabLoopOptions, type CollabLoopReport, type CollabTurn,
+} from './collab-loop.ts';

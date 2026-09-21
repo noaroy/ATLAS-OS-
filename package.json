@@ -73,6 +73,8 @@
     "autopilot:status": "tsx scripts/autopilot.ts status",
     "autopilot:queue": "tsx scripts/autopilot.ts queue",
     "autopilot:report": "tsx scripts/autopilot.ts report",
+    "local:loop": "tsx scripts/local-loop.ts",
+    "collab:loop": "tsx scripts/collab-loop.ts",
     "atlas:task": "tsx scripts/atlas-task.ts",
     "atlas:report": "tsx scripts/atlas-report.ts",
     "atlas:apply": "tsx scripts/atlas-apply.ts",

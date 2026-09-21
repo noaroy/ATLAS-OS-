@@ -457,10 +457,16 @@ export class ClaudeWorker implements Worker {
       diffLines: outcome.diff!.diffLines,
     });
 
+    // Le coût réel de la tâche, pas celui d'un seul appel : une tâche
+    // d'ingénierie itère, et chaque itération a été facturée séparément dans
+    // `ai_calls`. Le sommer ici est ce qui évite qu'un travail réellement payé
+    // apparaisse gratuit dans `task.actualCost` — et donc dans tout ce qui en
+    // dérive (verdict de l'Autopilot, tableau de bord des coûts).
+    const spend = repos.tasks.chainCost(task.chainId ?? task.taskId);
     return {
       kind: 'DONE',
       result: { ...base, status: 'ENGINEERING_READY_FOR_REVIEW' },
-      costUsd: null,
+      costUsd: spend.calls > 0 ? spend.knownUsd : null,
     };
   }
 

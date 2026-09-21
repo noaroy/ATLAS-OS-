@@ -61,6 +61,8 @@ export interface FixtureReply {
   error?: { status?: number; message: string; headers?: Record<string, string> };
   delayMs?: number;
   usage?: Partial<Pick<AiUsage, 'inputTokens' | 'outputTokens' | 'cacheReadTokens'>>;
+  /** Pour éprouver un appelant contre une sortie coupée par le fournisseur. */
+  truncated?: boolean;
 }
 
 /**
@@ -122,6 +124,7 @@ export class FixtureAiProvider implements AiProvider {
       model: this.model,
       provider: this.provider,
       durationMs: reply.delayMs ?? 1,
+      truncated: reply.truncated ?? false,
     };
   }
 
@@ -186,6 +189,12 @@ export class OpenAiProvider implements AiProvider {
             ...(request.responseSchema
               ? { response_format: { type: 'json_object' } }
               : {}),
+            // Les modèles de raisonnement (gpt-5, séries o) dépensent une part
+            // invisible du budget de sortie à réfléchir avant d'écrire. Sans ce
+            // réglage, un appelant avec un contexte long peut épuiser tout
+            // `max_completion_tokens` en raisonnement caché et ne rien écrire
+            // de visible — une sortie vide qui a pourtant été facturée.
+            ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
           }),
         }),
       { ms: request.timeoutMs, label: 'openai' },
@@ -204,7 +213,7 @@ export class OpenAiProvider implements AiProvider {
     }
 
     const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number;
                 prompt_tokens_details?: { cached_tokens?: number } };
       model?: string;
@@ -224,6 +233,9 @@ export class OpenAiProvider implements AiProvider {
       model: payload.model ?? this.model,
       provider: this.provider,
       durationMs: Date.now() - startedAt,
+      // `length` : le fournisseur a coupé avant la fin naturelle — le budget
+      // a pu partir en raisonnement caché sans laisser de texte visible.
+      truncated: payload.choices?.[0]?.finish_reason === 'length',
     };
   }
 
@@ -300,6 +312,7 @@ export class AnthropicAiProvider implements AiProvider {
       content?: Array<{ type: string; text?: string }>;
       usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
       model?: string;
+      stop_reason?: string;
     };
 
     const text = (payload.content ?? [])
@@ -319,6 +332,7 @@ export class AnthropicAiProvider implements AiProvider {
       model: payload.model ?? this.model,
       provider: this.provider,
       durationMs: Date.now() - startedAt,
+      truncated: payload.stop_reason === 'max_tokens',
     };
   }
 

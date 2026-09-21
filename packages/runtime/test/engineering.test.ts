@@ -614,6 +614,14 @@ describe('la tâche d’ingénierie complète', () => {
     assert.equal(result.status, 'ENGINEERING_READY_FOR_REVIEW');
     assert.deepEqual(result.files_changed, ['fixture/add.ts']);
 
+    // Le chemin de succès doit sommer le coût réel de la chaîne (0 $ ici :
+    // fournisseur figé, donc appel « SIMULATED », mais compté) plutôt que de
+    // renvoyer `null` sans avoir regardé — `null` dirait « rien facturé »
+    // alors qu'un appel a bien eu lieu, exactement le défaut constaté en
+    // conditions réelles où un appel à 0,002 $ ressortait comme 0,0000 $.
+    assert.notEqual(outcome.costUsd, null);
+    assert.equal(outcome.costUsd, repos.tasks.chainCost(task.chainId ?? task.taskId).knownUsd);
+
     const kinds = repos.tasks.artifactsFor(task.taskId).map((a) => a.kind);
     assert.ok(kinds.includes('PLAN'), `artefacts : ${kinds.join(', ')}`);
     assert.ok(kinds.includes('DIFF'));

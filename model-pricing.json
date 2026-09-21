@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "provider": "OPENAI",
+      "model": "gpt-5",
+      "input_per_million": 1.25,
+      "cached_input_per_million": 0.125,
+      "output_per_million": 10.0,
+      "effective_from": "2025-08-07",
+      "source": "NON VÉRIFIÉ — estimation d'après la mémoire du modèle (coupure janvier 2026), à confirmer contre https://openai.com/api/pricing/ avant toute décision budgétaire réelle. Couvre aussi les identifiants datés (ex. gpt-5-2025-08-07) par correspondance de préfixe."
+    }
+  ]
+}

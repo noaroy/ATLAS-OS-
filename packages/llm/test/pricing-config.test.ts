@@ -1,6 +1,7 @@
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadPricingConfig, validateEntry, reloadPricingConfig, pricingFor } from '../src/index.ts';
@@ -155,5 +156,33 @@ describe('la résolution du tarif', () => {
     const pricing = pricingFor('claude-sonnet-5 (simulation)');
     assert.equal(pricing!.input, 0);
     assert.equal(pricing!.output, 0);
+  });
+});
+
+describe('le fichier de tarifs déclaré à la racine du dépôt', () => {
+  // `gpt-5` n'a pas de tarif dans la table livrée (voir pricing.ts) ; le
+  // fichier à la racine est ce qui le débloque, sans redéploiement, une fois
+  // que ATLAS_MODEL_PRICING_CONFIG le désigne. Ce test vérifie que le fichier
+  // lui-même reste valide — un JSON cassé ou un champ manquant s'y verrait
+  // immédiatement, plutôt que de le découvrir en production au moment de
+  // constater qu'un appel réel reste UNKNOWN_PRICE.
+  const path = fileURLToPath(new URL('../../../model-pricing.json', import.meta.url));
+
+  afterEach(() => reloadPricingConfig(undefined));
+
+  test('le fichier est un JSON valide, sans entrée rejetée', () => {
+    const result = loadPricingConfig(path);
+    assert.deepEqual(result.rejected, []);
+    assert.ok(result.entries.size > 0);
+  });
+
+  test('gpt-5 et ses identifiants datés résolvent vers le même tarif déclaré', () => {
+    reloadPricingConfig(path);
+    const base = pricingFor('gpt-5');
+    assert.ok(base, 'gpt-5 doit être débloqué par le fichier');
+    // Le fournisseur rend un identifiant daté (« gpt-5-2025-08-07 » observé en
+    // conditions réelles) ; la résolution par préfixe doit le couvrir sans
+    // déclarer chaque snapshot séparément.
+    assert.deepEqual(pricingFor('gpt-5-2025-08-07'), base);
   });
 });

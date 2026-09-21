@@ -55,6 +55,13 @@ export interface AiRequest {
    * suivi d'un retry soit facturé deux fois.
    */
   idempotencyKey?: string;
+  /**
+   * L'effort de raisonnement demandé, pour les modèles qui en consomment une
+   * part cachée du budget de sortie (GPT-5, séries o). Absent par défaut :
+   * aucun appel existant ne change de comportement tant qu'il ne le fixe pas
+   * explicitement. Un fournisseur qui n'a pas cette notion l'ignore.
+   */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface AiUsage {
@@ -75,6 +82,14 @@ export interface AiResponse {
   model: string;
   provider: AiProviderName;
   durationMs: number;
+  /**
+   * Vrai quand le fournisseur a coupé la réponse avant sa fin naturelle —
+   * `finish_reason: "length"` côté OpenAI, `stop_reason: "max_tokens"` côté
+   * Anthropic. Une sortie tronquée sans JSON exploitable n'est pas la même
+   * panne qu'un modèle qui a simplement mal répondu : la première se corrige
+   * en donnant plus de budget ou moins de raisonnement, la seconde non.
+   */
+  truncated: boolean;
 }
 
 /**

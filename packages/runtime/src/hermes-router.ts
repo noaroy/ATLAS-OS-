@@ -256,7 +256,7 @@ export class HermesRouter {
    * motif, et la tâche parente passe en attente humaine quand la chaîne bute
    * sur une borne plutôt que sur un doublon.
    */
-  createChildren(parent: TaskRow, result: AiTaskResult): {
+  createChildren(parent: TaskRow, result: Pick<AiTaskResult, 'next_tasks' | 'summary'> & Partial<AiTaskResult>): {
     created: TaskRow[];
     blocked: Array<{ objective: string; reason: string; blockedBy: ChainBlockReason }>;
   } {

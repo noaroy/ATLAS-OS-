@@ -332,6 +332,8 @@ export function makeTestConfig(
       allowFileDelete: false,
       claudeCodeBin: 'claude',
       claudeCodeTimeoutMs: 900_000,
+      runner: 'embedded',
+      repo: '',
     },
     runtime: { heartbeatMs: 60_000 },
     // L'Autopilot ne se cadence pas dans les tests : un cycle se joue à la main.

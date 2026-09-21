@@ -34,6 +34,7 @@ import {
   runBackup,
   recoverInterruptedMissions,
   AtlasDaemon,
+  serverWorkerTypes,
   createWorkerRegistry,
   createSalesEngineHandlers,
   scheduleSalesCycle,
@@ -337,8 +338,15 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   const workers = createWorkerRegistry({
     config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers }, workspaceRoot: process.cwd(),
   });
+  // Hermes avance les chaînes (une revue qui demande une correction en crée
+  // la tâche) ; en ingénierie externe, CLAUDE / CLAUDE_CODE restent en file
+  // pour le service atlas-engineer, seul à porter git et le binaire.
   const daemon = salesEnabled || autopilotEnabled
-    ? new AtlasDaemon({ repos, registry: workers.registry, logger, owner: `atlas-server#${process.pid}` })
+    ? new AtlasDaemon({
+      repos, registry: workers.registry, logger, hermes: workers.hermes,
+      workerTypes: serverWorkerTypes(config.engineering.runner),
+      owner: `atlas-server#${process.pid}`,
+    })
     : null;
 
   const supervisor = new RuntimeSupervisor({

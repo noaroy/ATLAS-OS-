@@ -84,6 +84,81 @@ services:
       driver: json-file
       options: { max-size: "5m", max-file: "2" }
 
+  # ─── Le runner d'ingénierie isolé ───────────────────────────────────────
+  # `docker compose … --profile engineering up -d --build atlas-engineer`
+  #
+  # Sert les tâches CLAUDE / CLAUDE_CODE de la file (base canonique, même
+  # volume /data) sur un **clone jetable** du dépôt déployé, monté ici en
+  # lecture seule : le code qu'il engendre ne peut pas toucher ce qui tourne.
+  # Ce qu'il n'a pas, à dessein :
+  #   – pas d'`env_file` : seules les variables listées ci-dessous lui
+  #     parviennent — ni Gmail, ni OpenAI, ni le secret de session réel ;
+  #   – pas de port, pas de réseau interne : il ne joint ni le serveur, ni
+  #     SearXNG, ni n8n — seulement l'API Anthropic, par la sortie du VPS ;
+  #   – aucun déploiement : `atlas:apply` reste un geste humain.
+  # Le daemon du serveur laisse ces tâches dans la file quand
+  # ATLAS_ENGINEERING_RUNNER=external (dans .env) : un seul preneur.
+  atlas-engineer:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+      target: engineer
+    image: atlas-os-engineer:1.0.0
+    profiles: ["engineering"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ATLAS_DATA_DIR: /data
+      ATLAS_BACKUP_DIR: /data/backups
+      ATLAS_LOG_PRETTY: "false"
+      # La garde de base canonique se tait : c'est la bonne base, /data/atlas.db.
+      ATLAS_CLI_CONTEXT: docker
+      # Le runner *est* l'ingénierie ici : il sert lui-même CLAUDE / CLAUDE_CODE.
+      ATLAS_ENGINEERING_RUNNER: embedded
+      ATLAS_ENGINEER_REPO: /work/repo
+      ATLAS_ENGINEERING_WORKSPACE_ROOT: /work/worktrees
+      ATLAS_HOST_REPO: /host-repo
+      # Claude Code en mode headless, facturé à la clé d'API — choisi, jamais
+      # hérité. La clé vient du .env par interpolation Compose, et d'elle seule.
+      ATLAS_CLAUDE_CODE_USE_API_KEY: "true"
+      ATLAS_CLAUDE_CODE_BIN: claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ATLAS_AI_LIVE: ${ATLAS_AI_LIVE:-false}
+      ATLAS_ANTHROPIC_MODEL: ${ATLAS_ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      ATLAS_ANTHROPIC_ENGINEERING_MODEL: ${ATLAS_ANTHROPIC_ENGINEERING_MODEL:-}
+      # Les bornes — les mêmes que le serveur, sinon deux arbitres.
+      ATLAS_AI_DAILY_BUDGET_USD: ${ATLAS_AI_DAILY_BUDGET_USD:-0}
+      ATLAS_AI_MONTHLY_BUDGET_USD: ${ATLAS_AI_MONTHLY_BUDGET_USD:-0}
+      ATLAS_MAX_TASK_COST_USD: ${ATLAS_MAX_TASK_COST_USD:-0}
+      ATLAS_MAX_AI_CHAIN_DEPTH: ${ATLAS_MAX_AI_CHAIN_DEPTH:-4}
+      ATLAS_MAX_AI_TASKS_PER_CHAIN: ${ATLAS_MAX_AI_TASKS_PER_CHAIN:-12}
+      ATLAS_MAX_CHAIN_COST_USD: ${ATLAS_MAX_CHAIN_COST_USD:-1}
+      ATLAS_MAX_CHAIN_RUNTIME_MINUTES: ${ATLAS_MAX_CHAIN_RUNTIME_MINUTES:-60}
+      ATLAS_UNKNOWN_COST_POLICY: ${ATLAS_UNKNOWN_COST_POLICY:-BLOCK}
+      ATLAS_MAX_FILES_CHANGED_PER_TASK: ${ATLAS_MAX_FILES_CHANGED_PER_TASK:-15}
+      ATLAS_MAX_DIFF_LINES_PER_TASK: ${ATLAS_MAX_DIFF_LINES_PER_TASK:-800}
+      ATLAS_MAX_ENGINEERING_ITERATIONS: ${ATLAS_MAX_ENGINEERING_ITERATIONS:-3}
+      ATLAS_ALLOW_FILE_DELETE: ${ATLAS_ALLOW_FILE_DELETE:-false}
+      ATLAS_CLAUDE_TASK_TIMEOUT_MS: ${ATLAS_CLAUDE_TASK_TIMEOUT_MS:-600000}
+      ATLAS_CLAUDE_CODE_TIMEOUT_MS: ${ATLAS_CLAUDE_CODE_TIMEOUT_MS:-900000}
+      # Aucun serveur HTTP ici, donc aucune session ; la configuration exige
+      # pourtant une valeur. Celle-ci n'est pas un secret et n'en protège aucun.
+      ATLAS_SESSION_SECRET: atlas-engineer-has-no-http-server
+      # Les interrupteurs de vente, par sûreté, à leur valeur fermée : ce
+      # conteneur n'a de toute façon ni Gmail ni transport.
+      ATLAS_OUTBOUND_ENABLED: "false"
+      ATLAS_ENGINE_MODE: INTERNAL_TEST
+    volumes:
+      - atlas-data:/data
+      # Le dépôt déployé, en lecture seule : lu pour cloner, jamais écrit.
+      - ..:/host-repo:ro
+      - atlas-engineer-work:/work
+    networks: [engineering]
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Optionnel : `docker compose --profile n8n up -d`. Sans le profil, il ne
   # démarre pas et ATLAS tourne sans lui.
   n8n:
@@ -160,6 +235,7 @@ services:
 
 volumes:
   atlas-data:
+  atlas-engineer-work:
   n8n-data:
   searxng-data:
   caddy-data:
@@ -167,4 +243,7 @@ volumes:
 
 networks:
   atlas:
+    driver: bridge
+  # Le runner d'ingénierie, seul sur le sien : aucun chemin vers le serveur.
+  engineering:
     driver: bridge

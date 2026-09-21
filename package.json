@@ -67,6 +67,7 @@
     "atlas:start": "node dist/server/atlas.mjs",
     "atlas:stop": "tsx scripts/atlas-stop.ts",
     "atlas:daemon": "tsx scripts/atlas-daemon.ts",
+    "atlas:engineer": "tsx scripts/atlas-engineer.ts",
     "atlas:status": "tsx scripts/atlas-status.ts",
     "autopilot": "tsx scripts/autopilot.ts",
     "autopilot:once": "tsx scripts/autopilot.ts once",

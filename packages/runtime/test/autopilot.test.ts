@@ -268,6 +268,123 @@ describe('10 + 11. fermé par défaut : fournisseur absent, budget épuisé', ()
   });
 });
 
+describe('18. le travail bloqué reprend seul, sans doublon — et ce qui attend une personne attend encore', () => {
+  const review = () => proposal({ objective: 'revue d’architecture du module de relance', category: 'RELIABILITY', expectedCostUsd: 0.1, recommendedAgent: 'OPENAI', execution: { kind: 'INTERNAL_TASK', taskType: 'ARCHITECTURE_REVIEW', department: 'ENGINEERING' } });
+  const withOpenAi = (ready: boolean, detail: string): Providers => ({ ...READY, OPENAI: { ready, detail, state: ready ? 'READY' : 'ABSENT' } });
+  const later = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+  test('18.1 OPENAI absent → BLOCKED, sans tâche', async () => {
+    const report = await cycle({ providers: withOpenAi(false, 'OPENAI : ATLAS_OPENAI_API_KEY absent'), sources: [sourceOf(review())] });
+    assert.equal(report.created[0]!.status, 'BLOCKED');
+    assert.match(report.created[0]!.rejectionReason ?? '', /OPENAI : ATLAS_OPENAI_API_KEY absent/);
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 0);
+    assertNothingSent();
+  });
+
+  test('18.2 OPENAI revenu → la même action reprend (RESUMED), une tâche, aucun doublon', async () => {
+    const blocked = await cycle({ providers: withOpenAi(false, 'OPENAI : clé absente'), sources: [sourceOf(review())] });
+    const id = blocked.created[0]!.id;
+    const resumed = await cycle({ now: later(31), providers: withOpenAi(true, 'OPENAI : a répondu'), sources: [sourceOf(review())] });
+    const decision = resumed.decisions.find((d) => d.actionId === id);
+    assert.equal(decision?.decision, 'RESUMED', JSON.stringify(resumed.decisions));
+    assert.match(decision!.reason, /était BLOCKED — fournisseur indisponible — OPENAI : clé absente/);
+    assert.equal(resumed.created.length, 0, 'aucune nouvelle action');
+    const action = repos.autopilot.action(id)!;
+    assert.equal(action.status, 'QUEUED');
+    assert.ok(action.taskId);
+    assert.equal(action.rejectionReason, null, 'le motif de blocage d’hier n’est plus écrit');
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1, 'une seule action pour cette empreinte');
+    assert.equal(resumed.executed.length, 1);
+    assert.equal(resumed.executed[0]!.actionId, id);
+    const tasks = repos.tasks.list({ limit: 10 });
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0]!.taskType, 'ARCHITECTURE_REVIEW');
+    assert.equal(tasks[0]!.payload.autopilot_action_id, id);
+    assert.equal(repos.autopilot.cycle(resumed.cycle.id)!.executed.length, 1, 'la reprise est consignée dans le cycle');
+    // Un troisième cycle : l'action suit sa tâche, rien de plus n'est créé.
+    const third = await cycle({ now: later(62), providers: withOpenAi(true, 'OPENAI : a répondu'), sources: [sourceOf(review())] });
+    assert.equal(third.decisions.find((d) => d.actionId === id)?.decision, 'DUPLICATE');
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 1);
+    assertNothingSent();
+  });
+
+  test('18.3 budget épuisé → BLOCKED ; budget rendu (lendemain) → reprend, la même action', async () => {
+    const cfg: AtlasConfig = { ...config, ai: { ...config.ai, dailyBudgetMode: 'CONFIGURED', dailyBudgetUsd: 1 } };
+    repos.tasks.recordAiCall({ provider: 'OPENAI', model: 'gpt-5', inputTokens: 1000, outputTokens: 1000, costUsd: 1.2, costBasis: 'KNOWN', outcome: 'DONE' });
+    const blocked = await cycle({ config: cfg, providers: READY, sources: [sourceOf(review())] });
+    const id = blocked.created[0]!.id;
+    assert.equal(blocked.created[0]!.status, 'BLOCKED');
+    assert.match(blocked.created[0]!.rejectionReason ?? '', /budget/);
+
+    // Le même jour, rien ne change : STILL_BLOCKED, motif tenu à jour, toujours une seule action.
+    const still = await cycle({ config: cfg, now: later(30), providers: READY, sources: [sourceOf(review())] });
+    assert.equal(still.decisions.find((d) => d.actionId === id)?.decision, 'STILL_BLOCKED');
+    assert.equal(repos.autopilot.action(id)!.status, 'BLOCKED');
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1);
+
+    // La dépense du jour est celle du vrai calendrier ; le lendemain simulé la voit à zéro.
+    const tomorrow = new Date(Date.now() + 26 * 3_600_000);
+    const resumed = await cycle({ config: cfg, now: tomorrow, providers: READY, sources: [sourceOf(review())] });
+    assert.ok(!resumed.observation.spend.todayUsd, 'aucune dépense ce jour-là (null : rien à mesurer, jamais inventé)');
+    assert.equal(resumed.decisions.find((d) => d.actionId === id)?.decision, 'RESUMED');
+    assert.equal(repos.autopilot.action(id)!.status, 'QUEUED');
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1);
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 1);
+    assertNothingSent();
+  });
+
+  test('18.4 une porte humaine ne reprend jamais seule, quel que soit l’état des fournisseurs', async () => {
+    const gated = () => proposal({ objective: 'déployer le diff prêt', category: 'RELIABILITY', expectedBusinessValue: 'HIGH', gate: 'PRODUCTION_DEPLOYMENT', execution: { kind: 'INTERNAL_TASK', taskType: 'ENGINEERING_CHANGE', department: 'ENGINEERING' }, recommendedAgent: 'CLAUDE_CODE' });
+    const first = await cycle({ providers: OFFLINE, sources: [sourceOf(gated())] });
+    const id = first.created[0]!.id;
+    assert.equal(first.created[0]!.status, 'WAITING_HUMAN');
+    for (const minutes of [31, 62, 24 * 60]) {
+      const again = await cycle({ now: later(minutes), providers: READY, sources: [sourceOf(gated())] });
+      assert.equal(again.decisions.find((d) => d.actionId === id)?.decision, 'DUPLICATE');
+      assert.equal(repos.autopilot.action(id)!.status, 'WAITING_HUMAN');
+    }
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 0, 'jamais une tâche sans la personne');
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1);
+    assertNothingSent();
+  });
+
+  test('18.5 fournisseur toujours absent → reste BLOCKED, motif rafraîchi, sans tâche, sans doublon — et Claude Code absent bloque l’ingénierie', async () => {
+    const blocked = await cycle({ providers: withOpenAi(false, 'OPENAI : clé absente'), sources: [sourceOf(review())] });
+    const id = blocked.created[0]!.id;
+    const again = await cycle({ now: later(31), providers: withOpenAi(false, 'OPENAI : AUTH_ERROR — clé refusée'), sources: [sourceOf(review())] });
+    const decision = again.decisions.find((d) => d.actionId === id);
+    assert.equal(decision?.decision, 'STILL_BLOCKED');
+    const action = repos.autopilot.action(id)!;
+    assert.equal(action.status, 'BLOCKED');
+    assert.match(action.rejectionReason ?? '', /AUTH_ERROR — clé refusée/, 'le motif est celui d’aujourd’hui');
+    assert.equal(action.taskId, null);
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 0);
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1);
+
+    const engineering = proposal({ objective: 'corriger la relance', category: 'RELIABILITY', expectedCostUsd: 0.2, recommendedAgent: 'CLAUDE_CODE', execution: { kind: 'INTERNAL_TASK', taskType: 'ENGINEERING_CHANGE', department: 'ENGINEERING' } });
+    const noRunner = await cycle({ now: later(62), providers: { ...READY, CLAUDE_CODE: { ready: false, detail: 'Claude Code : binaire absent', state: 'ABSENT' } }, sources: [sourceOf(engineering)] });
+    assert.equal(noRunner.created[0]!.status, 'BLOCKED');
+    assert.match(noRunner.created[0]!.rejectionReason ?? '', /binaire absent/);
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 0);
+    assertNothingSent();
+  });
+
+  test('18.6 redémarrage entre le blocage et la reprise : la reprise tient, sur la même base', async () => {
+    const blocked = await cycle({ providers: withOpenAi(false, 'OPENAI : clé absente'), sources: [sourceOf(review())] });
+    const id = blocked.created[0]!.id;
+    const file = join(dir, 'atlas.db');
+    repos.close();
+    repos = createRepositories(file, logger);
+    assert.equal(repos.autopilot.action(id)!.status, 'BLOCKED', 'le blocage a survécu au redémarrage');
+    const resumed = await cycle({ now: later(31), providers: withOpenAi(true, 'OPENAI : a répondu'), sources: [sourceOf(review())] });
+    assert.equal(resumed.decisions.find((d) => d.actionId === id)?.decision, 'RESUMED');
+    assert.equal(repos.autopilot.action(id)!.status, 'QUEUED');
+    assert.equal(repos.autopilot.actions({ limit: 50 }).length, 1);
+    assert.equal(repos.tasks.list({ limit: 10 }).length, 1);
+    assertNothingSent();
+  });
+});
+
 describe('12. reprise après redémarrage', () => {
   test('un cycle laissé ouvert est marqué INTERRUPTED, et l’action confiée est vérifiée depuis la file', async () => {
     seedHotLead();
@@ -361,7 +478,7 @@ describe('15. 70 / 20 / 10 : une intention glissante, jamais du travail pour rem
 
 describe('16. aucune métrique inventée', () => {
   test('ce qui n’est pas mesurable est null et nommé', async () => {
-    const o = observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
+    const o = await observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
     assert.equal(o.spend.todayUsd, null);
     assert.equal(o.sales.pipelinePotential, null);
     assert.equal(o.engineering.repoClean, null, 'pas un dépôt git : on ne sait pas');
@@ -408,12 +525,12 @@ describe('17 + 20. rien ne part, les gardes de production ne bougent pas', () =>
 });
 
 describe('la règle d’économie', () => {
-  test('aucune valeur → pas la peine ; faible valeur chère → pas la peine ; confiance nulle → pas la peine', () => {
+  test('aucune valeur → pas la peine ; faible valeur chère → pas la peine ; confiance nulle → pas la peine', async () => {
     assert.equal(worthDoing(proposal({ expectedBusinessValue: 'NONE' })).worth, false);
     assert.equal(worthDoing(proposal({ expectedBusinessValue: 'LOW', expectedCostUsd: 0.5 })).worth, false);
     assert.equal(worthDoing(proposal({ confidence: 0.1 })).worth, false);
     assert.equal(worthDoing(proposal({ expectedBusinessValue: 'LOW', expectedCostUsd: 0 })).worth, true);
-    const o = observeAtlas(repos, config, { now: NOW, providers: READY, probeClaudeCode: false, cwd: dir });
+    const o = await observeAtlas(repos, config, { now: NOW, providers: READY, probeClaudeCode: false, cwd: dir });
     assert.equal(decideAutonomy(proposal({ execution: { kind: 'INTERNAL_TASK', taskType: 'SALES_DISCOVERY', department: 'sales' } }), { observation: o, config, cycleSpentUsd: 0 }).verdict, 'BLOCKED', 'découverte sans modèle vivant : fermé');
   });
 });

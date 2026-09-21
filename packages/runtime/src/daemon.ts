@@ -9,6 +9,8 @@ import {
 } from '@atlas/core';
 import type { Repositories, TaskRow } from '@atlas/data';
 import type { WorkerRegistry, WorkerOutcome } from './workers.ts';
+import { ROUTED_TASK_TYPES, type HermesRouter } from './hermes-router.ts';
+import { nextTasksOf } from './ai-contracts.ts';
 
 /**
  * Le cœur permanent.
@@ -43,6 +45,17 @@ export interface DaemonOptions {
   owner?: string;
   /** Nombre de tours maximum. Sans valeur, le daemon tourne jusqu'à l'arrêt. */
   maxCycles?: number;
+  /**
+   * Hermes, quand la chaîne inter-agents doit avancer seule.
+   *
+   * Un worker propose des suites (`next_tasks`) ; c'est Hermes qui les crée,
+   * sous ses bornes — profondeur, nombre, coût, doublons. Sans lui, une revue
+   * qui demande une correction attend qu'une personne relise son résultat :
+   * c'est ce qui s'est passé en production, où rien ne suivait une revue.
+   */
+  hermes?: HermesRouter;
+  /** L'hôte inscrit au tour du daemon ; le nom de la machine par défaut. */
+  hostLabel?: string;
 }
 
 export interface DaemonStats {
@@ -116,6 +129,22 @@ export const DEFAULT_WORKER_TYPES = [
   'DETERMINISTIC', 'OPENAI', 'CLAUDE', 'CLAUDE_CODE', 'HUMAN',
 ] as const;
 
+/** Les types d'ingénierie : ceux que seul le runner isolé sert quand il existe. */
+export const ENGINEERING_WORKER_TYPES = ['CLAUDE', 'CLAUDE_CODE'] as const;
+
+/**
+ * Ce que le daemon du serveur prend dans la file, selon qui porte l'ingénierie.
+ *
+ * `embedded` : tout, sur le dépôt courant — le poste de développement.
+ * `external` : tout sauf CLAUDE et CLAUDE_CODE, qui restent en file pour le
+ * service `atlas-engineer` — un seul preneur par type, et jamais un échec
+ * « binaire absent » dans un conteneur qui n'a pas à l'avoir.
+ */
+export function serverWorkerTypes(runner: 'embedded' | 'external'): readonly string[] {
+  if (runner === 'embedded') return DEFAULT_WORKER_TYPES;
+  return DEFAULT_WORKER_TYPES.filter((t) => !(ENGINEERING_WORKER_TYPES as readonly string[]).includes(t));
+}
+
 export class AtlasDaemon {
   private readonly repos: Repositories;
   private readonly registry: WorkerRegistry;
@@ -179,7 +208,7 @@ export class AtlasDaemon {
    * worker fantôme tient encore d'après la base.
    */
   boot(): { recovered: number; resumed: number; released: number } {
-    this.runId = this.repos.tasks.startDaemonRun(hostname(), process.pid);
+    this.runId = this.repos.tasks.startDaemonRun(this.options.hostLabel ?? hostname(), process.pid);
     const unclosed = this.repos.tasks.closeStaleDaemonRuns(this.runId);
     this.logger.info('daemon démarré', {
       owner: this.owner, runId: this.runId, workerTypes: this.workerTypes.join(','),
@@ -318,6 +347,42 @@ export class AtlasDaemon {
     this.persist(task, outcome, log);
   }
 
+  /**
+   * La suite d'une tâche terminée, décidée par Hermes.
+   *
+   * Seulement pour un résultat qui annonce des suites ; une tâche
+   * déterministe n'en propose pas. Les suites sont lues telles quelles —
+   * le worker a déjà validé ce que son modèle a rendu, et le résultat de
+   * Claude Code n'est pas au contrat d'une revue. Un refus de Hermes (borne,
+   * doublon) est journalisé par lui — la chaîne s'arrête proprement, elle ne
+   * boucle pas.
+   *
+   * Seuls les types que Hermes sait router entrent dans la file par ici : un
+   * modèle qui proposerait autre chose — un envoi, un paiement — ne crée rien,
+   * et cela se journalise. La chaîne relit et corrige du code ; elle n'écrit
+   * à personne.
+   */
+  private advanceChain(
+    task: TaskRow,
+    outcome: WorkerOutcome,
+    log: (level: 'info' | 'warn' | 'error', message: string, extra?: object) => void,
+  ): void {
+    const hermes = this.options.hermes;
+    const proposed = nextTasksOf(outcome.result);
+    if (!hermes || proposed.length === 0) return;
+    const next = proposed.filter((t) => ROUTED_TASK_TYPES.includes(t.task_type));
+    const refused = proposed.filter((t) => !ROUTED_TASK_TYPES.includes(t.task_type));
+    if (refused.length > 0) log('warn', 'suites hors de la table de routage, ignorées', { refused: refused.map((t) => `${t.task_type}: ${t.objective}`) });
+    if (next.length === 0) return;
+    const summary = typeof outcome.result?.summary === 'string' ? outcome.result.summary : '';
+    const done = this.repos.tasks.byId(task.taskId) ?? task;
+    const created = hermes.createChildren(done, { next_tasks: next, summary });
+    log('info', 'suites de la chaîne', {
+      created: created.created.map((t) => `${t.taskType}→${t.workerType}`),
+      blocked: created.blocked.map((b) => `${b.blockedBy}: ${b.objective}`),
+    });
+  }
+
   /** Consigner l'issue, et ce qu'elle implique pour le fournisseur. */
   private persist(
     task: TaskRow,
@@ -331,6 +396,7 @@ export class AtlasDaemon {
         );
         this.stats.completed += 1;
         log('info', 'tâche terminée', { state: 'DONE' });
+        this.advanceChain(task, outcome, log);
         return;
       }
 

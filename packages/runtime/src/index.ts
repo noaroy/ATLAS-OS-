@@ -46,6 +46,8 @@ export { DeterministicPipeline, type PipelineDeps, type StageOutcome } from './p
 export {
   AtlasDaemon,
   DEFAULT_WORKER_TYPES,
+  ENGINEERING_WORKER_TYPES,
+  serverWorkerTypes,
   PERMANENT_ERROR_CODES,
   type DaemonOptions,
   type DaemonStats,
@@ -70,6 +72,7 @@ export {
 
 export {
   validateAiResult,
+  nextTasksOf,
   taskFingerprint,
   checkCommand,
   redactSecrets,
@@ -131,6 +134,7 @@ export {
   readWorkspaceFile,
   repoRootOf,
   hashDiff,
+  linkNodeModules,
   type Workspace,
   type FileEdit,
   type EditOutcome,
@@ -262,3 +266,12 @@ export {
   type MasterLoopDeps, type MasterLoopOptions, type MasterLoopReport,
   type MasterCycleRecord, type MasterDecision, type MasterFinalStatus,
 } from './master-loop.ts';
+
+export {
+  providerReadinessOf, verifyProvider, assessModelProviders, PROVIDER_VERIFY_TTL_MS,
+  type ProviderReadinessState, type ProviderReadinessVerdict,
+} from './provider-readiness.ts';
+export {
+  softwareLoopStatus, externalRunnerAlive, ENGINEER_HOST_LABEL,
+  type SoftwareLoopStatus, type SoftwareLoopPiece, type SoftwareLoopOptions,
+} from './software-loop.ts';

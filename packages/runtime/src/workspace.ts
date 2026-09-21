@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync, mkdtempSync, symlinkSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -104,8 +104,35 @@ export function createWorkspace(options: CreateWorkspaceOptions): Workspace {
   const branch = `atlas/${options.taskId}`;
   git(['worktree', 'add', '--detach', path, baseCommit], options.repoRoot, 120_000);
   git(['checkout', '-B', branch], path, 60_000);
+  linkNodeModules(options.repoRoot, path);
 
   return { workspaceId: `ws_${options.taskId}`, taskId: options.taskId, path, baseCommit, branch };
+}
+
+/**
+ * Les dépendances installées du dépôt, visibles depuis le worktree.
+ *
+ * Un worktree naît sans `node_modules` — c'est ignoré par git — et `npm test`
+ * ou `npm run build` y échoueraient avant d'avoir jugé quoi que ce soit. Un
+ * lien symbolique vers celles du dépôt suffit, et il est retiré avec le
+ * worktree : `git worktree remove` délie, il ne suit pas.
+ *
+ * POSIX seulement. Sous Windows, une jonction est *traversée* par une
+ * suppression récursive : retirer le worktree a déjà effacé les vraies
+ * dépendances du dépôt. On ne le refait pas ; le poste Windows installe les
+ * siennes.
+ */
+export function linkNodeModules(repoRoot: string, worktreePath: string): boolean {
+  if (process.platform === 'win32') return false;
+  const source = join(repoRoot, 'node_modules');
+  const target = join(worktreePath, 'node_modules');
+  if (!existsSync(source) || existsSync(target)) return false;
+  try {
+    symlinkSync(source, target, 'dir');
+    return lstatSync(target).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**

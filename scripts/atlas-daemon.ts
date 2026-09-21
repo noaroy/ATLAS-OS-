@@ -20,6 +20,7 @@ import { createRepositories } from '../packages/data/src/index.ts';
 import {
   AtlasDaemon,
   createWorkerRegistry,
+  serverWorkerTypes,
   DEMO_HANDLERS,
 } from '../packages/runtime/src/index.ts';
 
@@ -37,7 +38,7 @@ const repos = createRepositories(config.paths.databaseFile, logger);
 // Les workers de modèle sont branchés, mais figés tant que ATLAS_AI_LIVE est
 // faux — ce qui est la valeur par défaut. La fabrique journalise le mode
 // retenu : un système qui se met à dépenser doit le dire en commençant.
-const { registry, live } = createWorkerRegistry({
+const { registry, hermes, live } = createWorkerRegistry({
   config, logger, repos, handlers: DEMO_HANDLERS, workspaceRoot: process.cwd(),
 });
 
@@ -45,6 +46,8 @@ const daemon = new AtlasDaemon({
   repos,
   registry,
   logger,
+  hermes,
+  workerTypes: serverWorkerTypes(config.engineering.runner),
   leaseMs: num('lease', 30_000),
   heartbeatMs: num('heartbeat', 10_000),
   maxIdleMs: num('idle', 60_000),

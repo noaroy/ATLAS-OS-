@@ -363,6 +363,16 @@ const envSchema = z.object({
   // une situation normale, rapportee comme telle plutot que comme un echec.
   ATLAS_CLAUDE_CODE_BIN: z.string().default('claude'),
   ATLAS_CLAUDE_CODE_TIMEOUT_MS: intish(900_000, 30_000, 7_200_000),
+  // Qui sert les taches d'ingenierie (CLAUDE, CLAUDE_CODE) :
+  //   embedded  le daemon du serveur, sur le depot courant — le poste de
+  //             developpement ;
+  //   external  un runner isole (service atlas-engineer) sur un clone jetable ;
+  //             le daemon du serveur ne prend alors jamais ces taches, il les
+  //             laisse dans la file au lieu de les faire echouer faute de
+  //             binaire ou de depot.
+  ATLAS_ENGINEERING_RUNNER: z.enum(['embedded', 'external']).default('embedded'),
+  // Le depot sur lequel le runner ouvre ses worktrees. Vide : le cwd.
+  ATLAS_ENGINEER_REPO: z.string().default(''),
   ATLAS_LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   ATLAS_LOG_PRETTY: boolish(true),
 });
@@ -510,6 +520,10 @@ export interface AtlasConfig {
     /** Le binaire Claude Code, et le temps qu'on lui laisse. */
     claudeCodeBin: string;
     claudeCodeTimeoutMs: number;
+    /** Qui sert l'ingenierie : le daemon du serveur, ou un runner isole. */
+    runner: 'embedded' | 'external';
+    /** Le depot du runner (clone jetable) ; vide = le cwd. */
+    repo: string;
   };
   runtime: { heartbeatMs: number };
   /** L'Autopilot : la boucle de controle, et ce qu'un cycle a le droit de confier. */
@@ -827,6 +841,8 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       allowFileDelete: e.ATLAS_ALLOW_FILE_DELETE,
       claudeCodeBin: e.ATLAS_CLAUDE_CODE_BIN,
       claudeCodeTimeoutMs: e.ATLAS_CLAUDE_CODE_TIMEOUT_MS,
+      runner: e.ATLAS_ENGINEERING_RUNNER,
+      repo: e.ATLAS_ENGINEER_REPO,
     },
     runtime: { heartbeatMs: e.ATLAS_HEARTBEAT_MS },
     autopilot: {

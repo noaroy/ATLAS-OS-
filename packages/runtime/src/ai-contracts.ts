@@ -44,6 +44,29 @@ const STATUSES = ['PASS', 'PASS_WITH_NOTES', 'CHANGES_REQUIRED', 'NEEDS_HUMAN', 
  * champs qui portent la décision, eux, sont exigés : sans `status` ni `summary`,
  * il n'y a rien à décider.
  */
+/**
+ * Les suites qu'un résultat propose — et rien d'autre.
+ *
+ * Un résultat de worker n'est pas toujours au contrat d'un modèle : Claude
+ * Code rend `ENGINEERING_READY_FOR_REVIEW`, sans confiance chiffrée, avec les
+ * suites que le modèle a proposées. Ce sont elles que Hermes lit ; exiger le
+ * contrat entier ici, c'est ce qui laissait une correction sans revue en
+ * production. Une proposition sans type ou sans objectif est ignorée.
+ */
+export function nextTasksOf(raw: unknown): AiTaskResult['next_tasks'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const o = raw as Record<string, unknown>;
+  return (Array.isArray(o.next_tasks) ? o.next_tasks : [])
+    .filter((t): t is Record<string, unknown> => Boolean(t) && typeof t === 'object')
+    .map((t) => ({
+      task_type: String(t.task_type ?? '').trim(),
+      objective: String(t.objective ?? '').trim(),
+      department: t.department == null ? undefined : String(t.department),
+      rationale: t.rationale == null ? undefined : String(t.rationale),
+    }))
+    .filter((t) => t.task_type.length > 0 && t.objective.length > 0);
+}
+
 export function validateAiResult(raw: unknown): SchemaCheck {
   const violations: string[] = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -79,15 +102,7 @@ export function validateAiResult(raw: unknown): SchemaCheck {
     }))
     .filter((f) => f.detail.trim().length > 0);
 
-  const nextTasks = asArray(o.next_tasks)
-    .filter((t): t is Record<string, unknown> => Boolean(t) && typeof t === 'object')
-    .map((t) => ({
-      task_type: String(t.task_type ?? '').trim(),
-      objective: String(t.objective ?? '').trim(),
-      department: t.department == null ? undefined : String(t.department),
-      rationale: t.rationale == null ? undefined : String(t.rationale),
-    }))
-    .filter((t) => t.task_type.length > 0 && t.objective.length > 0);
+  const nextTasks = nextTasksOf(o);
 
   if (violations.length > 0) return { valid: false, value: null, violations };
 

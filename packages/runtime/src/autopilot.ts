@@ -6,8 +6,8 @@ import { buildSalesDashboard } from './sales-dashboard.ts';
 import { collectNeedsYou, todaySnapshot } from './needs-you.ts';
 import { readGlobalPause, SALES_ENGINE_TASKS } from './sales-engine.ts';
 import { routeTask, type RouteTarget } from './hermes-router.ts';
-import { detectClaudeCode, detectClaudeCodeAuth } from './claude-code.ts';
 import { inspectRepo } from './workspace.ts';
+import { softwareLoopStatus, type SoftwareLoopStatus } from './software-loop.ts';
 import type { WorkerContext, WorkerOutcome } from './workers.ts';
 
 /**
@@ -114,6 +114,8 @@ export interface AutopilotDecision {
   decision:
     | 'CREATED'            // une action ouverte, nouvelle
     | 'DUPLICATE'          // la même action existe déjà, non résolue
+    | 'RESUMED'            // une action bloquée ou reportée, reprise : confiée maintenant
+    | 'STILL_BLOCKED'      // réévaluée, toujours bloquée — motif rafraîchi
     | 'DONE_RECENTLY'      // la même action vient d'être résolue
     | 'NOT_WORTH_IT'       // la valeur ne justifie pas la dépense
     | 'CAP_REACHED';       // le plafond d'actions ouvertes est atteint
@@ -123,7 +125,12 @@ export interface AutopilotDecision {
 
 // ─── L'observation ───────────────────────────────────────────────────────────
 
-export interface ProviderReadiness { ready: boolean; detail: string }
+export interface ProviderReadiness {
+  ready: boolean;
+  detail: string;
+  /** READY : a répondu récemment · STALE : vérifié il y a longtemps · CONFIGURED : clé présente, jamais vérifié · BLOCKED · ABSENT. */
+  state?: string;
+}
 
 export interface AutopilotObservation {
   at: string;
@@ -147,6 +154,8 @@ export interface AutopilotObservation {
   health: { gmail: string; gmailDetail: string; daemon: string; llm: string; search: string; database: string };
   failures: Record<string, number>;
   pendingHuman: { total: number; byKind: Record<string, number> };
+  /** La boucle logicielle, pièce par pièce. */
+  softwareLoop: SoftwareLoopStatus | null;
   /** Ce qu'on n'a pas pu mesurer, dit tel quel — jamais remplacé par zéro. */
   absent: string[];
 }
@@ -154,43 +163,46 @@ export interface AutopilotObservation {
 export interface ObserveOptions {
   now?: Date;
   cwd?: string;
-  /** Les fournisseurs, quand l'appelant les connaît mieux (tests, contexte conteneur). */
+  /** Les fournisseurs, quand l'appelant les connaît mieux (tests, contexte conteneur). Aucune sonde n'est alors jouée. */
   providers?: Partial<AutopilotObservation['providers']>;
   /** Vrai par défaut : sonder Claude Code coûte un `--version`. */
   probeClaudeCode?: boolean;
+  /** Vrai par défaut : sonder les fournisseurs de modèle si la dernière sonde est ancienne (gratuit, six heures). */
+  verifyProviders?: boolean;
 }
 
-const PROVIDER_STATE_BLOCKING = new Set(['AUTH_ERROR', 'QUOTA_EXHAUSTED', 'BUDGET_EXHAUSTED']);
-
-function providerReadiness(repos: Repositories, config: AtlasConfig, now: Date, options: ObserveOptions): AutopilotObservation['providers'] {
-  const health = (name: string): { ready: boolean; detail: string } | null => {
-    const h = repos.tasks.providerHealth(name);
-    if (!h) return null;
-    if (PROVIDER_STATE_BLOCKING.has(h.state)) return { ready: false, detail: `${name} : ${h.state}${h.reason ? ` — ${h.reason}` : ''}` };
-    if (h.state === 'RATE_LIMITED' && h.retryAt && Date.parse(h.retryAt) > now.getTime()) return { ready: false, detail: `${name} : limité jusqu'à ${h.retryAt}` };
-    return { ready: true, detail: `${name} : ${h.state}` };
-  };
-  const model = (name: 'OPENAI' | 'ANTHROPIC', keyVar: string): ProviderReadiness => {
-    if (!config.ai.live) return { ready: false, detail: `${name} : ATLAS_AI_LIVE=false, aucun appel payant` };
-    if (!process.env[keyVar]?.trim()) return { ready: false, detail: `${name} : ${keyVar} absent` };
-    return health(name) ?? { ready: true, detail: `${name} : clé présente, jamais observé` };
-  };
-  const claudeCode = (): ProviderReadiness => {
-    if (options.probeClaudeCode === false) return { ready: false, detail: 'Claude Code : non sondé' };
-    const availability = detectClaudeCode(config.engineering.claudeCodeBin);
-    if (!availability.available) return { ready: false, detail: `Claude Code : ${availability.detail}` };
-    const auth = detectClaudeCodeAuth(availability);
-    return auth.state === 'READY' ? { ready: true, detail: `Claude Code : ${availability.detail}` } : { ready: false, detail: `Claude Code : ${auth.detail}` };
-  };
+/**
+ * Les fournisseurs, avec le sens réel de « prêt ».
+ *
+ * Un modèle est prêt quand il a *répondu* — à une sonde gratuite ou à un
+ * vrai appel — et pas seulement quand sa clé existe. Claude Code et le dépôt
+ * sont jugés là où ils vivent : ici en mode intégré, dans le runner isolé en
+ * mode externe. Des fournisseurs fournis par l'appelant remplacent tout cela
+ * sans sonde : c'est le cas des tests.
+ */
+async function providerReadiness(repos: Repositories, config: AtlasConfig, now: Date, options: ObserveOptions): Promise<{ providers: AutopilotObservation['providers']; softwareLoop: SoftwareLoopStatus | null }> {
+  const search: ProviderReadiness = config.search.provider === 'none'
+    ? { ready: false, detail: 'aucun moteur de recherche configuré', state: 'ABSENT' }
+    : { ready: true, detail: `recherche : ${config.search.provider}`, state: 'CONFIGURED' };
+  const injected = options.providers ?? {};
+  const complete = ['OPENAI', 'CLAUDE', 'CLAUDE_CODE'].every((k) => k in injected);
+  if (complete) {
+    return {
+      providers: { DETERMINISTIC: { ready: true, detail: 'workers déterministes', state: 'READY' }, OPENAI: injected.OPENAI!, CLAUDE: injected.CLAUDE!, CLAUDE_CODE: injected.CLAUDE_CODE!, SEARCH: injected.SEARCH ?? search },
+      softwareLoop: null,
+    };
+  }
+  const loop = await softwareLoopStatus(repos, config, { now, cwd: options.cwd, verifyProviders: options.verifyProviders, probeClaudeCode: options.probeClaudeCode });
   return {
-    DETERMINISTIC: { ready: true, detail: 'workers déterministes' },
-    OPENAI: model('OPENAI', 'ATLAS_OPENAI_API_KEY'),
-    CLAUDE: model('ANTHROPIC', 'ANTHROPIC_API_KEY'),
-    CLAUDE_CODE: claudeCode(),
-    SEARCH: config.search.provider === 'none'
-      ? { ready: false, detail: 'aucun moteur de recherche configuré' }
-      : { ready: true, detail: `recherche : ${config.search.provider}` },
-    ...options.providers,
+    providers: {
+      DETERMINISTIC: { ready: true, detail: 'workers déterministes', state: 'READY' },
+      OPENAI: { ready: loop.openaiReviewer.ready, detail: loop.openaiReviewer.detail, state: loop.openaiReviewer.state },
+      CLAUDE: { ready: loop.claude.ready, detail: loop.claude.detail, state: loop.claude.state },
+      CLAUDE_CODE: { ready: loop.claudeCodeRunner.ready, detail: loop.claudeCodeRunner.detail, state: loop.claudeCodeRunner.state },
+      SEARCH: search,
+      ...injected,
+    },
+    softwareLoop: loop,
   };
 }
 
@@ -201,8 +213,9 @@ function providerReadiness(repos: Repositories, config: AtlasConfig, now: Date, 
  * et nommé dans `absent` — un tableau qui afficherait zéro là où l'on ne sait
  * pas ferait prendre des décisions sur du vide.
  */
-export function observeAtlas(repos: Repositories, config: AtlasConfig, options: ObserveOptions = {}): AutopilotObservation {
+export async function observeAtlas(repos: Repositories, config: AtlasConfig, options: ObserveOptions = {}): Promise<AutopilotObservation> {
   const now = options.now ?? new Date();
+  const readiness = await providerReadiness(repos, config, now, options);
   const board = buildSalesDashboard(repos, config, { range: '30d', now });
   const today = todaySnapshot(repos, now.toISOString().slice(0, 10));
   const needs = collectNeedsYou({ repos, today: now.toISOString().slice(0, 10) });
@@ -217,8 +230,11 @@ export function observeAtlas(repos: Repositories, config: AtlasConfig, options: 
   const failedRecent = repos.tasks.list({ status: 'FAILED', limit: 50 })
     .filter((t) => t.finishedAt && now.getTime() - Date.parse(t.finishedAt) < 24 * 3_600_000).length;
 
+  // Le dépôt : lu ici en ingénierie intégrée ; porté par le runner isolé en
+  // externe — ce processus n'a alors ni git ni dépôt, et ne doit pas les avoir.
   let repoClean: boolean | null = null;
-  try { repoClean = inspectRepo(options.cwd ?? process.cwd()).clean; } catch { absent.push('état du dépôt (git absent)'); }
+  if (config.engineering.runner === 'external') absent.push('état du dépôt (porté par atlas-engineer)');
+  else { try { repoClean = inspectRepo(options.cwd ?? process.cwd()).clean; } catch { absent.push('état du dépôt (git absent)'); } }
 
   if (today.aiCostUsd === null) absent.push('coût IA du jour (aucun appel au tarif connu)');
   if (board.cards.pipelinePotential === null) absent.push('potentiel de pipeline (échantillon insuffisant)');
@@ -247,7 +263,7 @@ export function observeAtlas(repos: Repositories, config: AtlasConfig, options: 
       approvedToApply: repos.tasks.workspacesInState('APPROVED_TO_APPLY').length,
       repoClean,
     },
-    providers: providerReadiness(repos, config, now, options),
+    providers: readiness.providers,
     spend: {
       todayUsd: today.aiCostUsd, unknownCalls: today.aiCostUnknownCalls,
       dailyLimitUsd: dailyLimit, mode: config.ai.dailyBudgetMode,
@@ -261,6 +277,7 @@ export function observeAtlas(repos: Repositories, config: AtlasConfig, options: 
     },
     failures: frictions,
     pendingHuman: { total: needs.length, byKind },
+    softwareLoop: readiness.softwareLoop,
     absent,
   };
 }
@@ -707,7 +724,7 @@ export async function runAutopilotCycle(
     }
 
     // ── OBSERVER ────────────────────────────────────────────────────────────
-    const observation = observeAtlas(repos, config, { ...options.observe, now });
+    const observation = await observeAtlas(repos, config, { ...options.observe, now });
     const pause = readAutopilotPause(repos);
     const ctx: OpportunityContext = { observation, repos, config, now };
 
@@ -759,12 +776,71 @@ export async function runAutopilotCycle(
     let dispatched = 0;
     const maxDispatch = options.maxDispatch ?? config.autopilot.maxDispatchPerCycle;
 
+    /**
+     * Confier une action à la file — la même mécanique pour une action née
+     * ici et pour une action bloquée qui reprend. La clé d'idempotence tient
+     * à l'empreinte et à l'heure : un redémarrage dans la même heure ne pose
+     * pas la tâche deux fois.
+     */
+    const dispatch = (action: AutopilotAction, p: AutopilotProposal & { execution: { kind: 'INTERNAL_TASK' } }, autonomyReason: string): ExecutedRecord => {
+      const route = routeTask(p.execution.taskType);
+      const outcome = repos.tasks.create({
+        taskType: p.execution.taskType, department: p.execution.department, workerType: route.target,
+        priority: p.execution.priority ?? 30,
+        payload: { ...(p.execution.payload ?? {}), autopilot_action_id: action.id, autopilot_objective: p.objective, scheduledBy: 'autopilot' },
+        idempotencyKey: `autopilot:${action.fingerprint}:${now.toISOString().slice(0, 13)}`,
+        correlationId: action.id,
+      });
+      repos.autopilot.transition(action.id, 'QUEUED', { taskId: outcome.task.taskId, reason: autonomyReason, rejectionReason: null, at: now.toISOString() });
+      cycleSpentUsd += p.expectedCostUsd;
+      dispatched += 1;
+      return { actionId: action.id, objective: p.objective, taskId: outcome.task.taskId, taskType: p.execution.taskType, agent: route.target, estimatedCostUsd: p.expectedCostUsd };
+    };
+
     for (const { p, allocation, score } of ranked) {
       const fingerprint = fingerprintOf(p);
       const worth = worthDoing(p);
       if (!worth.worth) { decisions.push({ objective: p.objective, category: p.category, score, decision: 'NOT_WORTH_IT', reason: worth.reason }); continue; }
       const open = repos.autopilot.openByFingerprint(fingerprint);
-      if (open) { decisions.push({ objective: p.objective, category: p.category, score, decision: 'DUPLICATE', reason: `déjà ouverte (${open.status}, ${open.id})`, actionId: open.id }); continue; }
+      if (open) {
+        /**
+         * La même occasion, déjà ouverte. Une action confiée suit sa tâche ;
+         * une action qui attend une personne attend encore. Mais une action
+         * BLOCKED ou reportée, sans tâche, se réévalue à chaque cycle sur
+         * l'état d'aujourd'hui — fournisseur revenu, budget rendu, plafond
+         * levé — et reprend, *elle*, sans doublon : le blocage d'hier n'est
+         * pas une décision. Relevé en production : « OPENAI : clé absente »
+         * restait écrit alors que la clé était là.
+         */
+        if (open.taskId || (open.status !== 'BLOCKED' && open.status !== 'PROPOSED')) {
+          decisions.push({ objective: p.objective, category: p.category, score, decision: 'DUPLICATE', reason: `déjà ouverte (${open.status}, ${open.id})`, actionId: open.id });
+          continue;
+        }
+        const autonomy = pause.paused
+          ? { verdict: 'DEFERRED' as const, reason: `Autopilot en pause${pause.reason ? ` — ${pause.reason}` : ''} (${pause.by ?? '?'})` }
+          : decideAutonomy(p, { observation, config, cycleSpentUsd });
+        if (autonomy.verdict === 'AUTO' && p.execution.kind === 'INTERNAL_TASK') {
+          if (dispatched >= maxDispatch) {
+            repos.autopilot.transition(open.id, 'PROPOSED', { reason: `${autonomy.reason} · plafond de ${maxDispatch} action(s) confiée(s) par cycle : au prochain cycle`, rejectionReason: null, at: now.toISOString() });
+            decisions.push({ objective: p.objective, category: p.category, score, decision: 'STILL_BLOCKED', reason: 'reprise possible, plafond du cycle atteint : au prochain cycle', actionId: open.id });
+            continue;
+          }
+          executed.push(dispatch(open, p as AutopilotProposal & { execution: { kind: 'INTERNAL_TASK' } }, autonomy.reason));
+          decisions.push({ objective: p.objective, category: p.category, score, decision: 'RESUMED', reason: `reprise : ${autonomy.reason} (était ${open.status} — ${open.rejectionReason ?? open.reason})`, actionId: open.id });
+          continue;
+        }
+        if (autonomy.verdict === 'WAITING_HUMAN') {
+          repos.autopilot.transition(open.id, 'WAITING_HUMAN', { reason: autonomy.reason, rejectionReason: null, at: now.toISOString() });
+          decisions.push({ objective: p.objective, category: p.category, score, decision: 'STILL_BLOCKED', reason: `attend une personne : ${autonomy.reason}`, actionId: open.id });
+          continue;
+        }
+        const status: AutopilotActionStatus = autonomy.verdict === 'BLOCKED' ? 'BLOCKED' : 'PROPOSED';
+        if (status !== open.status || (open.rejectionReason ?? open.reason) !== autonomy.reason) {
+          repos.autopilot.transition(open.id, status, { reason: autonomy.reason, rejectionReason: status === 'BLOCKED' ? autonomy.reason : null, at: now.toISOString() });
+        }
+        decisions.push({ objective: p.objective, category: p.category, score, decision: 'STILL_BLOCKED', reason: autonomy.reason, actionId: open.id });
+        continue;
+      }
       const last = repos.autopilot.lastResolvedByFingerprint(fingerprint);
       if (last?.status === 'DONE' && !last.result?.stale && last.resolvedAt && now.getTime() - Date.parse(last.resolvedAt) < DONE_RECENTLY_MS) {
         decisions.push({ objective: p.objective, category: p.category, score, decision: 'DONE_RECENTLY', reason: `terminée ${last.resolvedAt.slice(11, 16)} UTC : inutile de refaire`, actionId: last.id });
@@ -791,19 +867,7 @@ export async function runAutopilotCycle(
 
       if (autonomy.verdict !== 'AUTO' || p.execution.kind !== 'INTERNAL_TASK') continue;
       if (dispatched >= maxDispatch) { repos.autopilot.transition(action.id, 'PROPOSED', { reason: `${autonomy.reason} · plafond de ${maxDispatch} action(s) confiée(s) par cycle : au prochain cycle` }); continue; }
-
-      const route = routeTask(p.execution.taskType);
-      const outcome = repos.tasks.create({
-        taskType: p.execution.taskType, department: p.execution.department, workerType: route.target,
-        priority: p.execution.priority ?? 30,
-        payload: { ...(p.execution.payload ?? {}), autopilot_action_id: action.id, autopilot_objective: p.objective, scheduledBy: 'autopilot' },
-        idempotencyKey: `autopilot:${fingerprint}:${now.toISOString().slice(0, 13)}`,
-        correlationId: action.id,
-      });
-      repos.autopilot.transition(action.id, 'QUEUED', { taskId: outcome.task.taskId, reason: autonomy.reason });
-      cycleSpentUsd += p.expectedCostUsd;
-      dispatched += 1;
-      executed.push({ actionId: action.id, objective: p.objective, taskId: outcome.task.taskId, taskType: p.execution.taskType, agent: route.target, estimatedCostUsd: p.expectedCostUsd });
+      executed.push(dispatch(action, p as AutopilotProposal & { execution: { kind: 'INTERNAL_TASK' } }, autonomy.reason));
     }
 
     // ── APPRENDRE ───────────────────────────────────────────────────────────

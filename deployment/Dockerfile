@@ -73,6 +73,34 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # Sans commande : l'état, en lecture. Jamais un processus qui reste.
 CMD ["npm", "run", "atlas:status"]
 
+# ─── Engineer stage ─────────────────────────────────────────────────────────
+# Le runner d'ingénierie isolé (service `atlas-engineer`, profil `engineering`).
+#
+# L'image outils, plus ce que l'ingénierie autonome exige et que ni le serveur
+# ni les outils ne doivent porter : git, et le binaire Claude Code. Le dépôt
+# déployé lui est monté en lecture seule (/host-repo) ; il en tire un clone
+# jetable (/work/repo) et y ouvre un worktree par tâche (/work/worktrees).
+# Aucun port, aucun serveur, aucun .env : Compose ne lui transmet que les
+# variables de sa liste. Il ne déploie rien — un diff en base, en attente
+# d'une personne, est tout ce qu'il produit.
+#
+#   docker compose … --profile engineering up -d --build atlas-engineer
+FROM cli AS engineer
+
+USER root
+RUN apt-get update  && apt-get install -y --no-install-recommends git  && rm -rf /var/lib/apt/lists/*  && npm install -g @anthropic-ai/claude-code --no-audit --no-fund  && npm cache clean --force  && mkdir -p /work/worktrees /home/node/.claude  && chown -R node:node /work /home/node/.claude
+
+# Le point d'entrée est déjà là (l'étape outils copie deployment/) ; seul le
+# bit d'exécution, perdu d'un poste Windows, est rétabli.
+RUN chmod 0755 /app/deployment/engineer-entrypoint.sh
+
+ENV ATLAS_ENGINEER_REPO=/work/repo     ATLAS_ENGINEERING_WORKSPACE_ROOT=/work/worktrees     ATLAS_HOST_REPO=/host-repo     HOME=/home/node
+
+USER node
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/deployment/engineer-entrypoint.sh"]
+CMD []
+
 # ─── Runtime stage ──────────────────────────────────────────────────────────
 FROM node:24-bookworm-slim AS runtime
 

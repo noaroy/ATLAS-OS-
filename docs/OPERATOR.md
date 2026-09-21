@@ -61,6 +61,8 @@ npm run sales:pause -- --reason="…"   /   npm run sales:resume
 npm run client:auto -- --brief=briefs/<client>.json --go   # missions client (V2, inchangé)
 npm run atlas:start / atlas:stop     # sur un poste ; sur le VPS : docker compose … start|stop atlas
 npm run backup / restore-check / db:check / db:migrate
+npm run autopilot:status             # l'Autopilot, et le bloc SOFTWARE LOOP (relecteur, Claude, runner, dépôt, auto-deploy DISABLED)
+npm run atlas:engineer -- --cycles=1 # le runner d'ingénierie isolé, à la main (sur le VPS : service atlas-engineer)
 npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS · REAL_WORLD_EVIDENCE ·
                                      # LIVE_DEPLOYMENT_STATUS (observé seulement depuis atlas-cli) · EXTERNAL_INTEGRATIONS
 npm run atlas:vps-check              # sur le VPS, lecture seule : système, .env (sans valeurs), conteneurs, réseau, base
@@ -456,7 +458,11 @@ Pour clore explicitement : `npm run autopilot -- decide <id> done|reject
 (`ARCHITECTURE_REVIEW` → OpenAI), Hermes route les suites (`ENGINEERING_CHANGE`
 → Claude Code, tests, revue, correction) sous les bornes de chaîne existantes,
 et l'action passe `WAITING_HUMAN — READY_FOR_HUMAN_DEPLOYMENT` dès qu'un diff
-est prêt : le dépôt ne bouge pas sans vous.
+est prêt : le dépôt ne bouge pas sans vous. C'est le **daemon** qui donne les
+suites à Hermes quand une tâche se termine (`next_tasks`) — une revue qui
+demande une correction en crée la tâche, une correction terminée crée sa
+revue finale ; personne ne porte un résultat d'un agent à l'autre. Voir
+« La boucle logicielle » ci-dessous pour ce qu'il faut sur le VPS.
 
 **Reprise et retour en arrière.** Un cycle interrompu (arrêt du processus)
 est marqué `INTERRUPTED` au cycle suivant, jamais effacé ; les actions
@@ -465,6 +471,108 @@ empreinte n'est jamais dupliquée (index partiel en base) ; une action
 terminée n'est pas refaite avant six heures. Rien à défaire : l'Autopilot
 n'écrit que des cycles, des actions et des tâches — supprimer une action se
 fait par `decide <id> reject`, jamais en base.
+
+**Le travail bloqué reprend seul.** Une action `BLOCKED` (fournisseur
+absent, budget épuisé, plafond) ou `PROPOSED` sans tâche n'est pas une
+décision : à chaque cycle où l'occasion est encore là, elle est **réévaluée
+sur l'état du jour** et, si le blocage a disparu, **reprise — la même
+action, jamais une copie** (`RESUMED` dans le rapport ; `STILL_BLOCKED`,
+motif rafraîchi, sinon). Une action `WAITING_HUMAN` n'est jamais reprise par
+là : une porte humaine attend une personne, quel que soit l'état des
+fournisseurs. Une action dont l'occasion a disparu se ferme (`stale`), et
+sera reproposée si l'occasion revient. Un redémarrage entre le blocage et la
+reprise ne change rien : tout est en base.
+
+## La boucle logicielle : le runner d'ingénierie isolé
+
+```
+Autopilot → revue (OpenAI) → tâche d'ingénierie → Claude Code dans un worktree isolé
+  → tests / build → revue → corrections → READY_FOR_HUMAN_DEPLOYMENT → vous (atlas:apply)
+```
+
+`npm run autopilot:status` (ou `atlas-cli autopilot-status`) affiche le bloc
+**SOFTWARE LOOP** : *OpenAI reviewer*, *Claude*, *Claude Code runner*,
+*Repository workspace*, *Auto deploy* **DISABLED**, *Human deploy gate*
+**ENABLED** — et ce qui manque. Les deux derniers ne se configurent pas : un
+diff ne quitte jamais son worktree sans une personne.
+
+**Ce que « prêt » veut dire pour un fournisseur.** `CONFIGURED` : la clé est
+là, jamais vérifié. `READY` : il a répondu — à une sonde gratuite (`GET
+/v1/models`, aucun jeton dépensé, rejouée au plus toutes les six heures) ou à
+un vrai appel. `STALE` : vérifié il y a longtemps, encore utilisable, à
+revérifier. `BLOCKED` : clé refusée, quota ou budget épuisé, limité — aucun
+délai ne répare une clé refusée. `ABSENT` : pas de clé, ou
+`ATLAS_AI_LIVE=false`. Aucune clé n'est jamais imprimée, ni dans un motif.
+`--verify=false` sur `autopilot:status` évite toute sonde.
+
+**Pourquoi le VPS affichait `CLAUDE_CODE ✗ · dépôt N/A`.** Le conteneur
+`atlas` (image `runtime`, dist-only) n'a ni git, ni `.git`, ni le binaire
+Claude Code, ni le mode de facturation à la clé — et **ne doit pas les
+avoir** : le code que la boucle engendre ne doit pas pouvoir toucher ce qui
+tourne. Ce n'est pas une pièce manquante, c'est une architecture : le runner
+vit ailleurs.
+
+**Le runner `atlas-engineer`** (service Compose, profil `engineering`,
+étape `engineer` du Dockerfile = image outils + git + `@anthropic-ai/claude-code`) :
+
+- un daemon qui ne sert **que** `CLAUDE` / `CLAUDE_CODE`, sur la **même base**
+  (volume `atlas-data`) — la file de tâches vit là — et qui donne ses suites à
+  Hermes ;
+- le dépôt déployé monté **en lecture seule** (`/host-repo`), dont il tire un
+  **clone jetable** (`/work/repo`, ramené au commit déployé à chaque
+  démarrage) et un **worktree par tâche** (`/work/worktrees/<tâche>`, retiré
+  avec elle ; `node_modules` de l'image lié dedans, aucune installation réseau) ;
+- Claude Code en mode headless (`-p --output-format json`, outils bornés),
+  **facturé à la clé d'API** (`ATLAS_CLAUDE_CODE_USE_API_KEY=true`,
+  `ANTHROPIC_API_KEY` transmise par interpolation Compose depuis le `.env`) —
+  aucune session interactive, aucune authentification manuelle ;
+- **ce qu'il n'a pas** : pas d'`env_file` (seules les variables listées dans
+  `docker-compose.yml` lui parviennent — ni `GMAIL_*`, ni
+  `ATLAS_OPENAI_API_KEY`, ni le secret de session réel), pas de port, pas le
+  réseau interne (`engineering`, à part : il ne joint ni le serveur, ni
+  SearXNG, ni n8n), `ATLAS_OUTBOUND_ENABLED=false` et
+  `ATLAS_ENGINE_MODE=INTERNAL_TEST` en dur, et **aucun déploiement** — son
+  seul produit est un diff en base, `READY_FOR_REVIEW`, que `npm run
+  atlas:apply` applique quand vous le décidez ;
+- les bornes du serveur (budget IA quotidien, coût par tâche, profondeur,
+  nombre et coût par chaîne, fichiers et lignes par diff) lui sont transmises
+  à l'identique : un seul arbitre.
+
+**Mise en place, sur le VPS (à faire une fois, à la main) :**
+
+```bash
+# 1. dans /opt/atlas/.env (jamais copié, jamais affiché)
+ATLAS_ENGINEERING_RUNNER=external        # le daemon du serveur laisse CLAUDE / CLAUDE_CODE en file
+ATLAS_CLAUDE_CODE_USE_API_KEY=true       # Claude Code facturé à la clé, non interactif
+ANTHROPIC_API_KEY=…                      # déjà présente ; c'est elle que le runner reçoit
+ATLAS_AI_LIVE=true                       # sinon les fournisseurs restent ABSENT et rien n'est appelé
+# 2. le dépôt déployé doit être un dépôt git (/opt/atlas/.git) : c'est lui qui est monté en lecture seule
+cd /opt/atlas && git rev-parse --short HEAD
+# 3. construire et lancer le runner (profil engineering), puis recréer le serveur pour qu'il lise le .env
+COMPOSE="docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml -f deployment/docker-compose.private.yml"
+$COMPOSE --profile engineering up -d --build atlas-engineer
+$COMPOSE up -d atlas
+# 4. vérifier
+$COMPOSE --profile engineering ps                       # atlas-engineer Up
+$COMPOSE logs --tail=20 atlas-engineer                  # « dépôt /work/repo @ <sha> · worktrees /work/worktrees »
+bash deployment/atlas-cli.sh autopilot-status           # SOFTWARE LOOP : Claude Code runner EXTERNAL, Repository workspace EXTERNAL
+```
+
+Si le journal dit que le clone échoue faute de droits : le runner lit
+`/opt/atlas/.git` sous l'utilisateur `node` (uid 1000) ; rendre le dépôt
+lisible (`chmod -R o+rX /opt/atlas/.git`, aucun secret n'y vit — le `.env`
+n'est jamais commité) suffit ; jamais d'écriture accordée, le montage est `ro`.
+
+Sans `ATLAS_ENGINEERING_RUNNER=external`, le daemon du serveur prendrait les
+tâches d'ingénierie et les ferait échouer faute de binaire ; sans le profil
+`engineering`, elles restent en file — visibles, jamais perdues. Arrêter le
+runner : `$COMPOSE --profile engineering stop atlas-engineer` ; les tâches en
+cours reprennent à son redémarrage (bail expiré, worktree recréé).
+
+Sur un poste de développement, `ATLAS_ENGINEERING_RUNNER=embedded` (défaut) :
+le daemon sert tout, sur le dépôt courant, avec le `claude` du poste (par
+abonnement, ou à la clé si `ATLAS_CLAUDE_CODE_USE_API_KEY=true`).
+`npm run atlas:engineer -- --cycles=1` joue le runner isolé à la main.
 
 **Points d'extension.** Une source d'occasions (`OpportunitySource`) publie
 des propositions dans le cycle sous son nom ; c'est par là que le moteur
@@ -512,5 +620,7 @@ sauvegarde de plus de 48 h, disque au-delà de 80 %.
 
 Approuver un brouillon, approuver une campagne, lever l'interrupteur d'envoi,
 répondre à une réponse chaude, consigner un rendez-vous / un client / un CA,
-valider ou tester une recommandation, revenir en arrière. ATLAS propose ; il
-n'écrit à personne sans qu'une personne l'ait décidé.
+valider ou tester une recommandation, revenir en arrière — et **appliquer un
+diff** (`npm run atlas:apply`) puis le déployer : la boucle logicielle
+s'arrête à `READY_FOR_HUMAN_DEPLOYMENT`, toujours. ATLAS propose ; il
+n'écrit à personne et ne déploie rien sans qu'une personne l'ait décidé.

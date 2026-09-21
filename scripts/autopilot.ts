@@ -16,6 +16,7 @@
 import { createLogger, loadConfig, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import { runAutopilotCycle, summariseAutopilot, setAutopilotPause, readAutopilotPause } from '../packages/runtime/src/autopilot.ts';
+import { softwareLoopStatus, type SoftwareLoopStatus } from '../packages/runtime/src/software-loop.ts';
 
 loadAtlasEnv();
 
@@ -39,6 +40,23 @@ const tint: Record<string, string> = {
   WAITING_HUMAN: c.amber, PROPOSED: c.dim, BLOCKED: c.red, REJECTED: c.dim,
 };
 
+/**
+ * La boucle logicielle, pièce par pièce — et les deux constantes qui ne se
+ * règlent pas : le déploiement automatique est DISABLED, la porte humaine
+ * ENABLED. Un diff prêt s'arrête à READY_FOR_HUMAN_DEPLOYMENT.
+ */
+function printSoftwareLoop(loop: SoftwareLoopStatus): void {
+  const mark = (ready: boolean, state: string) => `${ready ? c.green : state === 'CONFIGURED' || state === 'STALE' ? c.amber : c.red}${state.padEnd(24)}${c.reset}`;
+  console.log(`\n  ${c.bold}SOFTWARE LOOP${c.reset}  ${loop.usable ? `${c.green}UTILISABLE` : `${c.amber}INCOMPLÈTE`}${c.reset}  ${c.dim}ingénierie ${loop.runner === 'external' ? 'externe (service atlas-engineer)' : 'intégrée (ce processus, dépôt courant)'}${c.reset}`);
+  console.log(`  - OpenAI reviewer      ${mark(loop.openaiReviewer.ready, loop.openaiReviewer.state)} ${c.dim}${loop.openaiReviewer.detail}${c.reset}`);
+  console.log(`  - Claude               ${mark(loop.claude.ready, loop.claude.state)} ${c.dim}${loop.claude.detail}${c.reset}`);
+  console.log(`  - Claude Code runner   ${mark(loop.claudeCodeRunner.ready, loop.claudeCodeRunner.state)} ${c.dim}${loop.claudeCodeRunner.detail}${c.reset}`);
+  console.log(`  - Repository workspace ${mark(loop.repositoryWorkspace.ready, loop.repositoryWorkspace.state)} ${c.dim}${loop.repositoryWorkspace.detail}${c.reset}`);
+  console.log(`  - Auto deploy          ${c.green}${loop.autoDeploy.padEnd(24)}${c.reset} ${c.dim}rien ne quitte un worktree sans une personne${c.reset}`);
+  console.log(`  - Human deploy gate    ${c.green}${loop.humanDeployGate.padEnd(24)}${c.reset} ${c.dim}READY_FOR_HUMAN_DEPLOYMENT → npm run atlas:apply${c.reset}`);
+  for (const b of loop.blockers) console.log(`  ${c.dim}· manque : ${b}${c.reset}`);
+}
+
 try {
   if (command === 'once') {
     const report = await runAutopilotCycle(repos, config, logger, { trigger: 'cli', observe: { cwd: process.cwd() } });
@@ -54,6 +72,7 @@ try {
     console.log(`  - dépense IA du jour : ${usd(o.spend.todayUsd)}${o.spend.unknownCalls ? ` (+${o.spend.unknownCalls} appel(s) au tarif inconnu)` : ''} · plafond ${o.spend.dailyLimitUsd === null ? o.spend.mode : `${o.spend.dailyLimitUsd.toFixed(2)} $`} · commercial ${o.spend.salesSpentTodayUsd.toFixed(2)} / ${o.spend.salesDailyBudgetUsd.toFixed(2)} $`);
     console.log(`  - santé : Gmail ${o.health.gmail} · daemon ${o.health.daemon} · LLM ${o.health.llm} · recherche ${o.health.search}`);
     if (o.absent.length) console.log(`  - ${c.dim}non mesurable : ${o.absent.join(' ; ')}${c.reset}`);
+    if (o.softwareLoop) printSoftwareLoop(o.softwareLoop);
 
     console.log(`\n  ${c.bold}Top opportunities:${c.reset}`);
     report.considered.slice(0, 5).forEach((x, i) => console.log(`  ${i + 1}. [${x.category} · ${x.allocation} · ${x.score}] ${x.objective}`));
@@ -98,6 +117,9 @@ try {
     console.log(`  pour vous (${s.waitingFounder.length})`);
     for (const a of s.waitingFounder) console.log(`    ${c.amber}À DÉCIDER${c.reset} ${a.objective} ${c.dim}— ${a.reason}${a.command ? ` → ${a.command}` : ''}${c.reset}`);
     if (s.blocked.length) { console.log(`  bloqué (${s.blocked.length})`); for (const a of s.blocked) console.log(`    ${c.red}BLOCKED  ${c.reset} ${a.objective} ${c.dim}— ${a.reason}${c.reset}`); }
+    // La boucle logicielle : aucune sonde payante ; celle des fournisseurs est
+    // gratuite et rejouée au plus toutes les six heures (--verify=false : jamais).
+    printSoftwareLoop(await softwareLoopStatus(repos, config, { cwd: process.cwd(), verifyProviders: flag('verify') !== 'false' }));
     console.log(`\n  dépense IA estimée (actions ouvertes) : $${s.estimatedSpendUsd.toFixed(4)} · réelle connue : ${usd(s.actualSpendUsd)}`);
     console.log(`  ${c.dim}MESSAGES SENT: 0 — l'Autopilot n'envoie rien.${c.reset}\n`);
   } else if (command === 'queue') {

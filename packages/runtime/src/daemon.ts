@@ -126,23 +126,33 @@ export const PERMANENT_ERROR_CODES = new Set<string>([
 ]);
 
 export const DEFAULT_WORKER_TYPES = [
-  'DETERMINISTIC', 'OPENAI', 'CLAUDE', 'CLAUDE_CODE', 'HUMAN',
+  'DETERMINISTIC', 'OPENAI', 'CLAUDE', 'CLAUDE_CODE', 'HUMAN', 'DETERMINISTIC_EXTERNAL',
 ] as const;
 
 /** Les types d'ingénierie : ceux que seul le runner isolé sert quand il existe. */
 export const ENGINEERING_WORKER_TYPES = ['CLAUDE', 'CLAUDE_CODE'] as const;
 
 /**
+ * Déterministe, mais qui a besoin du dépôt complet et de `tsx` — un script en
+ * sous-processus (`scripts/sales-batch.ts`), pas d'appel modèle direct.
+ * L'image serveur est dist-only : elle ne les a pas. Le runner isolé, lui, les
+ * a déjà (même image que les outils `atlas-cli`) — c'est lui qui sert cette file.
+ */
+export const EXTERNAL_TOOLS_WORKER_TYPES = ['DETERMINISTIC_EXTERNAL'] as const;
+
+/**
  * Ce que le daemon du serveur prend dans la file, selon qui porte l'ingénierie.
  *
  * `embedded` : tout, sur le dépôt courant — le poste de développement.
- * `external` : tout sauf CLAUDE et CLAUDE_CODE, qui restent en file pour le
- * service `atlas-engineer` — un seul preneur par type, et jamais un échec
- * « binaire absent » dans un conteneur qui n'a pas à l'avoir.
+ * `external` : tout sauf CLAUDE, CLAUDE_CODE et DETERMINISTIC_EXTERNAL, qui
+ * restent en file pour le service `atlas-engineer` — un seul preneur par
+ * type, et jamais un échec « script absent » dans un conteneur qui n'a pas à
+ * l'avoir.
  */
 export function serverWorkerTypes(runner: 'embedded' | 'external'): readonly string[] {
   if (runner === 'embedded') return DEFAULT_WORKER_TYPES;
-  return DEFAULT_WORKER_TYPES.filter((t) => !(ENGINEERING_WORKER_TYPES as readonly string[]).includes(t));
+  const excluded: readonly string[] = [...ENGINEERING_WORKER_TYPES, ...EXTERNAL_TOOLS_WORKER_TYPES];
+  return DEFAULT_WORKER_TYPES.filter((t) => !excluded.includes(t));
 }
 
 export class AtlasDaemon {
@@ -208,8 +218,9 @@ export class AtlasDaemon {
    * worker fantôme tient encore d'après la base.
    */
   boot(): { recovered: number; resumed: number; released: number } {
-    this.runId = this.repos.tasks.startDaemonRun(this.options.hostLabel ?? hostname(), process.pid);
-    const unclosed = this.repos.tasks.closeStaleDaemonRuns(this.runId);
+    const host = this.options.hostLabel ?? hostname();
+    this.runId = this.repos.tasks.startDaemonRun(host, process.pid);
+    const unclosed = this.repos.tasks.closeStaleDaemonRuns(this.runId, host);
     this.logger.info('daemon démarré', {
       owner: this.owner, runId: this.runId, workerTypes: this.workerTypes.join(','),
       ...(unclosed > 0 ? { previousRunsClosed: unclosed } : {}),

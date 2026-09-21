@@ -78,7 +78,7 @@ describe('le tour du daemon, lu comme il faut', () => {
       assert.equal(classifyDaemonRun(repos.tasks.daemonRuns(2), plusTard).state, 'STALE_OPEN');
       // Un nouveau daemon démarre : il ferme le tour orphelin, comme `boot()` le fait.
       const b = repos.tasks.startDaemonRun('atlas', 77);
-      assert.equal(repos.tasks.closeStaleDaemonRuns(b), 1);
+      assert.equal(repos.tasks.closeStaleDaemonRuns(b, 'atlas'), 1);
       repos.tasks.heartbeatDaemonRun(b);
       const apres = classifyDaemonRun(repos.tasks.daemonRuns(2), new Date());
       assert.equal(apres.state, 'RUNNING');
@@ -90,6 +90,39 @@ describe('le tour du daemon, lu comme il faut', () => {
       // Puis il s'arrête proprement.
       repos.tasks.stopDaemonRun(b, 'arrêt demandé');
       assert.equal(classifyDaemonRun(repos.tasks.daemonRuns(2), new Date()).state, 'STOPPED_CLEANLY');
+    } finally {
+      repos.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('deux daemons sur des hôtes différents partagent la même base sans se fermer l’un l’autre', () => {
+    // Relevé en production : le serveur principal et `atlas-engineer` partagent
+    // la base canonique, mais tournent sur des hôtes distincts et isolés l'un
+    // de l'autre. Le démarrage de l'un ne doit jamais fermer le tour, bien
+    // vivant, de l'autre — sinon `externalRunnerAlive` le déclare arrêté pour
+    // toujours, alors qu'il continue de battre.
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-daemon-runs-hosts-'));
+    const repos = createRepositories(join(dir, 'atlas.db'), logger);
+    try {
+      const engineer = repos.tasks.startDaemonRun('atlas-engineer', 7);
+      repos.tasks.heartbeatDaemonRun(engineer);
+
+      // Le serveur principal démarre après coup, sur son propre hôte.
+      const server = repos.tasks.startDaemonRun('5b24f28082a8', 1);
+      const closed = repos.tasks.closeStaleDaemonRuns(server, '5b24f28082a8');
+
+      assert.equal(closed, 0, 'aucun tour d’un autre hôte ne doit être fermé');
+      const engineerRow = repos.tasks.daemonRuns(5).find((r) => r.id === engineer);
+      assert.equal(engineerRow?.stoppedAt, null, 'le tour d’atlas-engineer doit rester ouvert');
+
+      // Un vrai tour resté ouvert sur CE MÊME hôte, lui, doit toujours être fermé.
+      const serverStale = repos.tasks.startDaemonRun('5b24f28082a8', 2);
+      const server2 = repos.tasks.startDaemonRun('5b24f28082a8', 3);
+      const closedSameHost = repos.tasks.closeStaleDaemonRuns(server2, '5b24f28082a8');
+      assert.equal(closedSameHost, 2, 'le tour orphelin du même hôte (et le précédent server) doivent être fermés');
+      const staleRow = repos.tasks.daemonRuns(5).find((r) => r.id === serverStale);
+      assert.notEqual(staleRow?.stoppedAt, null);
     } finally {
       repos.close();
       rmSync(dir, { recursive: true, force: true });

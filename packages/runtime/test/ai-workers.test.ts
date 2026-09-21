@@ -21,6 +21,8 @@ import {
   AtlasDaemon,
   DeterministicWorker,
   DEMO_HANDLERS,
+  serverWorkerTypes,
+  EXTERNAL_TOOLS_WORKER_TYPES,
 } from '../src/index.ts';
 
 /**
@@ -86,6 +88,9 @@ describe('le routage est déterministe', () => {
     assert.equal(routeTask('FINAL_REVIEW').target, 'OPENAI');
     assert.equal(routeTask('COMMERCIAL_REPLY_ANALYSIS').target, 'OPENAI');
     assert.equal(routeTask('APPROVE_EMAIL').target, 'HUMAN');
+    // Un script en sous-processus, pas un modèle — mais un script que l'image
+    // serveur dist-only n'a pas : le runner externe le sert, comme CLAUDE_CODE.
+    assert.equal(routeTask('SALES_DISCOVERY').target, 'DETERMINISTIC_EXTERNAL');
   });
 
   test('un type inconnu ne part pas « au mieux » vers un modèle', () => {
@@ -97,6 +102,46 @@ describe('le routage est déterministe', () => {
   test('il n’y a pas de repli d’un modèle vers l’autre', () => {
     assert.equal(fallbackFor('CLAUDE').allowed, false);
     assert.match(fallbackFor('OPENAI').reason, /pas interchangeables/);
+  });
+});
+
+describe('ce que le daemon du serveur prend, selon qui porte l’ingénierie', () => {
+  test('intégré : tout, y compris CLAUDE_CODE et la découverte commerciale', () => {
+    const types = serverWorkerTypes('embedded');
+    assert.ok(types.includes('CLAUDE_CODE'));
+    assert.ok(types.includes('DETERMINISTIC_EXTERNAL'));
+  });
+
+  test('externe : ni CLAUDE/CLAUDE_CODE ni la découverte commerciale — réservés à atlas-engineer', () => {
+    const types = serverWorkerTypes('external');
+    assert.ok(!types.includes('CLAUDE'));
+    assert.ok(!types.includes('CLAUDE_CODE'));
+    assert.ok(!types.includes('DETERMINISTIC_EXTERNAL'));
+    assert.ok(types.includes('DETERMINISTIC'), 'les autres tâches déterministes restent au serveur');
+  });
+
+  test('EXTERNAL_TOOLS_WORKER_TYPES nomme exactement ce que serverWorkerTypes exclut en externe', () => {
+    for (const type of EXTERNAL_TOOLS_WORKER_TYPES) {
+      assert.ok(!serverWorkerTypes('external').includes(type));
+      assert.ok(serverWorkerTypes('embedded').includes(type));
+    }
+  });
+});
+
+describe('DeterministicWorker sur un second nom de file', () => {
+  test('ne répond que sur son propre workerType, jamais sur DETERMINISTIC', () => {
+    const worker = new DeterministicWorker(
+      { SALES_DISCOVERY: async () => ({ kind: 'DONE', result: {} }) },
+      'DETERMINISTIC_EXTERNAL',
+    );
+    assert.equal(worker.type, 'DETERMINISTIC_EXTERNAL');
+    assert.equal(worker.canHandle(addTask({ taskType: 'SALES_DISCOVERY', workerType: 'DETERMINISTIC_EXTERNAL' })), true);
+    assert.equal(worker.canHandle(addTask({ taskType: 'SALES_DISCOVERY', workerType: 'DETERMINISTIC' })), false);
+  });
+
+  test('sans argument, se comporte exactement comme avant (workerType DETERMINISTIC)', () => {
+    const worker = new DeterministicWorker({});
+    assert.equal(worker.type, 'DETERMINISTIC');
   });
 });
 

@@ -7,7 +7,7 @@ import { collectNeedsYou, todaySnapshot } from './needs-you.ts';
 import { readGlobalPause, SALES_ENGINE_TASKS } from './sales-engine.ts';
 import { routeTask, type RouteTarget } from './hermes-router.ts';
 import { inspectRepo } from './workspace.ts';
-import { softwareLoopStatus, type SoftwareLoopStatus } from './software-loop.ts';
+import { softwareLoopStatus, externalRunnerAlive, type SoftwareLoopStatus } from './software-loop.ts';
 import type { WorkerContext, WorkerOutcome } from './workers.ts';
 
 /**
@@ -145,7 +145,7 @@ export interface AutopilotObservation {
   missions: { total: number };
   queue: { byStatus: Record<string, number>; waitingHuman: number; failedRecent: number };
   engineering: { readyForReview: number; approvedToApply: number; repoClean: boolean | null };
-  providers: Record<'DETERMINISTIC' | 'OPENAI' | 'CLAUDE' | 'CLAUDE_CODE' | 'SEARCH', ProviderReadiness>;
+  providers: Record<'DETERMINISTIC' | 'OPENAI' | 'CLAUDE' | 'CLAUDE_CODE' | 'DETERMINISTIC_EXTERNAL' | 'SEARCH', ProviderReadiness>;
   spend: {
     todayUsd: number | null; unknownCalls: number;
     dailyLimitUsd: number | null; mode: 'UNLIMITED' | 'CONFIGURED' | 'DISABLED'; remainingUsd: number | null;
@@ -180,15 +180,36 @@ export interface ObserveOptions {
  * mode externe. Des fournisseurs fournis par l'appelant remplacent tout cela
  * sans sonde : c'est le cas des tests.
  */
+/**
+ * Déterministe, mais qui a besoin du dépôt complet et de `tsx` (voir
+ * `EXTERNAL_TOOLS_WORKER_TYPES`) : en ingénierie intégrée, ce processus les a
+ * déjà — comme pour `DETERMINISTIC`. En externe, c'est `atlas-engineer` qui
+ * les sert, sous le même nom d'hôte que `CLAUDE_CODE` : sa vivacité est donc
+ * le même signal.
+ */
+function deterministicExternalReadiness(repos: Repositories, config: AtlasConfig, now: Date): ProviderReadiness {
+  if (config.engineering.runner === 'embedded') {
+    return { ready: true, detail: 'workers déterministes (dépôt complet, intégré)', state: 'READY' };
+  }
+  const alive = externalRunnerAlive(repos, now);
+  return { ready: alive.alive, detail: alive.detail, state: alive.alive ? 'READY' : 'ABSENT' };
+}
+
 async function providerReadiness(repos: Repositories, config: AtlasConfig, now: Date, options: ObserveOptions): Promise<{ providers: AutopilotObservation['providers']; softwareLoop: SoftwareLoopStatus | null }> {
   const search: ProviderReadiness = config.search.provider === 'none'
     ? { ready: false, detail: 'aucun moteur de recherche configuré', state: 'ABSENT' }
     : { ready: true, detail: `recherche : ${config.search.provider}`, state: 'CONFIGURED' };
+  const deterministicExternal = deterministicExternalReadiness(repos, config, now);
   const injected = options.providers ?? {};
   const complete = ['OPENAI', 'CLAUDE', 'CLAUDE_CODE'].every((k) => k in injected);
   if (complete) {
     return {
-      providers: { DETERMINISTIC: { ready: true, detail: 'workers déterministes', state: 'READY' }, OPENAI: injected.OPENAI!, CLAUDE: injected.CLAUDE!, CLAUDE_CODE: injected.CLAUDE_CODE!, SEARCH: injected.SEARCH ?? search },
+      providers: {
+        DETERMINISTIC: { ready: true, detail: 'workers déterministes', state: 'READY' },
+        OPENAI: injected.OPENAI!, CLAUDE: injected.CLAUDE!, CLAUDE_CODE: injected.CLAUDE_CODE!,
+        DETERMINISTIC_EXTERNAL: injected.DETERMINISTIC_EXTERNAL ?? deterministicExternal,
+        SEARCH: injected.SEARCH ?? search,
+      },
       softwareLoop: null,
     };
   }
@@ -199,6 +220,7 @@ async function providerReadiness(repos: Repositories, config: AtlasConfig, now: 
       OPENAI: { ready: loop.openaiReviewer.ready, detail: loop.openaiReviewer.detail, state: loop.openaiReviewer.state },
       CLAUDE: { ready: loop.claude.ready, detail: loop.claude.detail, state: loop.claude.state },
       CLAUDE_CODE: { ready: loop.claudeCodeRunner.ready, detail: loop.claudeCodeRunner.detail, state: loop.claudeCodeRunner.state },
+      DETERMINISTIC_EXTERNAL: deterministicExternal,
       SEARCH: search,
       ...injected,
     },

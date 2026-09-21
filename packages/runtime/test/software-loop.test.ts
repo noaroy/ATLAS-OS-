@@ -503,12 +503,16 @@ describe('5. atlas-engineer, tel que Compose et le Dockerfile le décrivent', ()
     }
   });
 
-  test('le runner lui-même ne sert que l’ingénierie et ne déploie pas', () => {
+  test('le runner lui-même ne sert que l’ingénierie et la découverte commerciale, et ne déploie pas', () => {
     const script = text('scripts', 'atlas-engineer.ts');
-    assert.match(script, /workerTypes: \['CLAUDE', 'CLAUDE_CODE'\]/);
+    // Exactement ces trois types : ni OPENAI, ni HUMAN, ni le DETERMINISTIC
+    // ordinaire (boîte, envoi) — seulement ce que ce conteneur a de quoi servir.
+    assert.match(script, /workerTypes: \['CLAUDE', 'CLAUDE_CODE', \.\.\.EXTERNAL_TOOLS_WORKER_TYPES\]/);
     assert.match(script, /hostLabel: ENGINEER_HOST_LABEL/);
     assert.match(script, /hermes/);
-    for (const forbidden of ['applyToRepo', 'docker', 'GmailOutboundProvider', 'OpenAiWorker', 'SALES_SEND']) {
+    // Seul le handler de découverte est repris — pas toute la carte commerciale.
+    assert.match(script, /SALES_ENGINE_TASKS\.DISCOVERY\]: salesHandlers\[SALES_ENGINE_TASKS\.DISCOVERY\]/);
+    for (const forbidden of ['applyToRepo', 'docker', 'GmailOutboundProvider', 'OpenAiWorker', 'SALES_SEND', 'REPLY_SYNC', 'FOLLOW_UP']) {
       assert.ok(!script.includes(forbidden), `« ${forbidden} » n’a rien à faire dans le runner`);
     }
     assert.match(text('package.json'), /"atlas:engineer": "tsx scripts\/atlas-engineer\.ts"/);

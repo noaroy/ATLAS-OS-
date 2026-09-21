@@ -20,7 +20,7 @@ import { taskFingerprint, targetOf, type AiTaskResult } from './ai-contracts.ts'
  * personne ne le voit avant la facture.
  */
 
-export type RouteTarget = 'OPENAI' | 'CLAUDE' | 'CLAUDE_CODE' | 'DETERMINISTIC' | 'HUMAN';
+export type RouteTarget = 'OPENAI' | 'CLAUDE' | 'CLAUDE_CODE' | 'DETERMINISTIC' | 'DETERMINISTIC_EXTERNAL' | 'HUMAN';
 
 /**
  * La table de routage.
@@ -57,6 +57,12 @@ const ROUTES: Readonly<Record<string, RouteTarget>> = {
   APPROVE_EMAIL: 'HUMAN',
   ANSWER_CLIENT: 'HUMAN',
   APPROVE_PAYMENT: 'HUMAN',
+
+  // Un script en sous-processus (`scripts/sales-batch.ts`), pas d'appel modèle
+  // direct — mais un script que l'image serveur dist-only n'embarque pas. Le
+  // runner externe (`atlas-engineer`), lui, a le dépôt complet et `tsx` : c'est
+  // la même distinction que CLAUDE_CODE, pour la même raison.
+  SALES_DISCOVERY: 'DETERMINISTIC_EXTERNAL',
 };
 
 /**

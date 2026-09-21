@@ -306,6 +306,39 @@ describe('réponses : conséquences (§14, §16–17, §64, §71)', () => {
   });
 });
 
+describe('découverte : indisponibilité structurelle vs transitoire', () => {
+  const seedSegment = () => repos.salesEngine.createSegment({ name: 'Test export', countries: ['FR'], status: 'TESTING' }).segment;
+
+  test('script absent (image serveur dist-only) : WAITING_HUMAN avec la commande atlas-cli exacte, jamais DONE', async () => {
+    const segment = seedSegment();
+    const handlers = createSalesEngineHandlers({
+      repos, config, logger, now: () => NOW,
+      discovery: async () => ({
+        ran: false, reason: 'script absent : /app/scripts/sales-batch.ts (image serveur dist-only)',
+        batchId: null, exitCode: null, costUsd: null, needsHuman: true,
+      }),
+    });
+    const outcome = await handlers[SALES_ENGINE_TASKS.DISCOVERY]!(task(SALES_ENGINE_TASKS.DISCOVERY), context);
+
+    assert.equal(outcome.kind, 'WAITING_HUMAN');
+    assert.equal(outcome.errorCode, 'DISCOVERY_MANUAL_REQUIRED');
+    assert.match(outcome.errorMessage ?? '', /bash deployment\/atlas-cli\.sh npm run sales -- --go/);
+    assert.match(outcome.errorMessage ?? '', new RegExp(`--segment=${segment.id}`));
+  });
+
+  test('une indisponibilité transitoire reste DONE : la tâche peut retenter demain sans intervention', async () => {
+    seedSegment();
+    const handlers = createSalesEngineHandlers({
+      repos, config, logger, now: () => NOW,
+      discovery: async () => ({ ran: false, reason: 'mode LLM « simulation », pas « live »', batchId: null, exitCode: null, costUsd: null }),
+    });
+    const outcome = await handlers[SALES_ENGINE_TASKS.DISCOVERY]!(task(SALES_ENGINE_TASKS.DISCOVERY), context);
+
+    assert.equal(outcome.kind, 'DONE');
+    assert.equal(outcome.result?.ran, false);
+  });
+});
+
 describe('lecture de la boîte (§16)', () => {
   test('les réponses importées produisent leurs conséquences une seule fois, même relues', async () => {
     const domain = 'acme-industrie.fr';

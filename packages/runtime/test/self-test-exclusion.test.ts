@@ -37,7 +37,7 @@ let config: AtlasConfig;
 
 const OFFLINE: AutopilotObservation['providers'] = {
   DETERMINISTIC: { ready: true, detail: 'test' }, OPENAI: { ready: false, detail: 'clé absente' }, CLAUDE: { ready: false, detail: 'clé absente' },
-  CLAUDE_CODE: { ready: false, detail: 'absent' }, SEARCH: { ready: false, detail: 'aucun moteur' },
+  CLAUDE_CODE: { ready: false, detail: 'absent' }, DETERMINISTIC_EXTERNAL: { ready: false, detail: 'atlas-engineer arrêté' }, SEARCH: { ready: false, detail: 'aucun moteur' },
 };
 
 /** Le self-test, tel qu'il est en base après v4.5.5 : accusé réel, registre CONTACTED, conversation, réponse REPLIED. */

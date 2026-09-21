@@ -198,6 +198,14 @@ export interface DiscoveryResult {
   batchId: string | null;
   exitCode: number | null;
   costUsd: number | null;
+  /**
+   * Vrai pour une indisponibilité structurelle — rien qu'une reprise demain ne
+   * répare — par opposition à une condition qui peut changer d'elle-même
+   * (budget épuisé, fournisseur en pause). Le distinguer est ce qui évite de
+   * reproposer la même tâche vouée à échouer chaque jour au lieu de nommer la
+   * décision humaine qu'elle attend.
+   */
+  needsHuman?: boolean;
 }
 
 export interface SalesEngineDeps {
@@ -243,7 +251,14 @@ export const defaultDiscovery = (deps: { config: AtlasConfig; logger: Logger; so
   async (input: { budgetUsd: number; segment: SalesSegment | null; heartbeat: () => void }): Promise<DiscoveryResult> => {
     const script = join(deps.sourceRoot, 'scripts', 'sales-batch.ts');
     if (!existsSync(script)) {
-      return { ran: false, reason: `script absent : ${script}`, batchId: null, exitCode: null, costUsd: null };
+      // L'image serveur est volontairement dist-only (voir docs/OPERATOR.md) :
+      // ni `scripts/` ni `tsx` n'y sont présents, et aucun redémarrage ne
+      // changera cela. Ce n'est donc jamais transitoire — une personne doit
+      // lancer la découverte par le canal qui, lui, a tout ce qu'il faut.
+      return {
+        ran: false, reason: `script absent : ${script} (image serveur dist-only)`,
+        batchId: null, exitCode: null, costUsd: null, needsHuman: true,
+      };
     }
     if (deps.config.llm.mode !== 'live') {
       return { ran: false, reason: `mode LLM « ${deps.config.llm.mode} », pas « live »`, batchId: null, exitCode: null, costUsd: null };
@@ -493,6 +508,18 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     const result = await discovery({ budgetUsd: budget, segment, heartbeat: () => void context.heartbeat() });
     if (!result.ran) {
       repos.salesEngine.recordFriction({ kind: 'DISCOVERY_UNAVAILABLE', segmentId: segment?.id ?? null, detail: result.reason });
+      if (result.needsHuman) {
+        // DONE dirait « rien à signaler » : faux — une personne doit lancer la
+        // découverte par le canal qui l'a réellement (atlas-cli, dépôt complet).
+        // WAITING_HUMAN le nomme, au lieu de reproposer la même tâche vouée à
+        // échouer identiquement demain.
+        const cmd = `bash deployment/atlas-cli.sh npm run sales -- --go --budget=${budget.toFixed(2)}${segment ? ` --segment=${segment.id}` : ''}`;
+        return {
+          kind: 'WAITING_HUMAN',
+          errorCode: 'DISCOVERY_MANUAL_REQUIRED',
+          errorMessage: `${result.reason} — lancer manuellement : ${cmd}`,
+        };
+      }
       return { kind: 'DONE', result: { ran: false, reason: result.reason, segmentId: segment?.id ?? null } };
     }
     // Le lot ne connaît pas les segments : l'attribution se fait ici, sur ce

@@ -36,11 +36,11 @@ let config: AtlasConfig;
 type Providers = AutopilotObservation['providers'];
 const READY: Providers = {
   DETERMINISTIC: { ready: true, detail: 'test' }, OPENAI: { ready: true, detail: 'test' }, CLAUDE: { ready: true, detail: 'test' },
-  CLAUDE_CODE: { ready: true, detail: 'test' }, SEARCH: { ready: true, detail: 'test' },
+  CLAUDE_CODE: { ready: true, detail: 'test' }, DETERMINISTIC_EXTERNAL: { ready: true, detail: 'test' }, SEARCH: { ready: true, detail: 'test' },
 };
 const OFFLINE: Providers = {
   DETERMINISTIC: { ready: true, detail: 'test' }, OPENAI: { ready: false, detail: 'OPENAI : clé absente' }, CLAUDE: { ready: false, detail: 'ANTHROPIC : clé absente' },
-  CLAUDE_CODE: { ready: false, detail: 'Claude Code : absent' }, SEARCH: { ready: false, detail: 'aucun moteur' },
+  CLAUDE_CODE: { ready: false, detail: 'Claude Code : absent' }, DETERMINISTIC_EXTERNAL: { ready: false, detail: 'atlas-engineer arrêté' }, SEARCH: { ready: false, detail: 'aucun moteur' },
 };
 
 const cycle = (options: { now?: Date; sources?: OpportunitySource[]; providers?: Providers; config?: AtlasConfig; maxDispatch?: number } = {}) =>

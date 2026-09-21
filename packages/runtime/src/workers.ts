@@ -61,13 +61,26 @@ export interface Worker {
  * découvre que bien plus tard, et par ses conséquences.
  */
 export class DeterministicWorker implements Worker {
-  readonly type = 'DETERMINISTIC';
+  readonly type: string;
   private readonly handlers = new Map<
     string,
     (task: TaskRow, context: WorkerContext) => Promise<WorkerOutcome>
   >();
 
-  constructor(handlers: Record<string, (task: TaskRow, context: WorkerContext) => Promise<WorkerOutcome>> = {}) {
+  /**
+   * `workerType` par défaut à `'DETERMINISTIC'`, pour ne rien changer aux
+   * appelants existants. Un second nom (ex. `'DETERMINISTIC_EXTERNAL'`) sert à
+   * poser une deuxième instance qui ne sert qu'une file distincte, sur un
+   * processus distinct — le point d'extension qui permet à un traitement
+   * déterministe (aucun modèle direct, un script en sous-processus) de tourner
+   * là où son environnement existe réellement, sans toucher au routage des
+   * autres tâches déterministes.
+   */
+  constructor(
+    handlers: Record<string, (task: TaskRow, context: WorkerContext) => Promise<WorkerOutcome>> = {},
+    workerType = 'DETERMINISTIC',
+  ) {
+    this.type = workerType;
     for (const [type, handler] of Object.entries(handlers)) this.handlers.set(type, handler);
   }
 
@@ -80,7 +93,7 @@ export class DeterministicWorker implements Worker {
   }
 
   canHandle(task: TaskRow): boolean {
-    return task.workerType === 'DETERMINISTIC';
+    return task.workerType === this.type;
   }
 
   async execute(task: TaskRow, context: WorkerContext): Promise<WorkerOutcome> {

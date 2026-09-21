@@ -47,6 +47,7 @@ export {
   AtlasDaemon,
   DEFAULT_WORKER_TYPES,
   ENGINEERING_WORKER_TYPES,
+  EXTERNAL_TOOLS_WORKER_TYPES,
   serverWorkerTypes,
   PERMANENT_ERROR_CODES,
   type DaemonOptions,

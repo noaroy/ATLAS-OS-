@@ -1305,11 +1305,19 @@ export class TaskRepository {
    * Ferme les tours restés ouverts par un processus qui n'a pas pu le dire
    * (coupure, kill). Appelé au démarrage suivant : l'historique dit alors
    * « arrêt non consigné », jamais « toujours en marche ».
+   *
+   * Bornée au même `host` : plusieurs daemons partagent cette table sur la
+   * base canonique (le serveur principal, `atlas-engineer`, isolés l'un de
+   * l'autre par conception). Sans cette borne, le démarrage de l'un fermait
+   * le tour encore vivant de l'autre — relevé en production : le serveur
+   * principal fermait le tour d'`atlas-engineer` à chacun de ses propres
+   * redémarrages, alors que celui-ci continuait de battre un tour déjà classé
+   * arrêté, invisible pour toujours à `externalRunnerAlive`.
    */
-  closeStaleDaemonRuns(exceptRunId: string, reason = 'arrêt non consigné : reprise par un nouveau daemon'): number {
+  closeStaleDaemonRuns(exceptRunId: string, host: string, reason = 'arrêt non consigné : reprise par un nouveau daemon'): number {
     return this.db
-      .prepare('UPDATE daemon_runs SET stopped_at = ?, stop_reason = ? WHERE stopped_at IS NULL AND id != ?')
-      .run(nowIso(), reason, exceptRunId).changes;
+      .prepare('UPDATE daemon_runs SET stopped_at = ?, stop_reason = ? WHERE stopped_at IS NULL AND id != ? AND host = ?')
+      .run(nowIso(), reason, exceptRunId, host).changes;
   }
 
   /** Le daemon date son tour : sans cette trace, un processus mort ressemble à un processus qui dort. */

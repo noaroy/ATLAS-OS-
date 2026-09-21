@@ -19,8 +19,9 @@
 import { createLogger, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import {
-  AtlasDaemon, WorkerRegistry, ClaudeCodeWorker, ClaudeWorker, HermesRouter,
+  AtlasDaemon, WorkerRegistry, DeterministicWorker, ClaudeCodeWorker, ClaudeWorker, HermesRouter,
   createAiProviders, detectClaudeCode, detectClaudeCodeAuth, repoRootOf, inspectRepo, ENGINEER_HOST_LABEL,
+  createSalesEngineHandlers, SALES_ENGINE_TASKS, EXTERNAL_TOOLS_WORKER_TYPES,
 } from '../packages/runtime/src/index.ts';
 
 const flag = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
@@ -44,6 +45,14 @@ logger.info('runner d’ingénierie', {
 });
 
 const providers = createAiProviders({ config, logger, repos });
+
+// SALES_DISCOVERY lance `scripts/sales-batch.ts` en sous-processus — aucun
+// appel modèle direct par ce worker-ci, donc aucune clé OpenAI ni Gmail
+// requise ; ce conteneur ne les a de toute façon pas. Seul ce handler est
+// repris (pas toute la carte `createSalesEngineHandlers`) : les autres tâches
+// commerciales (boîte, envoi) restent au daemon du serveur, qui a les
+// identifiants qu'elles demandent.
+const salesHandlers = createSalesEngineHandlers({ repos, config, logger, sourceRoot: process.cwd() });
 const registry = new WorkerRegistry()
   .register(new ClaudeWorker({
     repos, provider: providers.anthropic, timeoutMs: config.ai.claudeTimeoutMs, workspaceRoot: repoRoot,
@@ -54,7 +63,11 @@ const registry = new WorkerRegistry()
     repos, logger, repoRoot, worktreeRoot: config.engineering.workspaceRoot || undefined,
     timeoutMs: config.engineering.claudeCodeTimeoutMs, maxFilesChanged: config.engineering.maxFilesChanged,
     maxDiffLines: config.engineering.maxDiffLines, binary: config.engineering.claudeCodeBin,
-  }));
+  }))
+  .register(new DeterministicWorker(
+    { [SALES_ENGINE_TASKS.DISCOVERY]: salesHandlers[SALES_ENGINE_TASKS.DISCOVERY]! },
+    EXTERNAL_TOOLS_WORKER_TYPES[0],
+  ));
 
 const hermes = new HermesRouter({
   repos, logger,
@@ -66,8 +79,10 @@ const hermes = new HermesRouter({
 
 const daemon = new AtlasDaemon({
   repos, registry, logger, hermes,
-  // Seulement l'ingénierie : les autres types restent au daemon du serveur.
-  workerTypes: ['CLAUDE', 'CLAUDE_CODE'],
+  // L'ingénierie, et la découverte commerciale — les seuls types que ce
+  // conteneur a de quoi servir. Le reste des tâches déterministes (boîte,
+  // envoi, mesure) reste au daemon du serveur.
+  workerTypes: ['CLAUDE', 'CLAUDE_CODE', ...EXTERNAL_TOOLS_WORKER_TYPES],
   owner: `${ENGINEER_HOST_LABEL}#${process.pid}`,
   hostLabel: ENGINEER_HOST_LABEL,
   leaseMs: num('lease', 60_000), heartbeatMs: num('heartbeat', 10_000), maxIdleMs: num('idle', 60_000),

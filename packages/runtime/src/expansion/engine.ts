@@ -1,7 +1,7 @@
 import type { AtlasConfig } from '@atlas/core';
 import type { Repositories, ExpansionRun, ExpansionCandidate, ExpansionStage, SourceTrust, EntityKind } from '@atlas/data';
 import { fetchRawPages, type SearchResult } from '@atlas/intelligence';
-import { ATLAS_SALES_ICP, classifyPageType, looksLikeCompanySite, whyNotACompanyName, looksLikePageTitle, extractCountryEvidence, isTechnicalDomain } from '@atlas/departments';
+import { ATLAS_SALES_ICP, classifyPageType, looksLikeCompanySite, whyNotACompanyName, looksLikePageTitle, extractCountryEvidence, isTechnicalDomain, siteLinks } from '@atlas/departments';
 import type {
   ExpansionDeps, ExpansionOptions, ExpansionLimits, ExpansionIcp, ExpansionSeed, ExpansionStats, ExpansionReport,
   Finding, Hypothesis, SeedProfile, StrategyKey, EntityRef, RelationshipType,
@@ -48,6 +48,8 @@ interface Counters {
   aiCostUsd: number;
   rawCandidates: number;
   stoppedBy: Set<string>;
+  /** Lectures de pages d'identité (F2) pour ce tour — non persisté, remis à zéro à chaque reprise. */
+  identityFetches: number;
 }
 
 interface QueueItem {
@@ -140,7 +142,7 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
 
   const counters: Counters = {
     searchCalls: run.searchCalls, searchCostUsd: run.searchCostUsd, fetches: run.fetches, aiCalls: run.aiCalls, aiCostUsd: run.aiCostUsd,
-    rawCandidates: progress.rawCandidates, stoppedBy: new Set(progress.stoppedBy),
+    rawCandidates: progress.rawCandidates, stoppedBy: new Set(progress.stoppedBy), identityFetches: 0,
   };
   const aiBudgetToday = purpose === 'SALES' ? salesAiBudgetRemaining(repos, config, now()) : Number.POSITIVE_INFINITY;
   const seedKeys = new Set(run.seeds.map((s) => entityKeyOf({ domain: typeof s.domain === 'string' ? s.domain : null, name: String(s.name ?? '') })));
@@ -188,6 +190,20 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
   const summary = summaryOf(stats);
   const finished = repos.expansion.finishRun(run.id, { status, stats: stats as unknown as Record<string, unknown>, summary, error, finishedAt: now().toISOString() });
   return { run: finished, report: expansionReport(repos, finished.id) };
+}
+
+/**
+ * Un tour RUNNING est-il abandonné ?
+ *
+ * `updated_at` sert de battement : chaque graine traitée le rafraîchit
+ * (`saveProgress`). Un tour mort ne le rafraîchit plus. Trente minutes sans
+ * écriture — largement au-delà du temps d'une graine — distingue un tour
+ * juste lent d'un tour laissé par un processus disparu.
+ */
+export const RUN_STALE_AFTER_MS = 30 * 60_000;
+
+export function isRunStale(run: ExpansionRun, now: Date = new Date()): boolean {
+  return now.getTime() - Date.parse(run.updatedAt) > RUN_STALE_AFTER_MS;
 }
 
 /** Reprendre tout tour laissé RUNNING par un processus mort. */
@@ -239,15 +255,27 @@ async function expandSeed(ctx: Ctx, item: QueueItem, strategies: ReturnType<type
 
   // Chaque graine a sa part de requêtes : sans cela, la première épuisait
   // le plafond et les suivantes n'avaient que leurs pages officielles.
+  //
+  // Chaque stratégie a aussi sa part de trouvailles : sans quota, une seule
+  // fédération de cinquante membres remplissait presque tout le tour d'un
+  // seul type de relation. Le quota reprend le plafond global existant
+  // (maxChildrenPerSeed * 3) et le répartit entre les stratégies actives —
+  // au moins trois chacune, pour qu'une stratégie pauvre ne soit pas privée.
   const searchesBefore = counters.searchCalls;
   const findings: Finding[] = [];
+  const strategyQuota = Math.max(3, Math.ceil((limits.maxChildrenPerSeed * 3) / Math.max(1, strategies.length)));
   for (const strategy of strategies) {
+    let fromStrategy = 0;
     for (const hypothesis of strategy.plan(profile, ctx.icp)) {
       ctx.heartbeat();
       if (findings.length >= limits.maxChildrenPerSeed * 3) break;
+      if (fromStrategy >= strategyQuota) break;
       if (hypothesis.kind !== 'READ_SITE' && counters.searchCalls - searchesBefore >= ctx.searchAllowance) break;
       const got = await execute(ctx, profile, hypothesis, strategy.key);
-      findings.push(...got);
+      const room = strategyQuota - fromStrategy;
+      const kept = got.length > room ? got.slice(0, room) : got;
+      findings.push(...kept);
+      fromStrategy += kept.length;
     }
   }
   counters.rawCandidates += findings.length;
@@ -317,7 +345,7 @@ async function expandSeed(ctx: Ctx, item: QueueItem, strategies: ReturnType<type
     if (verdict.score < 30 || counters.fetches >= limits.maxFetches) break;
     const entry = byKey.get(key)!;
     if (!entry.ref.domain || entry.ref.kind !== 'COMPANY') continue;
-    await enrichCandidate(ctx, key, entry.ref);
+    await enrichCandidate(ctx, key, entry.ref, verdict.score);
   }
 
   for (const [key, entry] of byKey) {
@@ -656,7 +684,39 @@ async function confirmInferred(ctx: Ctx, seed: SeedProfile, byKey: Map<string, {
 
 // ─── Enrichir un candidat : son site, son pays, son activité ────────────────
 
-async function enrichCandidate(ctx: Ctx, key: string, ref: EntityRef & { kind: EntityKind }): Promise<void> {
+/**
+ * Au-delà de combien de fetches identité par tour on n'en lit plus : beaucoup
+ * de PME ne publient leur pays que sur une page de contact, de mentions
+ * légales ou d'about — jamais sur l'accueil. Une seule page de plus par
+ * candidat, sous ce plafond de tour, suffit à le prouver sans faire exploser
+ * le budget de lectures.
+ */
+const MAX_IDENTITY_FETCHES_PER_RUN = 5;
+
+/**
+ * La page d'identité à lire en second, dans l'ordre où une PME est le plus
+ * susceptible d'y publier son adresse : contact d'abord (c'est elle qui porte
+ * le plus souvent l'adresse), puis les pages obligatoires (mentions légales,
+ * impressum), puis les pages de présentation.
+ */
+const IDENTITY_PAGE_PRIORITY: readonly RegExp[] = [
+  /contact/i,
+  /mentions?[-_ ]?l[ée]gales?|\blegal\b/i,
+  /impressum|imprint/i,
+  /\babout\b|a[- ]propos/i,
+  /om[- ]?oss|foretag|f[oö]retag/i,
+];
+
+function pickIdentityLink(links: ReadonlyArray<{ url: string; text: string; kind: string }>): { url: string; text: string; kind: string } | undefined {
+  const identity = links.filter((l) => l.kind === 'IDENTITY');
+  for (const pattern of IDENTITY_PAGE_PRIORITY) {
+    const hit = identity.find((l) => pattern.test(`${l.url} ${l.text}`));
+    if (hit) return hit;
+  }
+  return identity[0];
+}
+
+async function enrichCandidate(ctx: Ctx, key: string, ref: EntityRef & { kind: EntityKind }, preliminaryScore: number): Promise<void> {
   const { repos } = ctx.deps;
   const url = `https://${ref.domain}/`;
   const html = await readPage(ctx, url, false, 'enrich');
@@ -672,6 +732,26 @@ async function enrichCandidate(ctx: Ctx, key: string, ref: EntityRef & { kind: E
   const verdict = extractCountryEvidence([{ url, html }]);
   if (verdict.country) {
     repos.expansion.addEvidence({ runId: ctx.run.id, entityKey: key, kind: 'COUNTRY', claim: `pays : ${normaliseCountry(verdict.country) ?? verdict.country}`, url: verdict.sourceUrl ?? url, excerpt: verdict.quote, trust: 'OFFICIAL', method: verdict.basis, confidence: 0.9, collectedAt: now });
+    return;
+  }
+  // L'accueil ne prouve pas le pays : beaucoup de PME ne l'écrivent que sur
+  // leur page de contact ou leurs mentions légales. Une seule page de plus,
+  // choisie parmi les liens IDENTITY déjà classés — jamais devinée, jamais
+  // une recherche ou un appel modèle de plus.
+  if (preliminaryScore < 50) return;
+  if (ctx.counters.identityFetches >= MAX_IDENTITY_FETCHES_PER_RUN) return;
+  if (ctx.counters.fetches >= ctx.limits.maxFetches) return;
+  const identityLink = pickIdentityLink(siteLinks(html, url, ref.domain ?? ''));
+  if (!identityLink) return;
+  const identityHtml = await readPage(ctx, identityLink.url, false, 'enrich');
+  if (!identityHtml) return;
+  ctx.counters.identityFetches += 1;
+  const identityVerdict = extractCountryEvidence([{ url: identityLink.url, html: identityHtml }]);
+  if (identityVerdict.country) {
+    repos.expansion.addEvidence({
+      runId: ctx.run.id, entityKey: key, kind: 'COUNTRY', claim: `pays : ${normaliseCountry(identityVerdict.country) ?? identityVerdict.country}`,
+      url: identityVerdict.sourceUrl ?? identityLink.url, excerpt: identityVerdict.quote, trust: 'OFFICIAL', method: identityVerdict.basis, confidence: 0.9, collectedAt: now,
+    });
   }
 }
 

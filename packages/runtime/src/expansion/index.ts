@@ -11,7 +11,7 @@ export { STRATEGIES, DEFAULT_STRATEGY_ORDER, strategiesFor, keywordsFrom, SITE_P
 export { scoreCandidate, STAGE_THRESHOLDS, TRUST_WEIGHT, HIGH_PRIORITY_MIN_RELATIONSHIP_CONFIDENCE, type ScoreInput, type ScoreVerdict } from './score.ts';
 export {
   EXPANSION_TASK_TYPE, runExpansion, resumeOpenExpansions, expansionReport, expansionGraph, promoteCandidates, strongestSeeds,
-  salesIcpFor, resolveLimits, salesAiBudgetRemaining, seedNameOf,
+  salesIcpFor, resolveLimits, salesAiBudgetRemaining, seedNameOf, isRunStale, RUN_STALE_AFTER_MS,
 } from './engine.ts';
 export { prospectExpansionSource } from './autopilot-source.ts';
 export { createExpansionHandlers } from './handlers.ts';

@@ -1,6 +1,6 @@
 import type { AutopilotAction, TaskRow } from '@atlas/data';
 import type { AutopilotProposal, OpportunityContext, OpportunitySource } from '../autopilot.ts';
-import { EXPANSION_TASK_TYPE, strongestSeeds, resolveLimits } from './engine.ts';
+import { EXPANSION_TASK_TYPE, strongestSeeds, resolveLimits, isRunStale } from './engine.ts';
 import type { ExpansionStats } from './types.ts';
 
 /**
@@ -26,7 +26,11 @@ export const prospectExpansionSource: OpportunitySource = {
     const { repos, config, now, observation } = ctx;
     const out: AutopilotProposal[] = [];
     if (!config.sales.discoveryEnabled) return out;
-    if (repos.expansion.openRuns().length > 0) return out;
+    // Un tour RUNNING frais bloque une nouvelle proposition — la reprise du
+    // handler s'en charge. Un tour RUNNING abandonné (crash) ne doit pas
+    // geler l'expansion indéfiniment : passé le battement (updated_at), on
+    // propose quand même, et le handler reprendra l'ancien tour d'abord.
+    if (repos.expansion.openRuns().some((run) => !isRunStale(run, now))) return out;
 
     const seeds = strongestSeeds(repos, { limit: 3, excludeSeededWithinMs: DEFAULT_RESEED_AFTER_MS, now });
     if (seeds.length > 0) {

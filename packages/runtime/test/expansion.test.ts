@@ -12,7 +12,7 @@ import type { SearchProvider, SearchRequest, SearchResult } from '../../intellig
 import {
   runExpansion, resumeOpenExpansions, expansionReport, expansionGraph, promoteCandidates, strongestSeeds, scoreCandidate,
   entityKeyOf, isJunkDomain, trustOf, prospectExpansionSource, createExpansionHandlers, EXPANSION_TASK_TYPE, DEFAULT_EXPANSION_LIMITS,
-  runAutopilotCycle, decideAutonomy, SAFE_AUTONOMOUS_TASK_TYPES, routeTask,
+  runAutopilotCycle, decideAutonomy, SAFE_AUTONOMOUS_TASK_TYPES, routeTask, isRunStale, RUN_STALE_AFTER_MS,
   type ExpansionDeps, type AutopilotObservation, type AutopilotProposal, type OpportunitySource,
 } from '../src/index.ts';
 
@@ -571,5 +571,164 @@ describe('le rapport, le graphe, les chiffres', () => {
     assert.ok(graph.relationships.length >= 4);
     assert.ok(graph.evidence.some((e) => e.kind === 'COUNTRY'));
     assert.equal(DEFAULT_EXPANSION_LIMITS.maxDepth, 2);
+  });
+});
+
+// ─── v4.7.1 : F1 — un tour abandonné ne gèle plus l'expansion ──────────────
+
+describe('F1. le battement d’un tour (updated_at) distingue un tour lent d’un tour abandonné', () => {
+  test('un tour RUNNING frais bloque une nouvelle proposition ; le même tour, abandonné, ne la bloque plus', () => {
+    seedStrongProspects();
+    const cfg: AtlasConfig = { ...config, sales: { ...config.sales, discoveryEnabled: true } };
+    const now = new Date('2026-09-22T12:00:00.000Z');
+    const observation = { spend: { salesRemainingUsd: 0.5 } } as unknown as AutopilotObservation;
+
+    const fresh = repos.expansion.startRun({
+      purpose: 'SALES', trigger: 'daemon:x', seeds: [SEED], strategies: ['PARTNER'], limits: { ...DEFAULT_EXPANSION_LIMITS },
+      startedAt: new Date(now.getTime() - 60_000).toISOString(),
+    });
+    assert.equal(repos.expansion.run(fresh.id)!.status, 'RUNNING');
+    assert.ok(!isRunStale(repos.expansion.run(fresh.id)!, now), 'un battement d’il y a une minute n’est pas abandonné');
+    const withFresh = prospectExpansionSource.propose({ repos, config: cfg, now, observation });
+    assert.deepEqual(withFresh.filter((p) => /Étendre/.test(p.objective)), [], 'un tour RUNNING frais bloque toute nouvelle proposition d’expansion');
+
+    repos.expansion.finishRun(fresh.id, { status: 'DONE', stats: {}, summary: 'test' });
+
+    const stale = repos.expansion.startRun({
+      purpose: 'SALES', trigger: 'daemon:x', seeds: [SEED], strategies: ['PARTNER'], limits: { ...DEFAULT_EXPANSION_LIMITS },
+      startedAt: new Date(now.getTime() - RUN_STALE_AFTER_MS - 60_000).toISOString(),
+    });
+    assert.ok(isRunStale(repos.expansion.run(stale.id)!, now), 'un battement plus vieux que le seuil est abandonné');
+    const withStale = prospectExpansionSource.propose({ repos, config: cfg, now, observation });
+    assert.ok(withStale.some((p) => /Étendre/.test(p.objective)), 'un tour RUNNING abandonné (battement ancien) ne bloque plus la proposition');
+  });
+});
+
+describe('F1. le handler reprend le tour ouvert d’abord, et n’en démarre pas un second', () => {
+  test('même tâche : le tour ouvert est repris, ses compteurs sont conservés, aucune seconde expansion ne démarre', async () => {
+    seedStrongProspects();
+    const SEED2 = { name: 'Seed Two', domain: 'seed-two.example', website: 'https://seed-two.example', country: 'France' };
+    const limits = { ...DEFAULT_EXPANSION_LIMITS, maxDepth: 1, maxSeeds: 2 };
+    const run = repos.expansion.startRun({ purpose: 'SALES', trigger: 'test', seeds: [SEED, SEED2], strategies: ['PARTNER'], limits, startedAt: EPOCH });
+    for (const seed of [SEED, SEED2]) {
+      repos.expansion.upsertCandidate({ runId: run.id, entityKey: entityKeyOf(seed), companyName: seed.name, canonicalDomain: seed.domain, website: seed.website, country: seed.country, depth: 0, seedKey: entityKeyOf(seed), isSeed: true, discoveredAt: EPOCH });
+    }
+    repos.expansion.addRelationship({
+      runId: run.id, sourceKey: entityKeyOf(SEED), sourceName: SEED.name, sourceKind: 'COMPANY', targetKey: 'distri-nord.fr', targetName: 'Distri Nord',
+      relationshipType: 'DISTRIBUTOR', confidence: 0.8, status: 'VERIFIED', evidenceUrl: 'https://acme-machines.fr/distributeurs', evidenceSummary: 'page distributeurs',
+      sourceMethod: 'PARTNER', sourceTrust: 'OFFICIAL', country: 'France', sourceDate: null,
+    });
+    const progress = { queue: [{ seed: SEED2, depth: 0, rootKey: entityKeyOf(SEED2) }], processed: [entityKeyOf(SEED)], rawCandidates: 0, stoppedBy: [], startedAt: EPOCH };
+    repos.expansion.saveProgress(run.id, progress as unknown as Record<string, unknown>, { searchCalls: 3, searchCostUsd: 0.01, aiCalls: 0, aiCostUsd: 0, fetches: 2 });
+    assert.equal(repos.expansion.openRuns().length, 1);
+
+    const handlers = createExpansionHandlers(deps());
+    const task = { taskId: 't1', payload: { seedProspectIds: [] } } as never;
+    const outcome = await handlers[EXPANSION_TASK_TYPE]!(task, { logger, heartbeat: () => true, shuttingDown: () => false, correlationId: null });
+    assert.equal(outcome.kind, 'DONE');
+    const result = outcome.result as { resumedOnly: boolean; runId: string; resumed: string[]; messagesSent: number };
+    assert.equal(result.resumedOnly, true, 'la tâche s’arrête après la reprise, sans lancer de seconde expansion');
+    assert.equal(result.runId, run.id, 'le même tour, repris');
+    assert.deepEqual(result.resumed, [run.id]);
+    assert.equal(result.messagesSent, 0);
+    assert.equal(repos.expansion.runs(10).length, 1, 'aucun second tour créé par cette tâche');
+    assert.equal(repos.expansion.run(run.id)!.status, 'DONE', 'la seconde graine, inconnue du petit monde, vide la file sans rien trouver');
+    assert.ok(repos.expansion.run(run.id)!.searchCalls >= 3, 'les compteurs du tour repris sont conservés (jamais repartis à zéro)');
+    assertNothingSent();
+  });
+});
+
+// ─── v4.7.1 : F2 — la preuve du pays, au-delà de l'accueil ─────────────────
+
+describe('F2. le pays se prouve aussi depuis une page d’identité (contact, mentions légales…)', () => {
+  const F2_WORLD: Record<string, string> = {
+    'https://seedco.example/': page('SeedCo – fabricant de vannes industrielles', `<nav>${a('/distributeurs', 'Nos distributeurs')}</nav><p>SeedCo fabrique des vannes industrielles pour l’industrie. SIRET 123 456 789 00099 — Lyon, France.</p>`),
+    'https://seedco.example/distributeurs': page('Distributeurs – SeedCo', `<ul>${a('https://vannex-distribution.example/', 'Vannex Distribution')}</ul>`),
+    'https://vannex-distribution.example/': page('Vannex Distribution – vannes industrielles', `<nav>${a('/contact', 'Contact')}</nav><p>Vannex Distribution distribue des vannes industrielles à travers l’Europe.</p>`),
+    'https://vannex-distribution.example/contact': page('Contact – Vannex Distribution', '<p>Vannex Distribution, 12 rue de la République, 75002 Paris. SIRET 444 555 666 00011.</p>'),
+  };
+  const f2Fetch = async (url: string): Promise<string | null> => {
+    const key = url.replace('https://www.', 'https://');
+    return F2_WORLD[key] ?? F2_WORLD[`${key}/`] ?? null;
+  };
+  const SEEDCO = { name: 'SeedCo', domain: 'seedco.example', website: 'https://seedco.example', country: 'France' };
+  const icp = { countries: ['France'], keywords: ['vannes'], exclusions: [] };
+
+  test('l’accueil ne prouve pas le pays ; sa page de contact (liens IDENTITY) le prouve, avec sa propre URL', async () => {
+    const { run } = await runExpansion(deps({ fetchHtml: f2Fetch }), { seeds: [SEEDCO], limits: { maxDepth: 1 }, icp });
+    const homepageEvidence = repos.expansion.evidenceOf('vannex-distribution.example').filter((e) => e.kind === 'COUNTRY' && e.url === 'https://vannex-distribution.example/');
+    assert.deepEqual(homepageEvidence, [], 'l’accueil, seul, ne publie aucune preuve de pays');
+    const countryEvidence = repos.expansion.evidenceOf('vannex-distribution.example').filter((e) => e.kind === 'COUNTRY');
+    assert.equal(countryEvidence.length, 1, 'une preuve de pays, gagnée sur la page de contact');
+    assert.equal(countryEvidence[0]!.url, 'https://vannex-distribution.example/contact', 'la preuve porte l’URL réelle de la page d’identité');
+    assert.match(countryEvidence[0]!.claim, /France/);
+    const candidate = repos.expansion.candidate(run.id, 'vannex-distribution.example')!;
+    assert.equal(candidate.country, 'France', 'la qualification peut désormais s’appuyer sur ce pays prouvé');
+  });
+
+  test('un pays hors profil, prouvé sur la page de contact, écarte correctement le candidat', async () => {
+    const world: Record<string, string> = {
+      ...F2_WORLD,
+      'https://vannex-distribution.example/contact': page('Contact – Vannex Distribution', '<p>Vannex Distribution, Alexanderplatz 1, 10178 Berlin. VAT DE123456789.</p>'),
+    };
+    const fetchDe = async (url: string) => world[url] ?? world[`${url}/`] ?? null;
+    const { run } = await runExpansion(deps({ fetchHtml: fetchDe }), { seeds: [SEEDCO], limits: { maxDepth: 1 }, icp: { countries: ['France'], keywords: ['vannes'], exclusions: [] } });
+    const candidate = repos.expansion.candidate(run.id, 'vannex-distribution.example');
+    assert.ok(!candidate || candidate.stage !== 'QUALIFIED', 'un pays prouvé hors profil n’est jamais qualifié');
+  });
+
+  test('aucune lecture supplémentaire quand le pays est déjà prouvé sur l’accueil', async () => {
+    const fetchLog: string[] = [];
+    const logged = async (url: string): Promise<string | null> => { fetchLog.push(url); return f2Fetch(url); };
+    await runExpansion(deps({ fetchHtml: logged }), { seeds: [SEED], limits: { maxDepth: 1 } });
+    // Acme Machines et ses candidats sont déjà prouvés depuis leur accueil (SIRET) : jamais de page « contact » ou « mentions-legales » de plus.
+    assert.ok(!fetchLog.some((u) => /\/contact\b|mentions-legales|impressum/i.test(u)), `aucune page d’identité supplémentaire attendue : ${fetchLog.filter((u) => /contact|mentions|impressum/i.test(u)).join(', ')}`);
+  });
+
+  test('score préliminaire trop faible (candidat écarté par le profil) : aucune page d’identité de plus', async () => {
+    const fetchLog: string[] = [];
+    const logged = async (url: string): Promise<string | null> => { fetchLog.push(url); return f2Fetch(url); };
+    // « vannex » exclu du profil : le candidat est rejeté avant même d’être enrichi (score 0) — jamais assez fort pour justifier une lecture de plus.
+    await runExpansion(deps({ fetchHtml: logged }), { seeds: [SEEDCO], limits: { maxDepth: 1 }, icp: { countries: ['France'], keywords: ['vannes'], exclusions: ['vannex'] } });
+    assert.ok(!fetchLog.includes('https://vannex-distribution.example/contact'), 'un candidat écarté par le profil ne justifie pas une lecture de plus');
+    assert.ok(!fetchLog.includes('https://vannex-distribution.example/'), 'un candidat écarté par le profil n’est même pas enrichi');
+  });
+
+  test('aucune requête de recherche supplémentaire pour prouver un pays', async () => {
+    const queries: string[] = [];
+    await runExpansion(deps({ fetchHtml: f2Fetch, search: fixtureSearch(queries) }), { seeds: [SEEDCO], limits: { maxDepth: 1 }, icp });
+    assert.ok(queries.every((q) => !/vannex/i.test(q)), 'la preuve de pays ne passe jamais par une recherche, seulement par les liens déjà classés');
+  });
+});
+
+// ─── v4.7.1 : F3 — la diversité des stratégies ─────────────────────────────
+
+describe('F3. un quota déterministe empêche une stratégie de remplir le tour', () => {
+  test('une fédération de vingt membres ne monopolise plus les enfants d’une graine ; les autres stratégies contribuent toujours', async () => {
+    const bigMembers = Array.from({ length: 20 }, (_, i) => a(`https://member-${i}.example/`, `Member ${i}`)).join(' ');
+    const F3_WORLD: Record<string, string> = { ...WORLD, 'https://federation-emballage.fr/annuaire-des-membres': page('Annuaire des membres – Fédération de l’emballage', `<ul>${bigMembers}</ul>`) };
+    const fetchF3 = async (url: string): Promise<string | null> => {
+      const key = url.replace('https://www.', 'https://');
+      return F3_WORLD[key] ?? F3_WORLD[`${key}/`] ?? null;
+    };
+    const { run, report } = await runExpansion(deps({ fetchHtml: fetchF3 }), { seeds: [SEED], limits: { maxDepth: 1 } });
+
+    const byStrategy: Record<string, number> = {};
+    for (const r of repos.expansion.relationshipsForRun(run.id)) byStrategy[r.sourceMethod] = (byStrategy[r.sourceMethod] ?? 0) + 1;
+    // 5 stratégies actives par défaut : quota = max(3, ceil(15*3/5)) = 9.
+    assert.ok((byStrategy.ASSOCIATION ?? 0) <= 9, `ASSOCIATION n’excède pas son quota : ${byStrategy.ASSOCIATION}`);
+    assert.ok((byStrategy.ASSOCIATION ?? 0) >= 3, 'la fédération contribue quand même — le quota n’écarte pas la stratégie, il la borne');
+    assert.ok(Object.keys(byStrategy).length >= 3, `plusieurs stratégies contribuent : ${Object.keys(byStrategy).join(', ')}`);
+    assert.ok((byStrategy.PARTNER ?? 0) > 0, 'la page distributeurs continue de compter, malgré la grande fédération');
+
+    // Les plafonds globaux du tour restent ceux d’avant : rien n’a augmenté.
+    assert.ok(report.stats.searchCalls <= DEFAULT_EXPANSION_LIMITS.maxSearchCalls);
+    assert.ok(report.stats.fetches <= DEFAULT_EXPANSION_LIMITS.maxFetches);
+
+    // Déterministe : rejouer sur le même monde donne le même compte.
+    const again = await runExpansion(deps({ fetchHtml: fetchF3 }), { seeds: [SEED], limits: { maxDepth: 1 } });
+    const byStrategyAgain: Record<string, number> = {};
+    for (const r of repos.expansion.relationshipsForRun(again.run.id)) byStrategyAgain[r.sourceMethod] = (byStrategyAgain[r.sourceMethod] ?? 0) + 1;
+    assert.equal(byStrategyAgain.ASSOCIATION, byStrategy.ASSOCIATION, 'même monde, même quota atteint : résultat déterministe');
   });
 });

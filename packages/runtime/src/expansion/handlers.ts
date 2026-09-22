@@ -34,6 +34,18 @@ export function createExpansionHandlers(deps: ExpansionDeps): Record<string, (ta
     }
 
     const resumed = await resumeOpenExpansions(deps, { heartbeat, trigger: `daemon:${task.taskId}` });
+    // Un tour repris ici est une expansion menée à son terme (ou de nouveau
+    // CAPPED) : la même tâche ne doit pas en démarrer une seconde derrière —
+    // la prochaine proposition de l'Autopilot s'en chargera si besoin.
+    if (resumed.length > 0) {
+      const last = resumed[resumed.length - 1]!;
+      return {
+        kind: last.status === 'FAILED' ? 'FAILED' : 'DONE',
+        errorCode: last.status === 'FAILED' ? 'EXPANSION_FAILED' : undefined,
+        errorMessage: last.error ?? undefined,
+        result: { ran: true, resumedOnly: true, runId: last.id, status: last.status, resumed: resumed.map((r) => r.id), messagesSent: 0 },
+      };
+    }
 
     let seeds: ExpansionSeed[] = payload.seeds ?? [];
     if (seeds.length === 0 && payload.seedProspectIds?.length) {

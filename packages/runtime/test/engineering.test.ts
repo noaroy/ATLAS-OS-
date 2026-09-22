@@ -653,3 +653,23 @@ describe('la liste noire et les noms maquillés', () => {
     }
   });
 });
+
+/**
+ * L'application au dépôt principal (`atlas-apply`) est la seule voie
+ * automatisée qui touche le dépôt hors worktree — et elle indexe un patch
+ * relu, elle ne committe jamais. Un pipeline autonome qui committerait de
+ * lui-même sur la branche principale contournerait la revue humaine que
+ * `atlas-apply` existe pour imposer. Cette assertion porte sur ce qui
+ * s'exécute, pas sur la prose : commentaires et chaînes retirés avant de
+ * chercher le motif interdit.
+ */
+describe('le pipeline automatisé n’écrit jamais un commit sur le dépôt principal', () => {
+  const strip = (raw: string) => raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const workspace = strip(readFileSync(new URL('../src/workspace.ts', import.meta.url), 'utf8'));
+
+  test('applyToRepo indexe (`git apply --index`), ne committe et ne pousse jamais', () => {
+    assert.match(workspace, /git\(\['apply', '--index'/, 'le patch relu est indexé, pas committé');
+    assert.equal(/git\(\[\s*'commit'/.test(workspace), false, 'aucun commit automatique sur le dépôt principal');
+    assert.equal(/git\(\[\s*'push'/.test(workspace), false, 'aucun push automatique');
+  });
+});

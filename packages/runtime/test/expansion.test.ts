@@ -342,27 +342,44 @@ describe('12 + 14. les relations persistent, sans doublon', () => {
 
 describe('13. reprise après redémarrage', () => {
   test('un tour laissé RUNNING est repris là où il en était, sur la même base, sans refaire ni dupliquer', async () => {
-    // Un tour qui meurt avant d'avoir fini : on simule en plafonnant la durée à zéro (rien n'est traité, la file reste entière)… puis en rouvrant.
-    const first = await runExpansion(deps(), { seeds: [SEED], limits: { maxDepth: 2, maxWallMs: 0, maxSearchCalls: 100, maxFetches: 100 } });
-    assert.equal(first.run.status, 'CAPPED', 'arrêté par la durée : la file n’est pas vide');
-    assert.ok(((first.run.progress as { queue: unknown[] }).queue).length >= 1, 'la file survit à l’arrêt');
-    // Le processus meurt : on remet le tour en RUNNING tel qu'un arrêt brutal l'aurait laissé.
-    repos.db.prepare("UPDATE prospect_expansion_runs SET status = 'RUNNING', finished_at = NULL WHERE id = ?").run(first.run.id);
-    const relsBefore = repos.expansion.relationshipsForRun(first.run.id).length;
+    // Un tour à deux graines, mort après la première : plutôt que de courir
+    // après une horloge (un plafond de durée à zéro dépend de la lenteur du
+    // tour précédent son propre départ, et court donc au hasard), on écrit
+    // directement l'état qu'un arrêt brutal aurait laissé — RUNNING, la
+    // première graine déjà consignée traitée avec sa relation, la seconde
+    // encore dans la file. `resumeOpenExpansions` reprend toujours les
+    // plafonds *du tour*, jamais ceux qu'on lui passerait : le budget d'ici
+    // (généreux) est bien celui qui gouvernera la reprise.
+    const SEED2 = { name: 'Seed Two', domain: 'seed-two.example', website: 'https://seed-two.example', country: 'France' };
+    const limits = { ...DEFAULT_EXPANSION_LIMITS, maxDepth: 1, maxSeeds: 2 };
+    const run = repos.expansion.startRun({ purpose: 'SALES', trigger: 'test', seeds: [SEED, SEED2], strategies: ['PARTNER'], limits, startedAt: EPOCH });
+    assert.equal(repos.expansion.run(run.id)!.status, 'RUNNING', 'un tour neuf est RUNNING tant qu’il n’a pas fini');
+    for (const seed of [SEED, SEED2]) {
+      repos.expansion.upsertCandidate({ runId: run.id, entityKey: entityKeyOf(seed), companyName: seed.name, canonicalDomain: seed.domain, website: seed.website, country: seed.country, depth: 0, seedKey: entityKeyOf(seed), isSeed: true, discoveredAt: EPOCH });
+    }
+    repos.expansion.addRelationship({
+      runId: run.id, sourceKey: entityKeyOf(SEED), sourceName: SEED.name, sourceKind: 'COMPANY', targetKey: 'distri-nord.fr', targetName: 'Distri Nord',
+      relationshipType: 'DISTRIBUTOR', confidence: 0.8, status: 'VERIFIED', evidenceUrl: 'https://acme-machines.fr/distributeurs', evidenceSummary: 'page distributeurs',
+      sourceMethod: 'PARTNER', sourceTrust: 'OFFICIAL', country: 'France', sourceDate: null,
+    });
+    const progress = { queue: [{ seed: SEED2, depth: 0, rootKey: entityKeyOf(SEED2) }], processed: [entityKeyOf(SEED)], rawCandidates: 0, stoppedBy: [], startedAt: EPOCH };
+    repos.expansion.saveProgress(run.id, progress as unknown as Record<string, unknown>);
+    const relsBefore = repos.expansion.relationshipsForRun(run.id).length;
+    // Le processus meurt ici : rien ne finalise le tour. On rouvre la base telle quelle.
     const file = join(dir, 'atlas.db');
     repos.close();
     repos = createRepositories(file, logger);
     assert.equal(repos.expansion.openRuns().length, 1);
-    // La reprise relève la durée : c'est le seul plafond que l'arrêt a consommé.
-    const resumed = await resumeOpenExpansions(deps(), { limits: { maxWallMs: 60_000 } });
+    const resumed = await resumeOpenExpansions(deps());
     assert.equal(resumed.length, 1);
-    assert.equal(resumed[0]!.id, first.run.id, 'le même tour, pas un nouveau');
-    assert.ok(['DONE', 'CAPPED'].includes(resumed[0]!.status));
+    assert.equal(resumed[0]!.id, run.id, 'le même tour, pas un nouveau');
+    assert.equal(resumed[0]!.status, 'DONE', 'la seconde graine, inconnue du petit monde, vide la file sans rien trouver');
     assert.equal(repos.expansion.runs(10).length, 1, 'aucun tour supplémentaire');
     const processed = (resumed[0]!.progress as { processed: string[] }).processed;
-    assert.ok(processed.length >= 1 && new Set(processed).size === processed.length, `chaque graine traitée une fois : ${processed.join(', ')}`);
-    assert.ok(repos.expansion.relationshipsForRun(first.run.id).length >= relsBefore);
-    const keys = repos.expansion.candidates(first.run.id, { limit: 500 }).map((c) => c.entityKey);
+    assert.deepEqual(new Set(processed), new Set([entityKeyOf(SEED), entityKeyOf(SEED2)]), `chaque graine traitée une fois : ${processed.join(', ')}`);
+    assert.equal(processed.length, 2, 'la première graine n’est pas rejouée');
+    assert.ok(repos.expansion.relationshipsForRun(run.id).length >= relsBefore, 'la relation de la première graine survit à la reprise');
+    const keys = repos.expansion.candidates(run.id, { limit: 500 }).map((c) => c.entityKey);
     assert.equal(new Set(keys).size, keys.length, 'aucun candidat dupliqué par la reprise');
     assertNothingSent();
   });

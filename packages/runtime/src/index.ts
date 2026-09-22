@@ -268,6 +268,7 @@ export {
   type MasterCycleRecord, type MasterDecision, type MasterFinalStatus,
 } from './master-loop.ts';
 
+export * from './expansion/index.ts';
 export {
   providerReadinessOf, verifyProvider, assessModelProviders, PROVIDER_VERIFY_TTL_MS,
   type ProviderReadinessState, type ProviderReadinessVerdict,

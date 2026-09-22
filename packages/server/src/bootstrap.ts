@@ -39,6 +39,7 @@ import {
   createSalesEngineHandlers,
   scheduleSalesCycle,
   createAutopilotHandlers,
+  createExpansionHandlers,
   scheduleAutopilotCycle,
   DEMO_HANDLERS,
   type RecoveryReport,
@@ -335,8 +336,12 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   // s'active que par ATLAS_AUTOPILOT_ENABLED, dans le même daemon embarqué.
   const autopilotHandlers = createAutopilotHandlers({ repos, config, logger, cwd: process.cwd() });
   const autopilotEnabled = config.autopilot.enabled && options.daemon === true;
+  // L'expansion de prospects : une bibliothèque servie ici, par le worker
+  // déterministe du serveur — le moteur de recherche et le modèle plafonné
+  // sont ceux du serveur, aucun script, aucune voie externe.
+  const expansionHandlers = createExpansionHandlers({ repos, config, logger, search: engine, provider });
   const workers = createWorkerRegistry({
-    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers }, workspaceRoot: process.cwd(),
+    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers, ...expansionHandlers }, workspaceRoot: process.cwd(),
   });
   // Hermes avance les chaînes (une revue qui demande une correction en crée
   // la tâche) ; en ingénierie externe, CLAUDE / CLAUDE_CODE restent en file

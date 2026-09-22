@@ -19,6 +19,7 @@ import { OrderRepository } from './repositories/orders.ts';
 import { SalesRepository } from './repositories/sales.ts';
 import { ConversationRepository } from './repositories/conversations.ts';
 import { AutopilotRepository } from './repositories/autopilot.ts';
+import { ExpansionRepository } from './repositories/expansion.ts';
 
 export {
   SalesLoopRepository,
@@ -110,6 +111,7 @@ export interface Repositories {
   decisions: DecisionRepository;
   salesEngine: SalesEngineRepository;
   autopilot: AutopilotRepository;
+  expansion: ExpansionRepository;
   close(): void;
 }
 
@@ -158,6 +160,7 @@ export function createRepositories(databaseFile: string, logger: Logger, options
     decisions: new DecisionRepository(db),
     salesEngine: new SalesEngineRepository(db),
     autopilot: new AutopilotRepository(db),
+    expansion: new ExpansionRepository(db),
     close() {
       // A WAL checkpoint on shutdown keeps the main file self-contained, so a
       // backup taken right after a stop is complete on its own.
@@ -202,3 +205,8 @@ export {
   AutopilotRepository, OPEN_ACTION_STATUSES,
   type AutopilotCycle, type AutopilotAction, type AutopilotActionStatus, type AutopilotCycleStatus,
 } from './repositories/autopilot.ts';
+export {
+  ExpansionRepository, EXPANSION_STAGES,
+  type ExpansionRun, type ExpansionRunStatus, type ExpansionPurpose, type ExpansionCandidate, type ExpansionStage,
+  type ProspectRelationship, type ProspectEvidence, type SourceTrust, type RelationshipStatus, type EvidenceKind, type EntityKind,
+} from './repositories/expansion.ts';

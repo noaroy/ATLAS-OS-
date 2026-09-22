@@ -91,7 +91,8 @@ export function AtlasView() {
   }
   if (!overview) return <Spinner />;
 
-  const { today, pipeline, needsYou, agents, system, autonomy, autopilot } = overview;
+  const { today, pipeline, needsYou, agents, system, autonomy, autopilot, expansion } = overview;
+  const runLabel: Record<string, string> = { DONE: 'terminé', CAPPED: 'plafonné', RUNNING: 'en cours', FAILED: 'échec', INTERRUPTED: 'interrompu' };
   const autopilotLabel: Record<typeof autopilot.status, string> = {
     ACTIVE: 'au travail', PAUSED: 'en pause', IDLE: 'en veille', NEVER_RAN: 'jamais lancé',
   };
@@ -187,6 +188,49 @@ export function AtlasView() {
             ))}
           </ul>
         )}
+      </Panel>
+
+      {/* L'expansion de prospects : l'univers commercial, ce qui est nouveau, ce qui est qualifié, et d'où cela vient. */}
+      <Panel title="Expansion de prospects">
+        {expansion.universe === 0 ? (
+          <Empty title="Aucune expansion encore." hint={expansion.nextOpportunity ?? 'Des prospects forts sont nécessaires pour partir : qualifiez d’abord.'} />
+        ) : (
+          <>
+            <div className="stat-grid">
+              <StatCard label="Univers" value={formatNumber(expansion.universe)} hint={`${formatNumber(expansion.newCompanies)} nouvelles entreprises`} />
+              <StatCard label="Relations" value={formatNumber(expansion.relationships)} hint={`${formatNumber(expansion.evidence)} preuves`} />
+              <StatCard label="Qualifiées" value={formatNumber(expansion.qualified)} />
+              <StatCard label="Prioritaires" value={formatNumber(expansion.highPriority)} />
+              <StatCard label="Coût" value={`${expansion.costUsd.toFixed(2)} $`} hint="recherche et modèle" />
+            </div>
+            {expansion.topSources.length > 0 && (
+              <p className="muted small">
+                Sources : {expansion.topSources.map((s) => `${s.label} (${s.relationships})`).join(' · ')}
+              </p>
+            )}
+            {expansion.topSeeds.length > 0 && (
+              <p className="muted small">
+                Graines les plus fécondes : {expansion.topSeeds.map((s) => `${s.seed} — ${s.qualified} qualifiée(s) sur ${s.companies}`).join(' · ')}
+              </p>
+            )}
+            <ul className="system-list">
+              {expansion.recentRuns.map((r) => (
+                <li key={r.id}>
+                  <span className={`system-dot ${r.status === 'DONE' ? 'system-dot--ok' : r.status === 'RUNNING' ? 'system-dot--attention' : r.status === 'FAILED' ? 'system-dot--absent' : ''}`} />
+                  <strong>{r.seeds.join(', ')}</strong>
+                  <span className="muted">
+                    {when(r.startedAt)} · {runLabel[r.status] ?? r.status}
+                    {r.universe !== null ? ` · ${r.universe} entreprises, ${r.qualified ?? 0} qualifiées, ${r.highPriority ?? 0} prioritaires` : ''} · {r.costUsd.toFixed(2)} $
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {expansion.nextOpportunity && expansion.universe > 0 && (
+          <p className="muted small">Prochaine expansion possible : {expansion.nextOpportunity}</p>
+        )}
+        <p className="muted small">L’expansion lit, relie et note ; elle n’écrit à personne.</p>
       </Panel>
 
       <Panel title="Pipeline">

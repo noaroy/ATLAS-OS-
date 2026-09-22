@@ -62,6 +62,7 @@ npm run client:auto -- --brief=briefs/<client>.json --go   # missions client (V2
 npm run atlas:start / atlas:stop     # sur un poste ; sur le VPS : docker compose … start|stop atlas
 npm run backup / restore-check / db:check / db:migrate
 npm run autopilot:status             # l'Autopilot, et le bloc SOFTWARE LOOP (relecteur, Claude, runner, dépôt, auto-deploy DISABLED)
+npm run expansion -- run | status | graph <domaine> | candidates | report | promote --run=<id>   # l'expansion de prospects : une bonne entreprise en révèle d'autres, avec preuves — aucun envoi
 npm run atlas:engineer -- --cycles=1 # le runner d'ingénierie isolé, à la main (sur le VPS : service atlas-engineer)
 npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS · REAL_WORLD_EVIDENCE ·
                                      # LIVE_DEPLOYMENT_STATUS (observé seulement depuis atlas-cli) · EXTERNAL_INTEGRATIONS
@@ -578,6 +579,92 @@ abonnement, ou à la clé si `ATLAS_CLAUDE_CODE_USE_API_KEY=true`).
 des propositions dans le cycle sous son nom ; c'est par là que le moteur
 d'expansion de prospects, le moteur de déclencheurs et l'apprentissage du
 revenu entreront, sans toucher au cycle.
+
+## L'expansion de prospects : une bonne entreprise en révèle d'autres
+
+ATLAS ne cherche pas seulement des entreprises qui répondent à un mot-clé :
+il construit un **univers commercial** autour de ses prospects forts.
+
+```
+graine → hypothèses d'expansion → découverte → preuve → normalisation
+  → dédoublonnage → relation → qualification ICP → score → Autopilot
+```
+
+**Cinq stratégies v0.** *Partenaires / distributeurs* : le site de la graine
+nomme lui-même ses distributeurs, revendeurs, intégrateurs, partenaires,
+marques, références (preuve OFFICIAL, relation VERIFIED) ; puis ce que ses
+distributeurs disent d'elle sur leur propre site. *Fédérations* : la page des
+membres d'une organisation professionnelle du métier (preuve
+ASSOCIATION_EVENT). *Salons* : la liste des exposants d'un salon du métier
+(idem). *Concurrents* : les pages qui nomment la graine comme concurrent ou
+alternative. *Semblables* : même activité, même marché — la relation la moins
+sûre, INFERRED, que le modèle peut confirmer sur l'extrait. Une stratégie est
+un `plan()` qui rend des hypothèses ; en ajouter une n'ouvre pas le moteur.
+
+**Jamais une relation sans preuve.** Chaque relation porte une URL, un
+extrait, une méthode, une confiance, un statut (VERIFIED : lu sur une page
+qui fait foi ; INFERRED : déduit, à vérifier) et une confiance de source
+(OFFICIAL › ASSOCIATION_EVENT › SECONDARY). Annuaires, réseaux sociaux,
+articles, listes « top 10 », plateformes d'événements, crédits de pied de
+page (« réalisation : agence X »), institutions (CCI, Bpifrance, écoles) ne
+deviennent jamais des candidats. Un annuaire peut être une piste, jamais une
+preuve forte.
+
+**Une entité par entreprise.** La clé est le domaine canonique ; trouvée par
+quatre chemins, une entreprise est une ligne avec quatre preuves. Deux
+homonymes sur deux domaines restent deux entités : on ne fusionne jamais sur
+le nom. Relations et preuves sont du savoir *cumulatif* — un second tour sur
+la même graine les confirme, ne les duplique pas (unicité en base).
+
+**Le graphe est borné.** Profondeur 0 = les graines, 1 = leurs expansions
+directes, 2 = les expansions des meilleurs enfants (relation sûre, candidat
+qualifié) — jamais au-delà, même demandé. Plafonds durs par tour, écrits dans
+le tour : graines, enfants par graine, candidats, requêtes (une part par
+graine), lectures de pages (une réserve pour prouver le pays des
+candidats), coût IA (plus le budget IA commercial du jour,
+`ATLAS_SALES_DAILY_AI_BUDGET_USD`, partagé avec les workers), durée. Le
+premier plafond atteint arrête ce qu'il plafonne et le dit (`stoppedBy`).
+Un moteur de recherche qui bascule (`SEARCH_UNAVAILABLE`) arrête les
+requêtes du tour ; ses graines restent à explorer.
+
+**Le score et l'entonnoir.** UNIVERSE → RELEVANT (≥ 35, une relation prouvée)
+→ QUALIFIED (≥ 55 **et** pays dans le profil) → HIGH_PRIORITY (≥ 70 **et**
+pays prouvé par une page officielle **et** preuve forte **et** relation
+≥ 0,60). Huit facteurs lisibles dans le détail : profil, relation, preuve,
+géographie, pertinence, confiance de source, distance, confiance. Aucune
+probabilité de revenu n'est inventée. Un distributeur ukrainien d'un
+fabricant français est une vraie relation et un candidat hors profil : il
+reste RELEVANT.
+
+**Ce que le moteur ne fait jamais.** Envoyer, activer l'envoi, approuver un
+brouillon, s'engager. Son seul produit vers la vente : `promote` verse les
+candidats qualifiés dans la file commerciale comme prospects **DISCOVERED**,
+avec leurs preuves ; la qualification payante, le contact, le brouillon et
+l'approbation restent au lot commercial et à ses gardes. Une mission client
+(`purpose: CLIENT`, profil propre : pays, mots de métier) ne verse rien.
+
+```bash
+npm run expansion -- run                                   # les 3 prospects les plus forts (PRIORITY puis GOOD_FIT), profondeur 1, 30 candidats, 12 requêtes, 0,05 $ IA
+npm run expansion -- run --seed=nordpack.se --depth=2 --max=60 --searches=24 --ai=0.10 --strategies=PARTNER,ASSOCIATION
+npm run expansion -- run --prospect=prs_… --ai=0           # sans modèle : chemin déterministe seulement
+npm run expansion -- status                                # totaux, derniers tours, graines fécondes, prochaine expansion
+npm run expansion -- report [--run=<id>]                   # Seeds · Discovered · Unique companies · Relevant · Qualified · High priority · Evidence · spend · No messages sent
+npm run expansion -- candidates --stage=HIGH_PRIORITY      # avec le motif de chaque étage
+npm run expansion -- graph distri-nord.fr                  # le voisinage : relations (← / →), preuves, URL
+npm run expansion -- promote --run=<id> [--stage=HIGH_PRIORITY]   # verser dans la file commerciale (DISCOVERED)
+bash deployment/atlas-cli.sh expansion-run | expansion-status | expansion-report   # sur le VPS, base canonique
+```
+
+**Autopilot.** La source `prospect-expansion` propose « Étendre l'univers
+commercial autour de … » dès que des prospects forts n'ont pas été explorés
+depuis quatorze jours (tâche `PROSPECT_EXPANSION`, déterministe, servie par
+le daemon du serveur — une bibliothèque, pas un script : rien ne passe par
+la voie externe), puis « Verser N candidats dans la file commerciale » quand
+un tour terminé en a laissé de qualifiés. Les deux se confient seules ;
+l'envoi, lui, attend toujours une personne. Le tableau de bord montre
+l'univers, les nouvelles entreprises, les relations, les qualifiées, les
+prioritaires, les sources, les graines fécondes, les derniers tours, le coût
+et la prochaine expansion possible.
 
 ## Premier lancement sûr (§68)
 

@@ -192,6 +192,19 @@ export interface AtlasOverview {
     estimatedSpendUsd: number;
     actualSpendUsd: number | null;
   };
+  expansion: {
+    universe: number;
+    newCompanies: number;
+    relationships: number;
+    qualified: number;
+    highPriority: number;
+    evidence: number;
+    costUsd: number;
+    topSources: Array<{ label: string; relationships: number }>;
+    topSeeds: Array<{ seed: string; companies: number; qualified: number }>;
+    recentRuns: Array<{ id: string; startedAt: string; status: string; seeds: string[]; universe: number | null; qualified: number | null; highPriority: number | null; costUsd: number }>;
+    nextOpportunity: string | null;
+  };
   advanced: {
     taskStates: Record<string, number>;
     workspaces: Record<string, number>;

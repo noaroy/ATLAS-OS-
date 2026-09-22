@@ -14,6 +14,7 @@
 #   ./deployment/atlas-cli.sh send-approved --file=out/lot.json [--send]  # envoi manuel approuvé ; en INTERNAL_TEST, vers GMAIL_USER seulement, confirmé [o/N]
 #   ./deployment/atlas-cli.sh autopilot-once | autopilot-status | autopilot-queue | autopilot-report   # la boucle de contrôle : un cycle, l'état, la file, les cycles
 #   ./deployment/atlas-cli.sh autopilot pause "motif" | resume | decide <id> done|reject
+#   ./deployment/atlas-cli.sh expansion-run [--seed=<domaine>] | expansion-status | expansion-report | expansion graph <domaine> | expansion candidates   # l'expansion de prospects, aucun envoi
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -69,6 +70,10 @@ npm_script_of() {
     autopilot-status) printf 'autopilot:status' ;;
     autopilot-queue)  printf 'autopilot:queue' ;;
     autopilot-report) printf 'autopilot:report' ;;
+    expansion)        printf 'expansion' ;;
+    expansion-run)    printf 'expansion:run' ;;
+    expansion-status) printf 'expansion:status' ;;
+    expansion-report) printf 'expansion:report' ;;
     *) return 1 ;;
   esac
 }

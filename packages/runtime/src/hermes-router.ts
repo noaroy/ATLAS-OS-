@@ -63,6 +63,10 @@ const ROUTES: Readonly<Record<string, RouteTarget>> = {
   // runner externe (`atlas-engineer`), lui, a le dépôt complet et `tsx` : c'est
   // la même distinction que CLAUDE_CODE, pour la même raison.
   SALES_DISCOVERY: 'DETERMINISTIC_EXTERNAL',
+  // L'expansion de prospects est une bibliothèque : recherche, lecture de
+  // pages, modèle plafonné et dépôts vivent dans l'image serveur. Le worker
+  // déterministe du serveur la sert ; aucun script, aucune voie externe.
+  PROSPECT_EXPANSION: 'DETERMINISTIC',
 };
 
 /**

@@ -2445,4 +2445,133 @@ CREATE INDEX IF NOT EXISTS idx_autopilot_actions_status ON autopilot_actions(sta
 CREATE INDEX IF NOT EXISTS idx_autopilot_actions_task ON autopilot_actions(task_id);
 `,
   },
+  {
+    version: 38,
+    name: 'prospect-expansion-engine',
+    sql: `
+-- --- Le moteur d'expansion de prospects ------------------------------------
+--
+-- Une bonne entreprise en revele d'autres : ses distributeurs, ses
+-- concurrents, les exposants du salon ou elle expose, les membres de sa
+-- federation, ses semblables. Le moteur part d'une graine, pose des
+-- hypotheses d'expansion, cherche, lit, normalise, dedoublonne, relie, qualifie
+-- et note — et ne retient JAMAIS une relation sans preuve : une URL, un
+-- extrait, une methode, une confiance. Quatre tables :
+--
+--   prospect_expansion_runs   un tour : graines, strategies, plafonds,
+--                             progression (pour reprendre), chiffres
+--   expansion_candidates      une entreprise par (tour, cle canonique) : le
+--                             meme domaine trouve par quatre chemins est UNE
+--                             ligne, avec plusieurs relations et preuves
+--   prospect_relationships    source → cible, type, confiance, preuve —
+--                             unique par (source, cible, type, url de preuve)
+--   prospect_evidence         ce qui a ete vu, ou, et ce qu'on en tire
+--
+-- Rien ici n'envoie ni n'approuve : un candidat prioritaire entre dans la
+-- file commerciale existante comme DISCOVERED, et suit ses gardes.
+CREATE TABLE IF NOT EXISTS prospect_expansion_runs (
+  id                 TEXT PRIMARY KEY,
+  -- RUNNING · DONE · FAILED · INTERRUPTED · CAPPED
+  status             TEXT NOT NULL,
+  -- SALES (notre acquisition) · CLIENT (une mission facturee)
+  purpose            TEXT NOT NULL,
+  mission_id         TEXT,
+  trigger            TEXT NOT NULL,
+  seeds_json         TEXT NOT NULL,
+  strategies_json    TEXT NOT NULL,
+  limits_json        TEXT NOT NULL,
+  icp_json           TEXT,
+  progress_json      TEXT NOT NULL DEFAULT '{}',
+  stats_json         TEXT NOT NULL DEFAULT '{}',
+  search_calls       INTEGER NOT NULL DEFAULT 0,
+  search_cost_usd    REAL NOT NULL DEFAULT 0,
+  ai_calls           INTEGER NOT NULL DEFAULT 0,
+  ai_cost_usd        REAL NOT NULL DEFAULT 0,
+  fetches            INTEGER NOT NULL DEFAULT 0,
+  started_at         TEXT NOT NULL,
+  finished_at        TEXT,
+  updated_at         TEXT NOT NULL,
+  summary            TEXT,
+  error              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_expansion_runs_started ON prospect_expansion_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_expansion_runs_status ON prospect_expansion_runs(status);
+
+CREATE TABLE IF NOT EXISTS expansion_candidates (
+  id                 TEXT PRIMARY KEY,
+  run_id             TEXT NOT NULL REFERENCES prospect_expansion_runs(id),
+  -- la cle canonique : le domaine canonique, ou name:<nom normalise> sans domaine
+  entity_key         TEXT NOT NULL,
+  -- COMPANY · EVENT · ASSOCIATION
+  entity_kind        TEXT NOT NULL DEFAULT 'COMPANY',
+  company_name       TEXT NOT NULL,
+  canonical_domain   TEXT,
+  website            TEXT,
+  country            TEXT,
+  aliases_json       TEXT NOT NULL DEFAULT '[]',
+  depth              INTEGER NOT NULL DEFAULT 0,
+  seed_key           TEXT,
+  is_seed            INTEGER NOT NULL DEFAULT 0,
+  -- UNIVERSE · RELEVANT · QUALIFIED · HIGH_PRIORITY · REJECTED
+  stage              TEXT NOT NULL DEFAULT 'UNIVERSE',
+  icp_status         TEXT,
+  score              REAL,
+  score_detail_json  TEXT,
+  reject_reason      TEXT,
+  prospect_id        TEXT,
+  discovered_at      TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE(run_id, entity_key)
+);
+CREATE INDEX IF NOT EXISTS idx_expansion_candidates_run ON expansion_candidates(run_id, stage);
+CREATE INDEX IF NOT EXISTS idx_expansion_candidates_entity ON expansion_candidates(entity_key);
+
+CREATE TABLE IF NOT EXISTS prospect_relationships (
+  id                  TEXT PRIMARY KEY,
+  run_id              TEXT,
+  source_key          TEXT NOT NULL,
+  source_name         TEXT NOT NULL,
+  -- COMPANY · EVENT · ASSOCIATION
+  source_kind         TEXT NOT NULL DEFAULT 'COMPANY',
+  target_key          TEXT NOT NULL,
+  target_name         TEXT NOT NULL,
+  relationship_type   TEXT NOT NULL,
+  confidence          REAL NOT NULL,
+  -- VERIFIED (lu sur une page qui fait foi) · INFERRED (deduit, a verifier)
+  status              TEXT NOT NULL,
+  evidence_url        TEXT NOT NULL,
+  evidence_summary    TEXT NOT NULL,
+  -- la strategie qui l'a trouvee
+  source_method       TEXT NOT NULL,
+  -- OFFICIAL · ASSOCIATION_EVENT · SECONDARY
+  source_trust        TEXT NOT NULL,
+  country             TEXT,
+  source_date         TEXT,
+  discovered_at       TEXT NOT NULL,
+  UNIQUE(source_key, target_key, relationship_type, evidence_url)
+);
+CREATE INDEX IF NOT EXISTS idx_relationships_source ON prospect_relationships(source_key);
+CREATE INDEX IF NOT EXISTS idx_relationships_target ON prospect_relationships(target_key);
+CREATE INDEX IF NOT EXISTS idx_relationships_run ON prospect_relationships(run_id);
+
+CREATE TABLE IF NOT EXISTS prospect_evidence (
+  id            TEXT PRIMARY KEY,
+  run_id        TEXT,
+  entity_key    TEXT NOT NULL,
+  -- RELATIONSHIP · IDENTITY · ACTIVITY · COUNTRY · MEMBERSHIP
+  kind          TEXT NOT NULL,
+  claim         TEXT NOT NULL,
+  url           TEXT NOT NULL,
+  excerpt       TEXT,
+  -- OFFICIAL · ASSOCIATION_EVENT · SECONDARY
+  trust         TEXT NOT NULL,
+  method        TEXT NOT NULL,
+  confidence    REAL NOT NULL,
+  collected_at  TEXT NOT NULL,
+  UNIQUE(entity_key, kind, url, claim)
+);
+CREATE INDEX IF NOT EXISTS idx_prospect_evidence_entity ON prospect_evidence(entity_key);
+CREATE INDEX IF NOT EXISTS idx_prospect_evidence_run ON prospect_evidence(run_id);
+`,
+  },
 ];

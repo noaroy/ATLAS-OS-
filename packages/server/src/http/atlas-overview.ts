@@ -1,7 +1,8 @@
 import { canRunProvider, AUTONOMY_LEVELS, type AtlasConfig } from '@atlas/core';
 import type { Repositories } from '@atlas/data';
 import {
-  collectNeedsYou, todaySnapshot, pipelineSnapshot, inspectRepo, detectClaudeCode, summariseAutopilot,
+  collectNeedsYou, todaySnapshot, pipelineSnapshot, inspectRepo, detectClaudeCode, summariseAutopilot, strongestSeeds,
+  type ExpansionStats,
 } from '@atlas/runtime';
 
 /**
@@ -57,6 +58,24 @@ export interface AtlasOverview {
     waitingFounder: Array<{ id: string; objective: string; reason: string; command: string | null }>;
     estimatedSpendUsd: number;
     actualSpendUsd: number | null;
+  };
+  /**
+   * L'expansion de prospects, en mots d'affaires : la taille de l'univers,
+   * ce qui est nouveau, ce qui est qualifié, d'où cela vient, ce que cela
+   * coûte, et la prochaine expansion possible. Jamais un message.
+   */
+  expansion: {
+    universe: number;
+    newCompanies: number;
+    relationships: number;
+    qualified: number;
+    highPriority: number;
+    evidence: number;
+    costUsd: number;
+    topSources: Array<{ label: string; relationships: number }>;
+    topSeeds: Array<{ seed: string; companies: number; qualified: number }>;
+    recentRuns: Array<{ id: string; startedAt: string; status: string; seeds: string[]; universe: number | null; qualified: number | null; highPriority: number | null; costUsd: number }>;
+    nextOpportunity: string | null;
   };
   /** Les chiffres bruts, pour l'onglet avancé. Jamais sur l'écran principal. */
   advanced: {
@@ -255,6 +274,29 @@ export function buildAtlasOverview(
         inProgress: s.inProgress.map((a) => ({ id: a.id, objective: a.objective, status: a.status })),
         completedRecently: s.completedRecently, waitingFounder: s.waitingFounder,
         estimatedSpendUsd: s.estimatedSpendUsd, actualSpendUsd: s.actualSpendUsd,
+      };
+    })(),
+    expansion: (() => {
+      const t = repos.expansion.totals();
+      const runs = repos.expansion.runs(5);
+      const recentRuns = runs.map((r) => {
+        const s = r.stats as Partial<ExpansionStats>;
+        return {
+          id: r.id, startedAt: r.startedAt, status: r.status, seeds: r.seeds.map((x) => String(x.name ?? x.domain ?? '?')),
+          universe: s.funnel?.universe ?? null, qualified: s.funnel?.qualified ?? null, highPriority: s.funnel?.highPriority ?? null,
+          costUsd: Number(((s.searchCostUsd ?? r.searchCostUsd) + (s.aiCostUsd ?? r.aiCostUsd)).toFixed(4)),
+        };
+      });
+      const newCompanies = runs.reduce((n, r) => n + Number((r.stats as Partial<ExpansionStats>).newCompanies ?? 0), 0);
+      const next = strongestSeeds(repos, { limit: 3, excludeSeededWithinMs: 14 * 86_400_000 });
+      const labels: Record<string, string> = { PARTNER: 'pages partenaires et distributeurs', ASSOCIATION: 'fédérations', TRADE_SHOW: 'salons', COMPETITOR: 'concurrents', SIMILAR: 'entreprises semblables' };
+      return {
+        universe: t.universe, newCompanies, relationships: t.relationships, qualified: t.qualified, highPriority: t.highPriority, evidence: t.evidence,
+        costUsd: Number(t.costUsd.toFixed(4)),
+        topSources: repos.expansion.topMethods(5).map((m) => ({ label: labels[m.method] ?? m.method.toLowerCase(), relationships: m.relationships })),
+        topSeeds: repos.expansion.topSeeds(5).map((s) => ({ seed: s.seedKey, companies: s.companies, qualified: s.qualified })),
+        recentRuns,
+        nextOpportunity: next.length > 0 ? `Étendre autour de ${next.map((s) => s.name).join(', ')}` : null,
       };
     })(),
     advanced: {

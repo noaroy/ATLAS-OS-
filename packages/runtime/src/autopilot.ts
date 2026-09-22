@@ -9,6 +9,7 @@ import { routeTask, type RouteTarget } from './hermes-router.ts';
 import { inspectRepo } from './workspace.ts';
 import { softwareLoopStatus, externalRunnerAlive, type SoftwareLoopStatus } from './software-loop.ts';
 import type { WorkerContext, WorkerOutcome } from './workers.ts';
+import { prospectExpansionSource } from './expansion/autopilot-source.ts';
 
 /**
  * L'Autopilot : la boucle de contrôle d'ATLAS.
@@ -400,7 +401,7 @@ export function fingerprintOf(p: Pick<AutopilotProposal, 'category' | 'objective
  * jamais un envoi, même à blanc.
  */
 export const SAFE_AUTONOMOUS_TASK_TYPES: readonly string[] = [
-  'SALES_REPLY_CHECK', 'SALES_ANALYTICS', 'SALES_FOLLOW_UP', 'SALES_OPTIMIZATION', 'SALES_DISCOVERY',
+  'SALES_REPLY_CHECK', 'SALES_ANALYTICS', 'SALES_FOLLOW_UP', 'SALES_OPTIMIZATION', 'SALES_DISCOVERY', 'PROSPECT_EXPANSION',
   'REPO_ANALYSIS', 'ARCHITECTURE_REVIEW', 'PLANNING', 'COMMERCIAL_ANALYSIS', 'CODE_REVIEW',
   'ENGINEERING_CHANGE', 'BUILD_VALIDATION',
 ];
@@ -629,7 +630,7 @@ export const revenueLoopSource: OpportunitySource = {
   },
 };
 
-export const DEFAULT_OPPORTUNITY_SOURCES: readonly OpportunitySource[] = [revenueLoopSource];
+export const DEFAULT_OPPORTUNITY_SOURCES: readonly OpportunitySource[] = [revenueLoopSource, prospectExpansionSource];
 
 // ─── Le cycle ────────────────────────────────────────────────────────────────
 

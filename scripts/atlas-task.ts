@@ -13,7 +13,7 @@
  *   atlas-task retry <taskId> --by=noaroy
  *   atlas-task cancel <taskId> --by=noaroy
  */
-import { createLogger, nowIso, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, nowIso, loadAtlasEnv, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 
 // Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
@@ -31,7 +31,8 @@ const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
 const logger = createLogger({ level: 'error', pretty: false });
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const config = loadConfig(process.cwd());
+const repos = createRepositories(config.paths.databaseFile, logger);
 
 const COLOUR: Record<string, string> = {
   QUEUED: c.cyan, RUNNING: c.green, DONE: c.dim, FAILED: c.red,

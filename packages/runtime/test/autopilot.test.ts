@@ -13,6 +13,7 @@ import {
   runAutopilotCycle, observeAtlas, summariseAutopilot, priorityScore, worthDoing, decideAutonomy, fingerprintOf,
   allocationShares, allocationAdjustment, setAutopilotPause, scheduleAutopilotCycle, createAutopilotHandlers,
   DEFAULT_OPPORTUNITY_SOURCES, SAFE_AUTONOMOUS_TASK_TYPES, HUMAN_GATES, ALLOCATION_TARGET, MAX_ACTION_DEPTH, AUTOPILOT_TASK_TYPE,
+  revenueLoopSource,
   type AutopilotProposal, type OpportunitySource, type AutopilotObservation,
 } from '../src/autopilot.ts';
 
@@ -487,6 +488,37 @@ describe('16. aucune métrique inventée', () => {
     assert.ok(o.absent.some((a) => /pipeline/.test(a)));
     const report = await cycle();
     assert.ok(report.learned.some((l) => /non mesurable, non inventé/.test(l)));
+  });
+});
+
+describe('la commande proposée au fondateur existe réellement', () => {
+  test('brouillons en attente → approvals:audit, qui couvre les deux magasins', async () => {
+    const o = await observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
+    const proposals = revenueLoopSource.propose({
+      observation: { ...o, sales: { ...o.sales, draftsAwaitingApproval: 5 } }, repos, config, now: NOW,
+    });
+    const p = proposals.find((x) => x.fingerprintKey === 'BLOCKED_WORK:drafts-approval');
+    assert.ok(p, 'la proposition existe quand des brouillons attendent');
+    assert.equal(p!.execution.kind, 'FOUNDER_DECISION');
+    assert.equal((p!.execution as { command: string }).command, 'npm run approvals:audit');
+    // `sales:loop -- drafts` ne lit qu'un des deux magasins de brouillons
+    // (voir scripts/approvals-audit.ts) : jamais la commande proposée ici.
+    assert.equal((p!.execution as { command: string }).command.includes('sales:loop'), false);
+  });
+
+  test('recommandations proposées → sales:status puis sales:campaign -- decide, jamais sales:engine', async () => {
+    const o = await observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
+    const proposals = revenueLoopSource.propose({
+      observation: { ...o, sales: { ...o.sales, recommendationsProposed: 3 } }, repos, config, now: NOW,
+    });
+    const p = proposals.find((x) => x.fingerprintKey === 'OPTIMIZATION:recommendations');
+    assert.ok(p, 'la proposition existe quand des recommandations attendent');
+    const command = (p!.execution as { command: string }).command;
+    // `npm run sales:engine` n'existe pas comme script : seuls sales:status et
+    // sales:campaign le sont (package.json).
+    assert.equal(command.includes('sales:engine'), false);
+    assert.match(command, /sales:status/);
+    assert.match(command, /sales:campaign -- decide/);
   });
 });
 

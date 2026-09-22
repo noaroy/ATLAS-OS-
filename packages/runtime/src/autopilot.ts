@@ -517,10 +517,10 @@ export const revenueLoopSource: OpportunitySource = {
       out.push({
         objective: `relire et approuver ${o.sales.draftsAwaitingApproval} message(s) commerciaux rédigés`,
         category: 'BLOCKED_WORK', expectedBusinessValue: 'HIGH', expectedCostUsd: 0, expectedFounderTimeMinutes: 3 * o.sales.draftsAwaitingApproval,
-        confidence: 0.8, urgency: 'HIGH', evidence: [`${o.sales.draftsAwaitingApproval} brouillon(s) READY_FOR_APPROVAL`],
+        confidence: 0.8, urgency: 'HIGH', evidence: [`${o.sales.draftsAwaitingApproval} dossier(s) en attente (brouillons READY_FOR_APPROVAL + prospects READY_FOR_REVIEW)`],
         risk: 'MEDIUM', reversibility: 'IRREVERSIBLE', recommendedAgent: 'HUMAN', requiresHumanApproval: true,
         reason: 'aucun message ne part sans relecture : la file d’envoi est bloquée sur vous',
-        execution: { kind: 'FOUNDER_DECISION', command: 'npm run sales:loop -- drafts' }, fingerprintKey: 'BLOCKED_WORK:drafts-approval',
+        execution: { kind: 'FOUNDER_DECISION', command: 'npm run approvals:audit' }, fingerprintKey: 'BLOCKED_WORK:drafts-approval',
       });
     }
     if (o.sales.followUpsDue > 0) {
@@ -540,7 +540,7 @@ export const revenueLoopSource: OpportunitySource = {
         confidence: 0.7, urgency: 'NORMAL', evidence: [`${o.sales.recommendationsProposed} recommandation(s) PROPOSED`],
         risk: 'LOW', reversibility: 'REVERSIBLE', recommendedAgent: 'HUMAN', requiresHumanApproval: true,
         reason: 'ATLAS a mesuré quelque chose et propose un réglage : la décision vous revient',
-        execution: { kind: 'FOUNDER_DECISION', command: 'npm run sales:engine -- recommendations' }, fingerprintKey: 'OPTIMIZATION:recommendations',
+        execution: { kind: 'FOUNDER_DECISION', command: 'npm run sales:status  ·  puis npm run sales:campaign -- decide <recId> test|approve|reject' }, fingerprintKey: 'OPTIMIZATION:recommendations',
       });
     }
     if (o.health.gmail === 'DOWN' || o.health.gmail === 'STALE' || o.health.gmail === 'UNKNOWN') {

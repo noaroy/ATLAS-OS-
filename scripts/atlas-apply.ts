@@ -17,7 +17,7 @@
  *   atlas-apply run <taskId> --by=nom       applique une fois
  *   atlas-apply revert <taskId> --by=nom    défait ce qui vient d'être appliqué
  */
-import { createLogger, nowIso, loadAtlasEnv } from '../packages/core/src/index.ts';
+import { createLogger, nowIso, loadAtlasEnv, loadConfig } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 import { applyToRepo, revertApply, inspectRepo, hashDiff } from '../packages/runtime/src/index.ts';
 
@@ -36,7 +36,8 @@ const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
 const logger = createLogger({ level: 'error', pretty: false });
-const repos = createRepositories(process.env.ATLAS_DB_PATH ?? 'data/atlas.db', logger);
+const config = loadConfig(process.cwd());
+const repos = createRepositories(config.paths.databaseFile, logger);
 const repoRoot = flag('repo') ?? process.cwd();
 
 /** Le diff conservé pour cette tâche, tel qu'il a été relu. */

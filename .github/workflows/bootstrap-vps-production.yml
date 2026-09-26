@@ -1,0 +1,53 @@
+name: Bootstrap VPS production baseline
+
+on:
+  push:
+    branches:
+      - vps/atlas-final-production-20260926-bootstrap
+    paths:
+      - .github/workflows/bootstrap-vps-production.yml
+
+permissions:
+  contents: write
+
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact GitHub base
+        uses: actions/checkout@v4
+        with:
+          ref: 2265d7fb973c4a42207624d1c017431c1f342806
+          fetch-depth: 0
+
+      - name: Download and verify source-only VPS patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            'https://atlas.148.113.240.18.sslip.io/_atlas-bootstrap/8kk1ci6UT6OhPbPOlaZgsZrm8Vzyo0MN' \
+            -o /tmp/atlas-vps-prod.patch.xz.b64
+          test "$(wc -c < /tmp/atlas-vps-prod.patch.xz.b64)" = '151889'
+          echo 'c2977e566a2fb144f213161a2af46e423b5cb0e7fb7c45009416b1f4f4be3fcc  /tmp/atlas-vps-prod.patch.xz.b64' | sha256sum -c -
+          base64 -d /tmp/atlas-vps-prod.patch.xz.b64 > /tmp/atlas-vps-prod.patch.xz
+          xz -dc /tmp/atlas-vps-prod.patch.xz > /tmp/atlas-vps-prod.patch
+
+      - name: Reconstruct exact VPS production tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index /tmp/atlas-vps-prod.patch
+          TREE="$(git write-tree)"
+          echo "tree=$TREE"
+          test "$TREE" = 'da799dd770bd4be0df33bc314afec1ab0dc2b1a8'
+
+      - name: Commit and publish production reference branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'ATLAS VPS Bootstrap'
+          git config user.email 'atlas-bootstrap@users.noreply.github.com'
+          git commit -m 'baseline: mirror VPS atlas-final-production 4d728a8f'
+          git push origin HEAD:refs/heads/vps/atlas-final-production-20260926 --force-with-lease

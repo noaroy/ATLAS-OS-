@@ -27,6 +27,7 @@ import type { AtlasSystem } from '../bootstrap.ts';
 import { sendOk } from './reply.ts';
 import { buildCockpit } from './cockpit.ts';
 import { buildRevenueMobile, buildProspectDetail, isDomainParam } from './revenue-mobile.ts';
+import { buildProspectList, buildOutreachInbox, factoryVerdictOf } from './mobile-feed.ts';
 import { isSecureRequest, requireFounder, requireOperator, tokenFrom } from './auth.ts';
 import { appendSetCookie, clearSessionCookie, serializeSessionCookie } from './cookies.ts';
 import { guardLogin, type Limiters } from './limits.ts';
@@ -127,13 +128,19 @@ export function registerRoutes(app: FastifyInstance, system: AtlasSystem, limite
   app.get('/api/cc/revenue', async (_request, reply) =>
     sendOk(reply, buildRevenueMobile(repos, system.config)));
 
+  // L'application mobile : la liste des prospects et la boîte d'envoi, en lecture seule.
+  app.get('/api/cc/prospects', async (_request, reply) =>
+    sendOk(reply, buildProspectList(repos, new Date())));
+  app.get('/api/cc/outreach-inbox', async (_request, reply) =>
+    sendOk(reply, buildOutreachInbox(repos, new Date())));
+
   // La fiche d'un prospect, en lecture seule. Le domaine est validé avant toute lecture.
   app.get('/api/cc/prospects/:domain', async (request, reply) => {
     const { domain } = request.params as { domain: string };
     if (!isDomainParam(domain)) throw badRequest('domaine invalide');
     const detail = buildProspectDetail(repos, domain);
     if (!detail) throw notFound(`prospect ${domain}`);
-    return sendOk(reply, detail);
+    return sendOk(reply, { ...detail, factory: factoryVerdictOf(repos, detail.identity.domain) });
   });
 
   // La page unique du moteur commercial et ses décisions.

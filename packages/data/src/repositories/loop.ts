@@ -697,6 +697,26 @@ export class SalesLoopRepository {
     return rows.map((r) => this.toDraft(r));
   }
 
+  /**
+   * Les brouillons fermés (abandonnés ou refusés), les plus récents d'abord,
+   * avec le motif de la dernière décision. Lecture seule, pour l'écran.
+   */
+  closedDrafts(limit = 50): Array<OutreachDraftRow & { decidedAt: string | null; decisionNote: string | null }> {
+    const rows = this.db.prepare(
+      `SELECT d.*, (SELECT decided_at FROM outreach_draft_decisions x WHERE x.draft_id = d.id ORDER BY decided_at DESC LIMIT 1) AS decided_at,
+              (SELECT note FROM outreach_draft_decisions x WHERE x.draft_id = d.id ORDER BY decided_at DESC LIMIT 1) AS decision_note
+         FROM outreach_drafts d
+        WHERE d.state IN ('ABANDONED', 'REJECTED')
+        ORDER BY COALESCE(decided_at, d.created_at) DESC
+        LIMIT ?`,
+    ).all(limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      ...this.toDraft(r),
+      decidedAt: (r.decided_at as string | null) ?? null,
+      decisionNote: (r.decision_note as string | null) ?? null,
+    }));
+  }
+
   /** Les envois de ce domaine dont l'issue consignée est un échec technique. */
   failedSendsFor(domain: string): number {
     const row = this.db.prepare(

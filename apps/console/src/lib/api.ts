@@ -791,7 +791,25 @@ export const cc = {
     get<SalesDashboard>(`/api/cc/dashboard?range=${range}${segment ? `&segment=${encodeURIComponent(segment)}` : ''}`),
   revenue: () => get<RevenueMobile>('/api/cc/revenue'),
   prospect: (domain: string) => get<ProspectDetail>(`/api/cc/prospects/${encodeURIComponent(domain)}`),
+  prospects: () => get<{ total: number; rows: MobileProspectRow[] }>('/api/cc/prospects'),
+  outreachInbox: () => get<OutreachInbox>('/api/cc/outreach-inbox'),
 };
+
+// Miroirs de `packages/server/src/http/mobile-feed.ts`.
+export interface MobileProspectRow {
+  domain: string; companyName: string; score: number | null; tier: string | null;
+  factoryClass: string | null; sendEligible: boolean; commercialState: string; contactReady: boolean;
+  mainBlocker: string | null; blockers: number; discoveredAt: string; lastActivityAt: string;
+}
+export interface OutreachInboxRow {
+  id: string; domain: string; company: string; recipient: string | null; subject: string | null;
+  at: string; state: string; detail: string | null;
+}
+export interface OutreachInbox {
+  generatedAt: string;
+  toApprove: OutreachInboxRow[]; ready: OutreachInboxRow[]; sent: OutreachInboxRow[];
+  replies: OutreachInboxRow[]; blocked: OutreachInboxRow[];
+}
 
 // ─── L'écran de téléphone ────────────────────────────────────────────────────
 // Miroir de `packages/server/src/http/revenue-mobile.ts`.
@@ -851,6 +869,8 @@ export interface RevenueMobile {
     tasks: { failed24h: number; recovered24h: number };
     lastSuccessfulRevenueAction: string | null;
   };
+  trends: { days: string[]; found: number[]; qualified: number[]; replies: number[] };
+  activity: Array<{ at: string; kind: 'FACTORY' | 'DRAFT' | 'SENT' | 'REPLY' | 'OUTCOME'; title: string; detail: string | null; domain: string | null }>;
   definitions: Record<string, string>;
 }
 
@@ -881,6 +901,8 @@ export interface ProspectDetail {
   };
   blockers: string[];
   firstTouchReady: boolean;
+  /** Le verdict de la fabrique (boucle A) ; null tant qu'elle n'est pas passée. */
+  factory: { classification: string; sendEligible: boolean; blockers: string[]; processedAt: string } | null;
 }
 
 // ─── Le moteur commercial : la page unique et ses décisions ──────────────────

@@ -28,7 +28,12 @@ import { SearchFabricScreen, MultiModelView } from './views/Search.tsx';
 import { OutreachScreen, FollowUpsScreen, AnalyticsScreen } from './views/Outreach.tsx';
 import { SalesView } from './views/Sales.tsx';
 import { HomeView } from './views/Home.tsx';
-import { MobileView, MobileProspectView } from './views/Mobile.tsx';
+import { MobileShell } from './mobile/Shell.tsx';
+import { HomeScreen } from './mobile/Home.tsx';
+import { ProspectsScreen } from './mobile/Prospects.tsx';
+import { ProspectScreen } from './mobile/Prospect.tsx';
+import { OutreachScreen as MobileOutreachScreen } from './mobile/Outreach.tsx';
+import { SystemScreen } from './mobile/System.tsx';
 
 /**
  * Application shell and routing.
@@ -74,8 +79,14 @@ export default function App() {
       <Route path="/" element={<HomeView />} />
 
       {/* Le revenu depuis un téléphone : une colonne, une lecture, pas de rail. */}
-      <Route path="/m" element={<MobileView />} />
-      <Route path="/m/p/:domain" element={<MobileProspectView />} />
+      <Route path="/m" element={<MobileShell />}>
+        <Route index element={<HomeScreen />} />
+        <Route path="prospects" element={<ProspectsScreen />} />
+        <Route path="p/:domain" element={<ProspectScreen />} />
+        <Route path="outreach" element={<MobileOutreachScreen />} />
+        <Route path="system" element={<SystemScreen />} />
+        <Route path="*" element={<Navigate to="/m" replace />} />
+      </Route>
 
       <Route element={<Shell />}>
         {/* L'ecran d'accueil : la page unique du moteur commercial — ce que ca

@@ -6,6 +6,7 @@ import {
   type SalesDashboard, type SystemLight, type CommercialState,
 } from '@atlas/runtime';
 import { withoutEnvNames } from './command-center.ts';
+import { buildMobileTrends, buildMobileActivity, type MobileTrends, type MobileActivity } from './mobile-feed.ts';
 
 /**
  * L'écran de téléphone : piloter le revenu d'un coup d'œil.
@@ -120,6 +121,10 @@ export interface RevenueMobile {
     tasks: { failed24h: number; recovered24h: number };
     lastSuccessfulRevenueAction: string | null;
   };
+  /** Sept jours de découvertes, qualifications et réponses — pour les tendances. */
+  trends: MobileTrends;
+  /** Les derniers faits revenue, toutes sources confondues. */
+  activity: MobileActivity[];
   definitions: Record<string, string>;
 }
 
@@ -278,6 +283,8 @@ export function buildRevenueMobile(
       perClientUsd: per(dashboard.cards.clientsSigned),
     },
     loops: factoryLoops(repos, now, dashboard),
+    trends: buildMobileTrends(repos, now),
+    activity: buildMobileActivity(repos),
     definitions: {
       funnel: 'volumes du moteur commercial depuis l’origine ; taux = part de l’étape connue précédente',
       contactReady: 'qualifié ET adresse lue sur une page officielle',

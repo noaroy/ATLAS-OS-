@@ -1,0 +1,20 @@
+ATLAS VPS production bootstrap
+
+Base GitHub commit:
+2265d7fb973c4a42207624d1c017431c1f342806
+
+Expected production HEAD on VPS when this bootstrap was generated:
+4d728a8fc123df0f7b779811f7a10f6f1f6b2ca6
+
+Expected tree SHA after applying bootstrap/atlas-vps-prod.patch.xz.b64:
+da799dd770bd4be0df33bc314afec1ab0dc2b1a8
+
+Procedure:
+1. base64 -d bootstrap/atlas-vps-prod.patch.xz.b64 > /tmp/atlas-vps-prod.patch.xz
+2. xz -dc /tmp/atlas-vps-prod.patch.xz > /tmp/atlas-vps-prod.patch
+3. git apply --index /tmp/atlas-vps-prod.patch
+4. git write-tree
+5. Verify the resulting tree SHA is exactly da799dd770bd4be0df33bc314afec1ab0dc2b1a8 before making any further change.
+6. Commit the reconstructed baseline locally before implementing dashboard work.
+
+The patch contains tracked source changes only. No .env or runtime database is included.

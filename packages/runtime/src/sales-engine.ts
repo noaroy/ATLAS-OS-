@@ -25,6 +25,7 @@ import {
   isTechnicalDomain,
   buildOutreachDraft,
   personalizationIsGrounded,
+  validateOutreachDraft,
   customerFacingObservation,
   outreachFactFrom,
   isCommercialEvidence,
@@ -64,6 +65,8 @@ export const SALES_ENGINE_TASKS = {
   REPLY_SYNC: 'SALES_REPLY_CHECK',
   ANALYTICS: 'SALES_ANALYTICS',
   OPTIMIZATION: 'SALES_OPTIMIZATION',
+  /** La fabrique de revenu (boucle A) : qualifier, lire contacts et faits, classer. */
+  FACTORY: 'REVENUE_FACTORY',
 } as const;
 
 /** La cadence de chaque cycle, en minutes. Une journée = 1440. */
@@ -74,6 +77,9 @@ export const SALES_SCHEDULE: Record<keyof typeof SALES_ENGINE_TASKS, number> = {
   DISCOVERY: 1440,
   ANALYTICS: 60,
   OPTIMIZATION: 1440,
+  // Douze entreprises par tour, un tour toutes les trente minutes : une
+  // capacité de 576 par jour, bornée en pratique par ce que la découverte verse.
+  FACTORY: 30,
 };
 
 export const SALES_SETTINGS = {
@@ -150,9 +156,12 @@ export function bounceCounts(repos: Repositories, now: Date): { sent: number; bo
 export function replyReceivedFor(repos: Repositories, domain: string): boolean {
   const conversation = repos.conversations.byDomain(domain);
   if (!conversation) return false;
+  // NEEDS_REVIEW compte : une réponse rapprochée avec un doute reste une
+  // réponse. Tant qu'une personne ne l'a pas relue, aucun message automatique
+  // (premier contact, relance) ne part vers ce domaine.
   return repos.conversations
     .eventsFor(conversation.id)
-    .some((e) => e.classification === 'REPLIED' || e.classification === 'BOUNCED' || e.humanReviewed);
+    .some((e) => e.classification === 'REPLIED' || e.classification === 'NEEDS_REVIEW' || e.classification === 'BOUNCED' || e.humanReviewed);
 }
 
 /**
@@ -390,8 +399,11 @@ export function applyReplyConsequences(
     repos.salesEngine.suppress({ kind: 'EMAIL', value: reply.sender.includes('@') ? reply.sender : `bounce@${reply.domain}`, reason: 'BOUNCE', source: 'reply', evidence: reply.subject ?? null, createdBy: ACTOR });
     move(repos, reply.domain, 'ACTION_REQUIRED', 'rebond');
     suppressed = true;
-  } else if (verdict.classification === 'REPLIED') {
-    move(repos, reply.domain, 'REPLIED', `réponse ${verdict.intent}`);
+  } else if (verdict.classification === 'REPLIED'
+    || (reply.classification === 'NEEDS_REVIEW' && STOP_FOLLOW_UP_INTENTS.includes(verdict.intent))) {
+    // Une réponse à relire (rapprochement incertain) sort aussi la boucle de
+    // l'attente : sans quoi le worker de relance la croyait encore silencieuse.
+    move(repos, reply.domain, 'REPLIED', `réponse ${verdict.intent}${reply.classification === 'NEEDS_REVIEW' ? ' (à relire)' : ''}`);
   }
 
   if (STOP_FOLLOW_UP_INTENTS.includes(verdict.intent)) {
@@ -657,6 +669,23 @@ export function registryRecommendationsFor(repos: Repositories, prospect: SalesP
   return out.length >= 2 ? out : [];
 }
 
+/**
+ * Un dossier déclaré éligible par la fabrique, que la rédaction refuse : il
+ * n'est pas mis en file, il repasse à l'enrichissement avec le motif. Sans
+ * verdict de fabrique, rien n'est écrit.
+ */
+function backToEnrichment(repos: Repositories, domain: string, blockers: string[]): void {
+  const v = repos.revenueFactory.verdict(domain);
+  if (!v) return;
+  repos.revenueFactory.record({
+    domain, prospectId: v.prospectId, companyName: v.companyName, corporateGroup: v.corporateGroup,
+    classification: 'NEEDS_ENRICHMENT', sendEligible: false, revenueScore: v.revenueScore, scoreMethod: v.scoreMethod,
+    qualificationReason: v.qualificationReason, evidence: v.evidence, contactRoutes: v.contactRoutes,
+    recommendations: v.recommendations, dedupeResult: v.dedupeResult, blockers,
+    nextAction: 'rédaction refusée : enrichir puis repasser', processingCostUsd: 0, pagesFetched: 0, runId: null,
+  });
+}
+
 export interface FirstTouchReport {
   considered: number;
   drafted: number;
@@ -695,6 +724,11 @@ export function materializeFirstTouchDrafts(
     report.considered += 1;
 
     const reasons = [...repos.sales.firstTouchReadiness(p.id).blockers];
+    // La boucle B ne consomme que ce que la fabrique (boucle A) a déclaré
+    // SEND_ELIGIBLE. Sans verdict (fabrique jamais passée), les gardes
+    // ci-dessous restent seules juges, comme avant.
+    const factory = repos.revenueFactory.verdict(domain);
+    if (factory && !factory.sendEligible) reasons.push('FACTORY_NOT_ELIGIBLE');
     if (reasons.length === 0) {
       const drafts = repos.salesLoop.draftsForDomain(domain);
       if (repos.salesEngine.isSuppressed({ email: p.contactEmail, domain, company: p.companyName }).suppressed) reasons.push('SUPPRESSED');
@@ -732,18 +766,34 @@ export function materializeFirstTouchDrafts(
       recommendations,
     });
     if (!outcome.draft || !personalizationIsGrounded(outcome.draft)) {
-      report.skipped.push({ domain, reasons: [outcome.refusal ?? 'NOT_GROUNDED', outcome.reason] });
+      const refusal = [outcome.refusal ?? 'NOT_GROUNDED', outcome.reason];
+      report.skipped.push({ domain, reasons: refusal });
+      backToEnrichment(repos, domain, [outcome.refusal ?? 'NOT_GROUNDED']);
       continue;
     }
 
     const d = outcome.draft;
+    const sources = [
+      { quote: d.evidenceExcerpt, sourceUrl: d.sourceUsedForPersonalization },
+      ...d.recommendations.map((r) => ({ quote: r.fitReason, sourceUrl: r.sourceUrl })),
+    ];
+    // La porte qualité relit le texte produit, avant la file : destinataire
+    // lu sur le site, 2 recommandations citées, provenance, personnalisation,
+    // aucune intention d'achat affirmée, longueur. Un refus ne met rien en
+    // file et renvoie le dossier à l'enrichissement, motif compris.
+    const quality = validateOutreachDraft({
+      recipient: p.contactEmail!, subject: d.subject, body: d.messageEmail, sources,
+      observedEmail: p.contactObserved ? p.contactEmail : null, domain,
+    });
+    if (!quality.ok) {
+      report.skipped.push({ domain, reasons: quality.reasons.map((r) => `QUALITY_GATE:${r}`) });
+      backToEnrichment(repos, domain, quality.reasons.map((r) => `QUALITY_GATE:${r}`));
+      continue;
+    }
     const saved = repos.salesLoop.saveDraft({
       domain, companyName: p.companyName, recipient: p.contactEmail!, subject: d.subject, body: d.messageEmail,
       purpose: 'FIRST_TOUCH', conversionScore: p.score, rationale: p.whyFit,
-      sources: [
-        { quote: d.evidenceExcerpt, sourceUrl: d.sourceUsedForPersonalization },
-        ...d.recommendations.map((r) => ({ quote: r.fitReason, sourceUrl: r.sourceUrl })),
-      ],
+      sources,
       createdBy: FIRST_TOUCH_ACTOR,
     });
     if (repos.salesLoop.currentState(domain) === null) move(repos, domain, 'QUALIFYING', 'prospect canonique prêt au premier contact');
@@ -820,13 +870,27 @@ export async function runSendCycle(
     // Le registre est réinterrogé ici, et non seulement à la rédaction : un
     // opt-out peut être arrivé entre l'approbation et l'envoi.
     if (repos.sales.ledgerFor(draft.domain)?.kind === 'DO_NOT_CONTACT') reasons.push('DO_NOT_CONTACT');
+    // Un premier contact du pipeline automatique repasse la porte qualité au
+    // moment de partir : le texte en file est celui qui a été validé, et le
+    // destinataire est toujours l'adresse lue sur le site officiel. Dernière
+    // porte, évaluée seulement quand plus rien d'autre ne retient l'envoi :
+    // interrupteur fermé, rien n'est touché — un brouillon approuvé n'est
+    // fermé qu'au moment où il aurait réellement pu partir.
+    if (reasons.length === 0 && draft.createdBy === FIRST_TOUCH_ACTOR && draft.purpose === 'FIRST_TOUCH') {
+      const quality = validateOutreachDraft({
+        recipient: draft.recipient, subject: draft.subject, body: draft.body, sources: draft.sources,
+        observedEmail: observedEmailFor(repos, draft.domain, draft.recipient), domain: draft.domain,
+      });
+      for (const r of quality.reasons) reasons.push(`QUALITY_GATE:${r}`);
+    }
     if (draft.purpose !== 'FOLLOW_UP' && repos.salesLoop.lastSentTo(draft.domain) !== null) reasons.push('ALREADY_SENT');
 
     if (reasons.length > 0) {
       report.blocked.push({ draftId: draft.id, domain: draft.domain, reasons });
       // Un blocage structurel (registre, suppression, réponse) ferme le brouillon ;
       // un blocage de cadence (fenêtre, plafond) le laisse attendre le prochain cycle.
-      const structural = reasons.some((r) => ['DO_NOT_CONTACT', 'SUPPRESSED', 'REPLY_RECEIVED', 'ALREADY_SENT', 'MAX_FOLLOWUPS_REACHED'].includes(r));
+      const structural = reasons.some((r) => ['DO_NOT_CONTACT', 'SUPPRESSED', 'REPLY_RECEIVED', 'ALREADY_SENT', 'MAX_FOLLOWUPS_REACHED'].includes(r)
+        || r.startsWith('QUALITY_GATE:'));
       if (structural) {
         repos.salesLoop.decideDraft({ draftId: draft.id, decision: 'ABANDONED', decidedBy: ACTOR, note: reasons.join(', ') });
         move(repos, draft.domain, 'BLOCKED', reasons.join(', '));
@@ -873,6 +937,14 @@ export async function runSendCycle(
   return report;
 }
 
+/** L'adresse lue sur le site officiel pour ce domaine, si c'est bien le destinataire. */
+function observedEmailFor(repos: Repositories, domain: string, recipient: string): string | null {
+  const want = recipient.trim().toLowerCase();
+  const match = repos.sales.discoveredSince(null).find((p) => p.domain && canonicalDomainOf(p.domain) === domain
+    && p.contactObserved && p.contactEmail?.trim().toLowerCase() === want);
+  return match?.contactEmail ?? null;
+}
+
 // ─── Le planificateur ────────────────────────────────────────────────────────
 
 export interface ScheduleReport {
@@ -901,6 +973,7 @@ export function scheduleSalesCycle(repos: Repositories, config: AtlasConfig, now
     { key: 'REPLY_SYNC', availableAt: now.toISOString(), priority: 30, maxAttempts: 3 },
     { key: 'SEND', availableAt: now.toISOString(), priority: 40, maxAttempts: 2 },
     { key: 'ANALYTICS', availableAt: now.toISOString(), priority: 10, maxAttempts: 2 },
+    { key: 'FACTORY', availableAt: now.toISOString(), priority: 35, maxAttempts: 2 },
     { key: 'FOLLOW_UP', availableAt: dailyAt(6), priority: 20, maxAttempts: 2 },
     { key: 'DISCOVERY', availableAt: dailyAt(5), priority: 5, maxAttempts: 1 },
     { key: 'OPTIMIZATION', availableAt: dailyAt(7), priority: 5, maxAttempts: 2 },

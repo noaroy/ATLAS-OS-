@@ -111,10 +111,11 @@ afterEach(() => {
 describe('planificateur (§37–41)', () => {
   test('un passage pose chaque cycle une fois ; un second passage ne crée rien ; la fenêtre suivante recrée', () => {
     const first = scheduleSalesCycle(repos, config, NOW);
-    assert.equal(first.created.length, 6, first.created.join());
+    // Sept cycles depuis la fabrique de revenu (boucle A), toutes les trente minutes.
+    assert.equal(first.created.length, 7, first.created.join());
     const again = scheduleSalesCycle(repos, config, new Date(NOW.getTime() + 60_000));
     assert.equal(again.created.length, 0);
-    assert.equal(again.existing.length, 6);
+    assert.equal(again.existing.length, 7);
     const later = scheduleSalesCycle(repos, config, new Date(NOW.getTime() + 20 * 60_000));
     // Envoi (10 min) et lecture de boîte (15 min) ont changé de fenêtre ; le reste non.
     assert.deepEqual(later.created.map((k) => k.split(':')[1]).sort(), ['reply_sync', 'send']);
@@ -123,7 +124,7 @@ describe('planificateur (§37–41)', () => {
   test('le moteur coupé ne pose rien ; la découverte désactivée ne pose pas de découverte', () => {
     assert.equal(scheduleSalesCycle(repos, { ...config, sales: { ...config.sales, engineEnabled: false } }, NOW).created.length, 0);
     const without = scheduleSalesCycle(repos, { ...config, sales: { ...config.sales, discoveryEnabled: false } }, NOW);
-    assert.equal(without.created.length, 5);
+    assert.equal(without.created.length, 6);
     assert.ok(!without.created.some((k) => k.includes('discovery')));
   });
 });

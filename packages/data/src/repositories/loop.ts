@@ -697,6 +697,16 @@ export class SalesLoopRepository {
     return rows.map((r) => this.toDraft(r));
   }
 
+  /** Les envois de ce domaine dont l'issue consignée est un échec technique. */
+  failedSendsFor(domain: string): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM outbound_send_events e
+         JOIN outbound_sends s ON s.idempotency_key = e.idempotency_key
+        WHERE s.domain = ? AND e.phase = 'FAILED'`,
+    ).get(canonicalDomainOf(domain)) as { n: number };
+    return row.n;
+  }
+
   draftsInState(state: string): OutreachDraftRow[] {
     const rows = this.db
       .prepare('SELECT * FROM outreach_drafts WHERE state = ? ORDER BY created_at ASC')

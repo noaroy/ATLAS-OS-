@@ -67,6 +67,9 @@ const ROUTES: Readonly<Record<string, RouteTarget>> = {
   // pages, modèle plafonné et dépôts vivent dans l'image serveur. Le worker
   // déterministe du serveur la sert ; aucun script, aucune voie externe.
   PROSPECT_EXPANSION: 'DETERMINISTIC',
+  // La fabrique de revenu : lecture de pages officielles, règles et dépôts,
+  // aucun modèle. Servie par le worker déterministe du serveur.
+  REVENUE_FACTORY: 'DETERMINISTIC',
   // Le sondage du pont contrôleur : lire des issues GitHub, valider une
   // enveloppe, poser une tâche ENGINEERING_CHANGE, publier un résultat. Aucun
   // modèle — c'est ENGINEERING_CHANGE, routée plus haut, qui porte le travail.

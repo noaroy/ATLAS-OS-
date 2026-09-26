@@ -20,6 +20,7 @@ import { SalesRepository } from './repositories/sales.ts';
 import { ConversationRepository } from './repositories/conversations.ts';
 import { AutopilotRepository } from './repositories/autopilot.ts';
 import { ExpansionRepository } from './repositories/expansion.ts';
+import { RevenueFactoryRepository } from './repositories/revenue-factory.ts';
 
 export {
   SalesLoopRepository,
@@ -114,6 +115,7 @@ export interface Repositories {
   autopilot: AutopilotRepository;
   expansion: ExpansionRepository;
   supervisor: SupervisorRepository;
+  revenueFactory: RevenueFactoryRepository;
   close(): void;
 }
 
@@ -165,6 +167,7 @@ export function createRepositories(databaseFile: string, logger: Logger, options
     salesEngine: new SalesEngineRepository(db),
     autopilot: new AutopilotRepository(db),
     expansion: new ExpansionRepository(db),
+    revenueFactory: new RevenueFactoryRepository(db),
     close() {
       // A WAL checkpoint on shutdown keeps the main file self-contained, so a
       // backup taken right after a stop is complete on its own.
@@ -185,7 +188,7 @@ export type {
   OrderStatus,
 } from './repositories/orders.ts';
 
-export { SalesRepository } from './repositories/sales.ts';
+export { SalesRepository, isCommercialEmail, MIN_FIRST_TOUCH_FACTS } from './repositories/sales.ts';
 export {
   ConversationRepository,
   type SalesConversation,
@@ -219,3 +222,8 @@ export {
   type ExpansionRun, type ExpansionRunStatus, type ExpansionPurpose, type ExpansionCandidate, type ExpansionStage,
   type ProspectRelationship, type ProspectEvidence, type SourceTrust, type RelationshipStatus, type EvidenceKind, type EntityKind,
 } from './repositories/expansion.ts';
+export {
+  RevenueFactoryRepository, FACTORY_CLASSES,
+  type FactoryClass, type FactoryVerdict, type FactoryVerdictInput, type FactoryRun,
+  type FactoryEvidenceRef, type FactoryContactRoute, type FactoryRecommendation,
+} from './repositories/revenue-factory.ts';

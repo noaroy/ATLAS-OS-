@@ -112,6 +112,7 @@ export function MobileView() {
         <p className="m-empty">{status === 'DOWN' ? 'ATLAS ne répond pas. Nouvel essai toutes les 10 s.' : 'Chargement…'}</p>
       ) : (
         <main className={fresh.state === 'fresh' ? '' : 'm-stale'}>
+          <Loops data={data} />
           <Kpis data={data} />
           <Funnel data={data} />
           <Todo data={data} />
@@ -137,6 +138,40 @@ export function MobileView() {
 function OutboundTag({ mode }: { mode: RevenueMobile['header']['outbound'] }) {
   const tone = mode === 'ACTIVE' ? 'hot' : mode === 'OFF' ? 'off' : 'test';
   return <span className={`m-tag m-tag--${tone}`}>outbound {mode}</span>;
+}
+
+/** Les deux boucles : ce que la fabrique a traité en 24 h, et où en est l'envoi. */
+function Loops({ data }: { data: RevenueMobile }) {
+  const f = data.loops.factory;
+  const o = data.loops.outbound;
+  const onTarget = f.processed24h >= f.target24h;
+  const cells: Array<[string, string | number, boolean?]> = [
+    ['Traitées 24 h', `${f.processed24h} / ${f.target24h}`, !onTarget],
+    ['HOT', f.hot], ['WARM', f.warm], ['SEND_ELIGIBLE', f.sendEligible],
+    ['À enrichir', f.needsEnrichment], ['Contacts vérifiés', f.contactsVerified],
+    ['Recos ≥ 2', f.recommendationsGenerated], ['Entreprises / h', f.companiesPerHour ?? 'N/A'],
+    ['Coût / entreprise', usd(f.costPerCompanyUsd)],
+  ];
+  const flow: Array<[string, number]> = [
+    ['Prêts', o.READY], ['En file', o.QUEUED + o.PAUSED], ['Envoyés', o.SENT + o.DELIVERED], ['Rebonds', o.BOUNCED],
+    ['Réponses', o.REPLIED + o.POSITIVE_REPLY + o.NEGATIVE_REPLY], ['Positives', o.POSITIVE_REPLY],
+    ['RDV', o.MEETING], ['Gagnés', o.WON],
+  ];
+  return (
+    <section className="m-card">
+      <h2>Deux boucles <small>{f.lastRunAt ? `fabrique ${f.lastRunStatus ?? ''} · ${stamp(f.lastRunAt)}` : 'fabrique jamais passée'}</small></h2>
+      <div className="m-grid m-grid--3">
+        {cells.map(([label, v, warn]) => <div key={label} className={`m-stat ${warn ? 'm-stat--act' : ''}`}><b>{v}</b><span>{label}</span></div>)}
+      </div>
+      <div className="m-grid m-grid--4" style={{ marginTop: '0.4rem' }}>
+        {flow.map(([label, n]) => <div key={label} className="m-stat"><b>{n}</b><span>{label}</span></div>)}
+      </div>
+      <p className="m-note">
+        Blocage principal : {f.mainBlocker ?? 'aucun'} · tâches en échec 24 h : {data.loops.tasks.failed24h} · reprises : {data.loops.tasks.recovered24h}
+        {data.loops.lastSuccessfulRevenueAction ? <><br />Dernière action réussie : {data.loops.lastSuccessfulRevenueAction}</> : null}
+      </p>
+    </section>
+  );
 }
 
 function Kpis({ data }: { data: RevenueMobile }) {

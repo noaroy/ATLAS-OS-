@@ -2,7 +2,8 @@ import { canonicalDomainOf, type AtlasConfig } from '@atlas/core';
 import type { Repositories, SalesProspect } from '@atlas/data';
 import {
   buildSalesDashboard, readGlobalPause, registryRecommendationsFor, replyReceivedFor, todaySnapshot,
-  type SalesDashboard, type SystemLight,
+  commercialStateCounts, FACTORY_DAILY_TARGET,
+  type SalesDashboard, type SystemLight, type CommercialState,
 } from '@atlas/runtime';
 import { withoutEnvNames } from './command-center.ts';
 
@@ -88,6 +89,36 @@ export interface RevenueMobile {
     perQualifiedUsd: number | null;
     perContactReadyUsd: number | null;
     perClientUsd: number | null;
+  };
+  /**
+   * Les deux boucles, en chiffres : ce que la fabrique a traité sur 24 h
+   * glissantes (boucle A) et où en sont les entreprises contactées (boucle B).
+   */
+  loops: {
+    factory: {
+      processed24h: number;
+      target24h: number;
+      hot: number;
+      warm: number;
+      needsEnrichment: number;
+      dropped: number;
+      duplicates: number;
+      blocked: number;
+      sendEligible: number;
+      contactsVerified: number;
+      recommendationsGenerated: number;
+      cost24hUsd: number;
+      costPerCompanyUsd: number | null;
+      /** Débit mesuré pendant les tours eux-mêmes. */
+      companiesPerHour: number | null;
+      runs24h: number;
+      lastRunAt: string | null;
+      lastRunStatus: string | null;
+      mainBlocker: string | null;
+    };
+    outbound: Record<CommercialState, number> & { revenue: number; currency: string };
+    tasks: { failed24h: number; recovered24h: number };
+    lastSuccessfulRevenueAction: string | null;
   };
   definitions: Record<string, string>;
 }
@@ -246,6 +277,7 @@ export function buildRevenueMobile(
       perContactReadyUsd: per(contactReadyAll),
       perClientUsd: per(dashboard.cards.clientsSigned),
     },
+    loops: factoryLoops(repos, now, dashboard),
     definitions: {
       funnel: 'volumes du moteur commercial depuis l’origine ; taux = part de l’étape connue précédente',
       contactReady: 'qualifié ET adresse lue sur une page officielle',
@@ -254,6 +286,50 @@ export function buildRevenueMobile(
       proposal: 'non consigné en base — N/A',
       costPer: 'coût IA total consigné / volume de l’étape',
     },
+  };
+}
+
+function factoryLoops(repos: Repositories, now: Date, dashboard: SalesDashboard): RevenueMobile['loops'] {
+  const since = new Date(now.getTime() - 86_400_000).toISOString();
+  const w = repos.revenueFactory.windowStats(since);
+  const lastRun = repos.revenueFactory.runs(1)[0] ?? null;
+  const lastDone = repos.revenueFactory.runs(20).find((r) => r.status === 'DONE') ?? null;
+  // Le blocage principal : le motif le plus fréquent parmi les dossiers à enrichir.
+  const tally = new Map<string, number>();
+  for (const v of repos.revenueFactory.verdicts({ classification: 'NEEDS_ENRICHMENT', since, limit: 1000 })) {
+    for (const b of v.blockers) {
+      const key = b.startsWith('SOURCED_FACTS_') ? 'SOURCED_FACTS' : b;
+      tally.set(key, (tally.get(key) ?? 0) + 1);
+    }
+  }
+  const main = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? null;
+  const tasks = repos.tasks.list({ limit: 500 }).filter((t) => (t.finishedAt ?? t.createdAt) >= since);
+  return {
+    factory: {
+      processed24h: w.processed,
+      target24h: FACTORY_DAILY_TARGET,
+      hot: w.byClass.HOT, warm: w.byClass.WARM, needsEnrichment: w.byClass.NEEDS_ENRICHMENT,
+      dropped: w.byClass.DROP, duplicates: w.byClass.DUPLICATE, blocked: w.byClass.BLOCKED,
+      sendEligible: w.sendEligible,
+      contactsVerified: w.contactsVerified,
+      recommendationsGenerated: w.withRecommendations,
+      cost24hUsd: round4(w.costUsd),
+      costPerCompanyUsd: w.processed > 0 ? round4(w.costUsd / w.processed) : null,
+      companiesPerHour: w.runElapsedMs > 0 ? Math.round((w.processed / w.runElapsedMs) * 3_600_000) : null,
+      runs24h: w.runs,
+      lastRunAt: lastRun?.finishedAt ?? lastRun?.startedAt ?? null,
+      lastRunStatus: lastRun?.status ?? null,
+      mainBlocker: main ? `${main[0]} (${main[1]})` : null,
+    },
+    outbound: { ...commercialStateCounts(repos, now), revenue: dashboard.cards.revenueSigned, currency: dashboard.cards.currency },
+    tasks: {
+      failed24h: tasks.filter((t) => t.status === 'FAILED').length,
+      // Reprise : une tâche arrivée au bout après au moins un échec.
+      recovered24h: tasks.filter((t) => t.status === 'DONE' && t.attemptCount > 1).length,
+    },
+    lastSuccessfulRevenueAction: lastDone
+      ? `fabrique : ${lastDone.processed} entreprise(s) le ${(lastDone.finishedAt ?? lastDone.startedAt).slice(0, 16).replace('T', ' ')}`
+      : null,
   };
 }
 

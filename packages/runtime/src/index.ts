@@ -282,3 +282,12 @@ export {
   softwareLoopStatus, externalRunnerAlive, ENGINEER_HOST_LABEL,
   type SoftwareLoopStatus, type SoftwareLoopPiece, type SoftwareLoopOptions,
 } from './software-loop.ts';
+export {
+  runRevenueFactory, createRevenueFactoryHandlers, factoryQueue, deterministicAssessments, duplicateOf, classOf,
+  REVENUE_FACTORY_TASK, FACTORY_ACTOR, FACTORY_DAILY_TARGET, DEFAULT_FACTORY_LIMITS,
+  type FactoryDeps, type FactoryReport, type FactoryLimits, type FetchPages, type QueueItem,
+} from './revenue-factory.ts';
+export {
+  commercialStateOf, commercialStateCounts, DELIVERY_INFERENCE_MS,
+  type CommercialState, type CommercialStateView,
+} from './commercial-state.ts';

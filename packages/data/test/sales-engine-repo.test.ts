@@ -29,11 +29,11 @@ afterEach(() => {
 
 describe('migration 36', () => {
   test('est versionnée, idempotente, et crée les tables du moteur', () => {
-    // La 36 n'est plus la dernière (la 37 pose l'Autopilot) : ce qu'on tient,
+    // La 36 n'est plus la dernière (la 40 pose la fabrique de revenu) : ce qu'on tient,
     // c'est qu'elle existe, à son numéro, et que ses tables sont là.
     const migration = MIGRATIONS.find((m) => m.version === 36)!;
     assert.equal(migration.name, 'sales-engine-production');
-    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 39);
+    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 40);
     const tables = (repos.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name);
     for (const expected of [
       'sales_segments', 'sales_attributions', 'sales_outcomes', 'suppression_list', 'sales_experiments',

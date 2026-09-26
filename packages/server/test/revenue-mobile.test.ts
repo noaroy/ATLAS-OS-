@@ -8,7 +8,8 @@ import { createLogger } from '../../core/src/logger.ts';
 import type { AtlasConfig } from '../../core/src/config.ts';
 import { createRepositories, type Repositories } from '../../data/src/index.ts';
 import { makeTestConfig } from '../../testing/src/index.ts';
-import { setGlobalPause } from '../../runtime/src/index.ts';
+import { setGlobalPause, runRevenueFactory } from '../../runtime/src/index.ts';
+import { site, fixtureFetch, discovered as discoveredFixture, partners as partnersFixture } from '../../runtime/test/helpers/factory-fixtures.ts';
 import { buildRevenueMobile, buildProspectDetail, isDomainParam, outboundModeOf } from '../src/http/revenue-mobile.ts';
 import { withoutEnvNames } from '../src/http/command-center.ts';
 import { createSystem, type AtlasSystem } from '../src/bootstrap.ts';
@@ -220,6 +221,36 @@ describe('fiche prospect : recommandations et blocages', () => {
       assert.equal(isDomainParam(bad), false, bad);
     }
     assert.equal(isDomainParam('Shop.ACME.fr'), true);
+  });
+});
+
+describe('vue revenue : les deux boucles', () => {
+  test('base vide : zéro traité, objectif affiché, aucun blocage inventé', () => {
+    const { loops } = view();
+    assert.equal(loops.factory.processed24h, 0);
+    assert.equal(loops.factory.target24h, 50);
+    assert.equal(loops.factory.mainBlocker, null);
+    assert.equal(loops.factory.companiesPerHour, null);
+    assert.equal(loops.lastSuccessfulRevenueAction, null);
+  });
+
+  test('après un tour de fabrique : traitées, éligibles, blocage principal et dernière action', async () => {
+    discoveredFixture(repos, 'merand.fr', 'Mérand', '2026-09-26T08:00:00.000Z');
+    partnersFixture(repos, 'merand.fr', [{ domain: 'bridor.fr', name: 'Bridor' }, { domain: 'panamar.es', name: 'Panamar' }]);
+    discoveredFixture(repos, 'formulaire.fr', 'Formulaire', '2026-09-26T08:05:00.000Z');
+    await runRevenueFactory({
+      repos, config, logger, now: () => NOW,
+      fetchPages: fixtureFetch([site('merand.fr', 'Mérand'), site('formulaire.fr', 'Formulaire', 'FORM_ONLY')]),
+    });
+    const { loops } = buildRevenueMobile(repos, config, { now: new Date(), gmailConfigured: false });
+    assert.equal(loops.factory.processed24h, 2);
+    assert.equal(loops.factory.hot, 1);
+    assert.equal(loops.factory.sendEligible, 1);
+    assert.equal(loops.factory.needsEnrichment, 1);
+    assert.match(loops.factory.mainBlocker ?? '', /NO_OBSERVED_EMAIL|RECOMMENDATIONS_BELOW_2/);
+    assert.equal(loops.factory.cost24hUsd, 0);
+    assert.match(loops.lastSuccessfulRevenueAction ?? '', /^fabrique : 2 entreprise/);
+    assert.equal(loops.outbound.SENT, 0, 'aucun envoi');
   });
 });
 

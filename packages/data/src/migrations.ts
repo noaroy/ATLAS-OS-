@@ -2655,4 +2655,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_supervisor_reviews_child
 CREATE INDEX IF NOT EXISTS idx_supervisor_reviews_objective ON supervisor_reviews(objective_id, cycle);
 `,
   },
+  {
+    version: 40,
+    name: 'revenue-factory',
+    sql: `
+-- --- La fabrique de revenu (boucle A) ---------------------------------------
+--
+-- Chaque entreprise examinee finit dans un etat explicite et un seul :
+-- HOT, WARM, NEEDS_ENRICHMENT, DROP, DUPLICATE ou BLOCKED — et, a part,
+-- send_eligible. Trois tables, toutes additives :
+--
+--   revenue_factory_verdicts  le verdict courant, un par domaine canonique ;
+--   revenue_factory_events    chaque passage, jamais reecrit (audit) ;
+--   revenue_factory_runs      chaque tour : volumes, duree, cout, arret.
+--
+-- initial_score, first_classification et first_processed_at ne sont ecrits
+-- qu'une fois : c'est ce que la boucle de retour comparera aux issues reelles.
+--
+-- Retour arriere : DROP TABLE revenue_factory_events; DROP TABLE
+-- revenue_factory_runs; DROP TABLE revenue_factory_verdicts; DELETE FROM
+-- schema_migrations WHERE version = 40. Aucune autre table n'en depend.
+CREATE TABLE IF NOT EXISTS revenue_factory_verdicts (
+  domain               TEXT PRIMARY KEY,
+  prospect_id          TEXT NOT NULL,
+  company_name         TEXT NOT NULL,
+  corporate_group      TEXT,
+  classification       TEXT NOT NULL CHECK (classification IN
+                         ('HOT','WARM','NEEDS_ENRICHMENT','DROP','DUPLICATE','BLOCKED')),
+  send_eligible        INTEGER NOT NULL DEFAULT 0,
+  revenue_score        REAL,
+  score_method         TEXT,
+  qualification_reason TEXT,
+  evidence             TEXT NOT NULL DEFAULT '[]',
+  contact_routes       TEXT NOT NULL DEFAULT '[]',
+  recommendations      TEXT NOT NULL DEFAULT '[]',
+  dedupe_result        TEXT NOT NULL,
+  blockers             TEXT NOT NULL DEFAULT '[]',
+  next_action          TEXT NOT NULL,
+  processing_cost_usd  REAL NOT NULL DEFAULT 0,
+  pages_fetched        INTEGER NOT NULL DEFAULT 0,
+  attempts             INTEGER NOT NULL DEFAULT 1,
+  initial_score        REAL,
+  first_classification TEXT NOT NULL,
+  first_processed_at   TEXT NOT NULL,
+  processed_at         TEXT NOT NULL,
+  run_id               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_factory_verdicts_class ON revenue_factory_verdicts(classification, send_eligible);
+CREATE INDEX IF NOT EXISTS idx_factory_verdicts_processed ON revenue_factory_verdicts(processed_at);
+
+CREATE TABLE IF NOT EXISTS revenue_factory_events (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT,
+  domain          TEXT NOT NULL,
+  prospect_id     TEXT NOT NULL,
+  classification  TEXT NOT NULL,
+  send_eligible   INTEGER NOT NULL,
+  revenue_score   REAL,
+  blockers        TEXT NOT NULL DEFAULT '[]',
+  cost_usd        REAL NOT NULL DEFAULT 0,
+  occurred_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_factory_events_domain ON revenue_factory_events(domain, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_factory_events_at ON revenue_factory_events(occurred_at);
+
+CREATE TABLE IF NOT EXISTS revenue_factory_runs (
+  run_id                TEXT PRIMARY KEY,
+  trigger               TEXT NOT NULL,
+  status                TEXT NOT NULL CHECK (status IN ('RUNNING','DONE','FAILED')),
+  started_at            TEXT NOT NULL,
+  finished_at           TEXT,
+  elapsed_ms            INTEGER,
+  processed             INTEGER NOT NULL DEFAULT 0,
+  stats                 TEXT NOT NULL DEFAULT '{}',
+  cost_usd              REAL NOT NULL DEFAULT 0,
+  stop_reason           TEXT,
+  error                 TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_factory_runs_started ON revenue_factory_runs(started_at);
+`,
+  },
 ];

@@ -571,3 +571,7 @@ export {
   evaluateManualSendLot, isIsolatedSelfTest, normaliseAddress, sameAddress, INTERNAL_TEST_RECIPIENT_BLOCKED, INTERNAL_TEST_RECIPIENT_MESSAGE, SELF_TEST_DOMAIN,
   type ManualSendLotInput, type ManualSendLotVerdict, type ManualSendBlock, type ManualSendBlockCode, type SelfTestCandidate,
 } from './manual-send-guard.ts';
+export {
+  validateOutreachDraft, BODY_MIN_CHARS, BODY_MAX_CHARS,
+  type OutreachQualityInput, type OutreachQualityVerdict, type OutreachQualityReason,
+} from './outreach-quality.ts';

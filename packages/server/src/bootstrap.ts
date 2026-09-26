@@ -46,6 +46,7 @@ import {
   createSupervisorHandlers,
   scheduleSupervisorPoll,
   createAiProviders,
+  createRevenueFactoryHandlers,
   DEMO_HANDLERS,
   type RecoveryReport,
 } from '@atlas/runtime';
@@ -337,6 +338,9 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   // dans le superviseur. Les deux se coupent d'un seul réglage.
   const salesEnabled = config.sales.engineEnabled && options.daemon === true;
   const salesHandlers = createSalesEngineHandlers({ repos, config, logger, sourceRoot: process.cwd() });
+  // La fabrique de revenu (boucle A) : servie par le worker déterministe du
+  // serveur, sans script ni modèle — la qualification ne dépend plus du lot.
+  const factoryHandlers = createRevenueFactoryHandlers({ repos, config, logger });
   // L'Autopilot : un cycle est une tâche déterministe ; son cadencement ne
   // s'active que par ATLAS_AUTOPILOT_ENABLED, dans le même daemon embarqué.
   const autopilotHandlers = createAutopilotHandlers({ repos, config, logger, cwd: process.cwd() });
@@ -359,7 +363,7 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   });
   const gptSupervisorEnabled = config.supervisor.enabled && options.daemon === true;
   const workers = createWorkerRegistry({
-    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers, ...expansionHandlers, ...controllerHandlers, ...supervisorHandlers }, workspaceRoot: process.cwd(),
+    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...factoryHandlers, ...autopilotHandlers, ...expansionHandlers, ...controllerHandlers, ...supervisorHandlers }, workspaceRoot: process.cwd(),
   });
   // Hermes avance les chaînes (une revue qui demande une correction en crée
   // la tâche) ; en ingénierie externe, CLAUDE / CLAUDE_CODE restent en file

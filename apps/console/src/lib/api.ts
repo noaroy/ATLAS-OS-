@@ -837,6 +837,20 @@ export interface RevenueMobile {
     caps: { aiDailyUsd: number | null; salesAiDailyUsd: number | null };
     perQualifiedUsd: number | null; perContactReadyUsd: number | null; perClientUsd: number | null;
   };
+  loops: {
+    factory: {
+      processed24h: number; target24h: number; hot: number; warm: number; needsEnrichment: number;
+      dropped: number; duplicates: number; blocked: number; sendEligible: number;
+      contactsVerified: number; recommendationsGenerated: number;
+      cost24hUsd: number; costPerCompanyUsd: number | null; companiesPerHour: number | null;
+      runs24h: number; lastRunAt: string | null; lastRunStatus: string | null; mainBlocker: string | null;
+    };
+    outbound: Record<'NONE' | 'READY' | 'QUEUED' | 'PAUSED' | 'SENT' | 'DELIVERED' | 'FAILED' | 'BOUNCED' | 'REPLIED'
+      | 'POSITIVE_REPLY' | 'NEGATIVE_REPLY' | 'MEETING' | 'PROPOSAL' | 'WON' | 'LOST' | 'SUPPRESSED', number>
+      & { revenue: number; currency: string };
+    tasks: { failed24h: number; recovered24h: number };
+    lastSuccessfulRevenueAction: string | null;
+  };
   definitions: Record<string, string>;
 }
 

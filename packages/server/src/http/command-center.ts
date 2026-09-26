@@ -1034,6 +1034,11 @@ export async function buildSystemHealth(
     { id: 'api', label: 'API', state: 'HEALTHY', detail: 'répond' },
   ];
 
+  // Les fournisseurs annoncent parfois les variables qui leur manquent. Utile
+  // dans un terminal, pas sur un écran servi hors du serveur : le nom d'un
+  // secret indique déjà où chercher.
+  for (const component of components) component.detail = withoutEnvNames(component.detail);
+
   const worst: HealthState = components.some((c) => c.state === 'OFFLINE') ? 'DEGRADED'
     : components.some((c) => c.state === 'BLOCKED') ? 'DEGRADED'
       : components.some((c) => c.state === 'UNKNOWN') ? 'DEGRADED' : 'HEALTHY';
@@ -1045,6 +1050,14 @@ export async function buildSystemHealth(
     aiLive: config.ai.live,
     components,
   };
+}
+
+/** Remplace tout nom de variable d'identifiants par une mention neutre. */
+export function withoutEnvNames(detail: string): string {
+  return detail
+    .replace(/\b(?:GMAIL|OPENAI|ANTHROPIC|BRAVE|SEARXNG|GITHUB)_[A-Z0-9_]+\b(?:\s*,\s*(?:GMAIL|OPENAI|ANTHROPIC|BRAVE|SEARXNG|GITHUB)_[A-Z0-9_]+\b)*/g,
+      'identifiants de configuration')
+    .replace(/(identifiants de configuration)(\s*,?\s*identifiants de configuration)+/g, '$1');
 }
 
 // ─── BOUCLE DE PROSPECTION ──────────────────────────────────────────────────

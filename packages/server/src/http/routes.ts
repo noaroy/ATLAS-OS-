@@ -26,6 +26,7 @@ import { missionEconomics, estimateCostUsd, toCsv, toPrintableHtml } from '@atla
 import type { AtlasSystem } from '../bootstrap.ts';
 import { sendOk } from './reply.ts';
 import { buildCockpit } from './cockpit.ts';
+import { buildRevenueMobile } from './revenue-mobile.ts';
 import { isSecureRequest, requireFounder, requireOperator, tokenFrom } from './auth.ts';
 import { appendSetCookie, clearSessionCookie, serializeSessionCookie } from './cookies.ts';
 import { guardLogin, type Limiters } from './limits.ts';
@@ -121,6 +122,10 @@ export function registerRoutes(app: FastifyInstance, system: AtlasSystem, limite
   // qui pourrait contourner une approbation n'aurait plus rien d'un écran.
   app.get('/api/cc/war-room', async (_request, reply) =>
     sendOk(reply, buildWarRoom(repos, system.config)));
+
+  // L'écran de téléphone : une seule lecture, sans sonde externe, demandée toutes les dix secondes.
+  app.get('/api/cc/revenue', async (_request, reply) =>
+    sendOk(reply, buildRevenueMobile(repos, system.config)));
 
   // La page unique du moteur commercial et ses décisions.
   registerSalesRoutes(app, system);

@@ -789,7 +789,66 @@ export const cc = {
   analytics: () => get<AnalyticsView>('/api/cc/analytics'),
   dashboard: (range: DashboardRange, segment: string | null) =>
     get<SalesDashboard>(`/api/cc/dashboard?range=${range}${segment ? `&segment=${encodeURIComponent(segment)}` : ''}`),
+  revenue: () => get<RevenueMobile>('/api/cc/revenue'),
 };
+
+// ─── L'écran de téléphone ────────────────────────────────────────────────────
+// Miroir de `packages/server/src/http/revenue-mobile.ts`.
+
+export type OutboundMode = 'OFF' | 'INTERNAL_TEST' | 'ACTIVE';
+
+export interface RevenueMobile {
+  generatedAt: string;
+  header: {
+    status: 'ONLINE' | 'DEGRADED';
+    reasons: string[];
+    outbound: OutboundMode;
+    sendWindow: { window: string; open: boolean };
+    killSwitch: { paused: boolean; reason: string | null; by: string | null; at: string | null };
+    aiCostTodayUsd: number | null;
+    aiCostUnknownCalls: number;
+    services: Array<{ id: string; label: string; state: SystemLight['state']; detail: string }>;
+  };
+  kpis: {
+    discoveredToday: number;
+    qualifiedToday: number;
+    highPriorityToday: number;
+    contactReadyToday: number;
+    sentToday: number;
+    repliesToday: number;
+    positiveRepliesToday: number;
+    meetings: number;
+    proposals: number | null;
+    clientsWon: number;
+    revenueSigned: number;
+    currency: string;
+    pipelinePotential: number | null;
+  };
+  funnel: Array<{ key: string; label: string; count: number | null; rate: number | null }>;
+  todo: {
+    hotLeads: number; approvals: number; followUps: number; recommendations: number;
+    segmentsToApprove: number; total: number;
+    approvedToSend: number; dailyCap: number; sentToday: number; hourlyCap: number;
+  };
+  hotLeads: Array<{ domain: string; companyName: string; intent: string; receivedAt: string; subject: string | null; excerpt: string | null }>;
+  loop: {
+    lastRevenueActionAt: string | null;
+    lastRevenueAction: string | null;
+    lastExpansion: {
+      id: string; status: string; startedAt: string; finishedAt: string | null;
+      universe: number | null; qualified: number | null; highPriority: number | null;
+      costUsd: number; stopReason: string | null;
+    } | null;
+  };
+  costs: {
+    todayUsd: { openai: number | null; anthropic: number | null; search: number | null; total: number | null };
+    caps: { aiDailyUsd: number | null; salesAiDailyUsd: number | null };
+    perQualifiedUsd: number | null;
+    perContactReadyUsd: number | null;
+    perClientUsd: number | null;
+  };
+  definitions: Record<string, string>;
+}
 
 // ─── Le moteur commercial : la page unique et ses décisions ──────────────────
 

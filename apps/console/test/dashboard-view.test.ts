@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   freshnessOf, applyResult, ago, mainResultOf, rankSegments, todoLines, describeRecommendation, systemProblems,
-  STALE_AFTER_MS, DEAD_AFTER_MS, type LiveState,
+  STALE_AFTER_MS, DEAD_AFTER_MS, headlineStatus, type LiveState,
 } from '../src/lib/dashboard-view.ts';
 
 /**
@@ -99,5 +99,21 @@ describe('libellés', () => {
     assert.deepEqual(systemProblems({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: { paused: false, pauseReason: null } }), []);
     const problems = systemProblems({ search: ok, llm: ok, gmail: { state: 'down', detail: 'jeton expiré' }, workers: ok, outbound: { paused: true, pauseReason: 'AUTO_PAUSE_BOUNCE' } });
     assert.deepEqual(problems, ['Email : jeton expiré', 'Envois en pause — AUTO_PAUSE_BOUNCE']);
+  });
+});
+
+describe('l’état de tête du téléphone se constate côté navigateur', () => {
+  const t0 = 1_800_000_000_000;
+  test('API inaccessible dès le départ : DOWN, pas « chargement » sans fin', () => {
+    assert.equal(headlineStatus(freshnessOf(null, t0, true), 0, null), 'LOADING');
+    assert.equal(headlineStatus(freshnessOf(null, t0, true), 1, null), 'DOWN');
+  });
+  test('API périmée : STALE prime sur ce que le serveur disait de lui-même', () => {
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + STALE_AFTER_MS, false), 2, 'ONLINE'), 'STALE');
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + DEAD_AFTER_MS, false), 9, 'ONLINE'), 'DOWN');
+  });
+  test('lecture fraîche : l’état du serveur, tel quel', () => {
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + 1_000, false), 0, 'DEGRADED'), 'DEGRADED');
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + 1_000, false), 0, 'ONLINE'), 'ONLINE');
   });
 });

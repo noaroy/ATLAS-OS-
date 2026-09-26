@@ -1,0 +1,22 @@
+# Vercel ne reçoit jamais ni base, ni secret, ni donnée runtime.
+# `vercel deploy` depuis la CLI envoie le répertoire local : si la commande est
+# lancée depuis le VPS, `.env` et la base SQLite sont à côté. Ils ne partent pas.
+.env
+.env.*
+!.env.example
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.token.json
+.gmail-token*
+credentials.json
+client_secret*.json
+backups/
+*.log
+node_modules/
+dist/
+briefs/
+fixtures/

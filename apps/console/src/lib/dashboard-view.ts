@@ -52,6 +52,27 @@ export function ago(iso: string, now: number): string {
 }
 
 /**
+ * L'état affiché en tête de l'écran de téléphone.
+ *
+ * Le serveur ne sait dire que ONLINE ou DEGRADED : un serveur qui répond n'est
+ * pas en panne. DOWN se constate ici — aucune lecture n'a jamais abouti malgré
+ * des essais, ou la dernière réussite est trop ancienne. Entre les deux, des
+ * chiffres encore affichés mais vieillis se disent STALE, jamais ONLINE.
+ */
+export type HeadlineStatus = 'LOADING' | 'ONLINE' | 'DEGRADED' | 'STALE' | 'DOWN';
+
+export function headlineStatus(
+  fresh: Freshness,
+  failures: number,
+  serverStatus: 'ONLINE' | 'DEGRADED' | null,
+): HeadlineStatus {
+  if (fresh.state === 'never') return failures > 0 ? 'DOWN' : 'LOADING';
+  if (fresh.state === 'dead') return 'DOWN';
+  if (fresh.state === 'stale') return 'STALE';
+  return serverStatus ?? 'LOADING';
+}
+
+/**
  * La reprise après une coupure : la lecture suivante réussie remet la
  * fraîcheur à zéro. Pure : (état précédent, résultat) → nouvel état.
  */

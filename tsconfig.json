@@ -41,6 +41,6 @@
       "@atlas/testing": ["packages/testing/src/index.ts"]
     }
   },
-  "include": ["packages/**/*.ts", "scripts/**/*.ts"],
+  "include": ["packages/**/*.ts", "scripts/**/*.ts", "api/**/*.ts"],
   "exclude": ["node_modules", "dist", "apps/console"]
 }

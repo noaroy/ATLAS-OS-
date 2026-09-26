@@ -28,6 +28,7 @@ import { SearchFabricScreen, MultiModelView } from './views/Search.tsx';
 import { OutreachScreen, FollowUpsScreen, AnalyticsScreen } from './views/Outreach.tsx';
 import { SalesView } from './views/Sales.tsx';
 import { HomeView } from './views/Home.tsx';
+import { MobileView, MobileProspectView } from './views/Mobile.tsx';
 
 /**
  * Application shell and routing.
@@ -71,6 +72,10 @@ export default function App() {
       {/* L'accueil : trois questions, sans cadre ni rail. Tout le detail vit
           dans les ecrans du centre de commande, accessibles depuis la page. */}
       <Route path="/" element={<HomeView />} />
+
+      {/* Le revenu depuis un téléphone : une colonne, une lecture, pas de rail. */}
+      <Route path="/m" element={<MobileView />} />
+      <Route path="/m/p/:domain" element={<MobileProspectView />} />
 
       <Route element={<Shell />}>
         {/* L'ecran d'accueil : la page unique du moteur commercial — ce que ca

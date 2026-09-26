@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   freshnessOf, applyResult, ago, mainResultOf, rankSegments, todoLines, describeRecommendation, systemProblems,
-  systemVerdict, opportunitySummary, STALE_AFTER_MS, DEAD_AFTER_MS, type LiveState,
+  systemVerdict, opportunitySummary, headlineStatus, STALE_AFTER_MS, DEAD_AFTER_MS, type LiveState,
 } from '../src/lib/dashboard-view.ts';
 
 /**
@@ -119,5 +119,28 @@ describe('libellés', () => {
       { tier: 'Priorité · 90', contact: 'Email observé : a@b.fr', ready: true });
     assert.equal(opportunitySummary({ tier: null, score: null, contact: { email: 'a@b.fr', observed: false } }).ready, false);
     assert.equal(opportunitySummary({ tier: null, score: null, contact: { email: null, observed: false } }).contact, 'Contact à trouver');
+  });
+});
+
+describe('l’état de tête du téléphone se constate côté navigateur', () => {
+  const t0 = 1_800_000_000_000;
+  test('API inaccessible dès le départ : DOWN, pas « chargement » sans fin', () => {
+    assert.equal(headlineStatus(freshnessOf(null, t0, true), 0, null), 'LOADING');
+    assert.equal(headlineStatus(freshnessOf(null, t0, true), 1, null), 'DOWN');
+  });
+  test('API périmée : STALE prime sur ce que le serveur disait de lui-même', () => {
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + STALE_AFTER_MS, false), 2, 'ONLINE'), 'STALE');
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + DEAD_AFTER_MS, false), 9, 'ONLINE'), 'DOWN');
+  });
+  test('lecture fraîche : l’état du serveur, tel quel', () => {
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + 1_000, false), 0, 'DEGRADED'), 'DEGRADED');
+    assert.equal(headlineStatus(freshnessOf(t0, t0 + 1_000, false), 0, 'ONLINE'), 'ONLINE');
+  });
+  test('reprise : une lecture réussie après des échecs rend l’état du serveur', () => {
+    let state: LiveState<number> = { data: null, lastOkAt: null, failures: 0, lastError: null };
+    state = applyResult(state, { ok: false, error: 'Failed to fetch' });
+    assert.equal(headlineStatus(freshnessOf(state.lastOkAt, t0, state.failures > 0), state.failures, null), 'DOWN');
+    state = applyResult(state, { ok: true, data: 1, at: t0 });
+    assert.equal(headlineStatus(freshnessOf(state.lastOkAt, t0 + 500, state.failures > 0), state.failures, 'ONLINE'), 'ONLINE');
   });
 });

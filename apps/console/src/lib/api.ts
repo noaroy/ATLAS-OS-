@@ -789,7 +789,85 @@ export const cc = {
   analytics: () => get<AnalyticsView>('/api/cc/analytics'),
   dashboard: (range: DashboardRange, segment: string | null) =>
     get<SalesDashboard>(`/api/cc/dashboard?range=${range}${segment ? `&segment=${encodeURIComponent(segment)}` : ''}`),
+  revenue: () => get<RevenueMobile>('/api/cc/revenue'),
+  prospect: (domain: string) => get<ProspectDetail>(`/api/cc/prospects/${encodeURIComponent(domain)}`),
 };
+
+// ─── L'écran de téléphone ────────────────────────────────────────────────────
+// Miroir de `packages/server/src/http/revenue-mobile.ts`.
+
+export type OutboundMode = 'OFF' | 'INTERNAL_TEST' | 'ACTIVE';
+
+export interface RevenueMobile {
+  generatedAt: string;
+  header: {
+    status: 'ONLINE' | 'DEGRADED';
+    reasons: string[];
+    outbound: OutboundMode;
+    sendWindow: { window: string; open: boolean };
+    killSwitch: { paused: boolean; reason: string | null; by: string | null; at: string | null };
+    aiCostTodayUsd: number | null;
+    aiCostUnknownCalls: number;
+    lastRevenueActionAt: string | null;
+    lastRevenueAction: string | null;
+    lastSyncAt: string | null;
+    lastCycleAt: string | null;
+    services: Array<{ id: string; label: string; state: SystemLight['state']; detail: string }>;
+  };
+  kpis: {
+    discoveredToday: number; qualifiedToday: number; highPriority: number; contactReady: number;
+    sentToday: number; repliesToday: number; positiveRepliesToday: number; meetings: number;
+    proposals: number | null; won: number; revenueSigned: number; currency: string; pipelinePotential: number | null;
+  };
+  funnel: Array<{ key: string; count: number | null; rate: number | null }>;
+  priorityProspects: Array<{ domain: string; companyName: string; tier: string | null; score: number | null; whyFit: string | null; contactReady: boolean }>;
+  drafts: {
+    awaitingApproval: number;
+    approvedToSend: number;
+    items: Array<{ id: string; domain: string; companyName: string; recipient: string; subject: string; createdAt: string }>;
+  };
+  todo: SalesDashboard['todo'];
+  caps: { dailyNewOutreach: number; sentToday: number; hourly: number };
+  expansions: Array<{
+    id: string; status: string; startedAt: string; finishedAt: string | null; seeds: number;
+    universe: number | null; qualified: number | null; highPriority: number | null; costUsd: number; stopReason: string | null;
+  }>;
+  costs: {
+    todayUsd: { openai: number | null; anthropic: number | null; search: number | null; total: number | null };
+    caps: { aiDailyUsd: number | null; salesAiDailyUsd: number | null };
+    perQualifiedUsd: number | null; perContactReadyUsd: number | null; perClientUsd: number | null;
+  };
+  definitions: Record<string, string>;
+}
+
+export interface ProspectDetail {
+  generatedAt: string;
+  identity: {
+    prospectId: string; companyName: string; domain: string; website: string | null; country: string | null;
+    industry: string | null; identityConfidence: number | null; identitySources: string[];
+    discoveredAt: string; sourceUrl: string | null; query: string | null; duplicates: number;
+  };
+  qualification: { state: string; tier: string | null; score: number | null; whyFit: string | null; rejectReason: string | null };
+  contact: {
+    name: string | null; role: string | null; email: string | null; phone: string | null; page: string | null;
+    method: string | null; observed: boolean; sourceUrl: string | null; confidence: number | null; suitability: string | null;
+  };
+  evidence: Array<{ field: string; claim: string; nature: string; sourceUrl: string | null; confidence: number; collectedAt: string }>;
+  urls: string[];
+  recommendations: Array<{ company: string; domain: string; fitReason: string; sourceUrl: string; evidenceQuote: string }>;
+  drafts: Array<{
+    id: string; purpose: string; state: string; recipient: string; subject: string; body: string;
+    sources: Array<{ quote: string; sourceUrl: string }>; createdAt: string; createdBy: string;
+  }>;
+  history: {
+    loop: Array<{ at: string; from: string | null; to: string; reason: string | null; actor: string }>;
+    ledger: Array<{ at: string; kind: string; note: string | null; by: string }>;
+    currentLoopState: string | null;
+    lastSentAt: string | null;
+  };
+  blockers: string[];
+  firstTouchReady: boolean;
+}
 
 // ─── Le moteur commercial : la page unique et ses décisions ──────────────────
 

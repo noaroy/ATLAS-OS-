@@ -226,6 +226,7 @@ export {
 export {
   SALES_ENGINE_TASKS, SALES_SCHEDULE, SALES_SETTINGS,
   readGlobalPause, setGlobalPause, readStrategy, sendPolicyOf, bounceCounts, replyReceivedFor, policyStateFor,
+  registryRecommendationsFor,
   defaultOutbound, defaultDiscovery, segmentSupportedByBatch, pickSegmentForDiscovery,
   cancelFollowUps, applyReplyConsequences, createSalesEngineHandlers, runSendCycle, scheduleSalesCycle,
   gatherSalesStats, runOptimizationCycle, decideRecommendation, rollbackStrategy, recordSalesOutcome,

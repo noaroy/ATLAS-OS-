@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import type { AtlasConfig, Logger } from '@atlas/core';
 import { canonicalDomainOf, describeError, id, nowIso } from '@atlas/core';
 import type {
-  Repositories, TaskRow, OutreachDraftRow, SalesSegment, OptimizationRecommendation, OutcomeKind,
+  Repositories, TaskRow, OutreachDraftRow, SalesSegment, OptimizationRecommendation, OutcomeKind, SalesProspect,
 } from '@atlas/data';
 import type { MailInboxProvider, MailOutboundProvider } from '@atlas/intelligence';
 import { GmailInboxProvider, GmailOutboundProvider, DryRunOutboundProvider } from '@atlas/intelligence';
@@ -23,6 +23,11 @@ import {
   HOT_LEAD_INTENTS,
   STOP_FOLLOW_UP_INTENTS,
   isTechnicalDomain,
+  buildOutreachDraft,
+  personalizationIsGrounded,
+  customerFacingObservation,
+  outreachFactFrom,
+  isCommercialEvidence,
   type LoopState,
   type ReplyIntent,
   type SendPolicy,
@@ -482,8 +487,13 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
   };
 
   const send = async (_task: TaskRow, context: WorkerContext): Promise<WorkerOutcome> => {
-    const report = await runSendCycle({ ...deps, sourceRoot }, { outbound, now: now(), heartbeat: context.heartbeat });
-    return { kind: 'DONE', result: { ...report } };
+    // Le premier contact se prépare avant l'envoi, mais ne part que par
+    // `runSendCycle` : aucun autre chemin réseau n'existe.
+    const provider = await outbound();
+    const at = now();
+    const firstTouch = materializeFirstTouchDrafts(repos, config, { now: at, transportConfigured: provider.status().configured });
+    const report = await runSendCycle({ ...deps, sourceRoot }, { outbound: async () => provider, now: at, heartbeat: context.heartbeat });
+    return { kind: 'DONE', result: { ...report, firstTouch: { ...firstTouch, skipped: firstTouch.skipped.length } } };
   };
 
   const discover = async (_task: TaskRow, context: WorkerContext): Promise<WorkerOutcome> => {
@@ -577,6 +587,201 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     [SALES_ENGINE_TASKS.ANALYTICS]: analytics,
     [SALES_ENGINE_TASKS.OPTIMIZATION]: optimize,
   };
+}
+
+// ─── Le premier contact automatique ──────────────────────────────────────────
+
+export type FirstTouchRecommendation = NonNullable<Parameters<typeof buildOutreachDraft>[0]['recommendations']>[number];
+
+export const FIRST_TOUCH_ACTOR = 'sales-engine:first-touch';
+export const AUTO_APPROVAL_ACTOR = 'sales-engine:auto-approval';
+const TIER_ORDER: Record<string, number> = { PRIORITY: 0, GOOD_FIT: 1, WATCH: 2 };
+
+const byTierThenScore = (a: SalesProspect, b: SalesProspect): number =>
+  (TIER_ORDER[a.tier ?? ''] ?? 3) - (TIER_ORDER[b.tier ?? ''] ?? 3)
+  || (b.score ?? -1) - (a.score ?? -1)
+  || (a.domain ?? '').localeCompare(b.domain ?? '')
+  || a.id.localeCompare(b.id);
+
+const FIRST_TOUCH_COMMERCIAL_RELATIONSHIP_TYPES = new Set<string>([
+  'DISTRIBUTOR', 'RESELLER', 'INTEGRATOR', 'IMPORTER', 'WHOLESALER', 'INSTALLER',
+  'MAINTENANCE_PARTNER', 'OEM_PARTNER', 'COMPLEMENTARY_VENDOR', 'LIKELY_CUSTOMER', 'VISIBLE_PARTNER',
+]);
+
+/**
+ * L'échantillon par défaut vient du graphe d'expansion du prospect lui-même.
+ * Une relation générique de segment, un concurrent ou une relation inférée ne
+ * suffit jamais : il faut une cible commerciale vérifiée et une source officielle.
+ */
+export function registryRecommendationsFor(repos: Repositories, prospect: SalesProspect): FirstTouchRecommendation[] {
+  if (!prospect.domain) return [];
+  const own = canonicalDomainOf(prospect.domain);
+  const isDomainLike = (value: string): boolean =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(value.trim());
+  const hasThreeWords = (value: string): boolean => value.trim().split(/\s+/).filter(Boolean).length >= 3;
+
+  const relationships = repos.expansion.relationshipsOf(own)
+    .filter((r) => {
+      if (canonicalDomainOf(r.sourceKey) !== own) return false;
+      if (r.status !== 'VERIFIED' || r.sourceTrust !== 'OFFICIAL') return false;
+      if (!FIRST_TOUCH_COMMERCIAL_RELATIONSHIP_TYPES.has(r.relationshipType)) return false;
+      if (!/^https?:\/\//i.test(r.evidenceUrl) || !hasThreeWords(r.evidenceSummary)) return false;
+      if (!r.targetName.trim() || !isDomainLike(r.targetKey)) return false;
+      const targetDomain = canonicalDomainOf(r.targetKey);
+      return Boolean(targetDomain)
+        && targetDomain !== own
+        && !targetDomain.endsWith(`.${own}`)
+        && !own.endsWith(`.${targetDomain}`);
+    })
+    .sort((a, b) =>
+      b.confidence - a.confidence
+      || canonicalDomainOf(a.targetKey).localeCompare(canonicalDomainOf(b.targetKey))
+      || a.evidenceUrl.localeCompare(b.evidenceUrl));
+
+  const out: FirstTouchRecommendation[] = [];
+  const seen = new Set<string>();
+  for (const relationship of relationships) {
+    const domain = canonicalDomainOf(relationship.targetKey);
+    if (seen.has(domain)) continue;
+    seen.add(domain);
+    const evidence = relationship.evidenceSummary.trim();
+    out.push({
+      company: relationship.targetName.trim(),
+      domain,
+      sourceUrl: relationship.evidenceUrl,
+      evidenceQuote: evidence,
+      fitReason: evidence,
+    });
+    if (out.length === 3) break;
+  }
+  return out.length >= 2 ? out : [];
+}
+
+export interface FirstTouchReport {
+  considered: number;
+  drafted: number;
+  autoApproved: number;
+  skipped: Array<{ domain: string; reasons: string[] }>;
+}
+
+/**
+ * Du prospect canonique au brouillon `outreach_drafts`, pour ceux — et
+ * seulement ceux — que toutes les gardes laissent passer. Le brouillon naît
+ * READY_FOR_APPROVAL. Il n'est approuvé automatiquement que si
+ * `sales.humanApprovalRequired` est faux ET que la politique d'envoi entière
+ * ne trouve rien à redire ; l'approbation est alors signée et publiée.
+ * Rien ne part d'ici : `runSendCycle` reste le seul chemin d'envoi.
+ */
+export function materializeFirstTouchDrafts(
+  repos: Repositories,
+  config: AtlasConfig,
+  options: {
+    now: Date;
+    transportConfigured: boolean;
+    limit?: number;
+    recommendationsFor?: (prospect: SalesProspect) => FirstTouchRecommendation[];
+  },
+): FirstTouchReport {
+  const report: FirstTouchReport = { considered: 0, drafted: 0, autoApproved: 0, skipped: [] };
+  const recommendationsFor = options.recommendationsFor ?? ((p: SalesProspect) => registryRecommendationsFor(repos, p));
+  const limit = options.limit ?? config.sales.maxNewOutreachPerDay;
+  const done = new Set<string>();
+
+  for (const p of repos.sales.discoveredSince(null).sort(byTierThenScore)) {
+    if (report.drafted >= limit) break;
+    if (!p.domain || done.has(canonicalDomainOf(p.domain))) continue;
+    const domain = canonicalDomainOf(p.domain);
+    done.add(domain);
+    report.considered += 1;
+
+    const reasons = [...repos.sales.firstTouchReadiness(p.id).blockers];
+    if (reasons.length === 0) {
+      const drafts = repos.salesLoop.draftsForDomain(domain);
+      if (repos.salesEngine.isSuppressed({ email: p.contactEmail, domain, company: p.companyName }).suppressed) reasons.push('SUPPRESSED');
+      if (replyReceivedFor(repos, domain)) reasons.push('REPLY_RECEIVED');
+      if (repos.salesLoop.lastSentTo(domain) !== null) reasons.push('ALREADY_SENT');
+      const firstTouchDrafts = drafts.filter((d) => d.purpose === 'FIRST_TOUCH');
+      const hasActiveFirstTouch = firstTouchDrafts.some((d) => d.state !== 'ABANDONED');
+      const loop = repos.salesLoop.currentState(domain);
+      if (firstTouchDrafts.length > 0 && !hasActiveFirstTouch && loop === 'READY_FOR_APPROVAL') {
+        move(repos, domain, 'BLOCKED', 'brouillon abandonné obsolète');
+        move(repos, domain, 'QUALIFYING', 'requalification après brouillon abandonné');
+      }
+      if (hasActiveFirstTouch) reasons.push('PRIOR_FIRST_TOUCH');
+      const loopAfterRecovery = repos.salesLoop.currentState(domain);
+      if (loopAfterRecovery !== null && loopAfterRecovery !== 'QUALIFYING') reasons.push(`LOOP_${loopAfterRecovery}`);
+    }
+    if (reasons.length > 0) {
+      report.skipped.push({ domain, reasons });
+      continue;
+    }
+
+    const recommendations = recommendationsFor(p);
+    const outcome = buildOutreachDraft({
+      company: p.companyName,
+      website: p.website,
+      facts: repos.sales.evidenceFor(p.id).filter(isCommercialEvidence).map(outreachFactFrom),
+      contact: {
+        name: p.contactName, role: p.contactRole, email: p.contactEmail, phone: p.contactPhone,
+        contactPage: p.contactPage, sourceUrl: p.contactSourceUrl, confidence: p.contactConfidence ?? 0,
+        named: Boolean(p.contactName),
+      },
+      whyThisCompany: p.whyFit ?? '',
+      senderName: config.sales.senderName,
+      offer: { priceEur: 49, deliveryHours: 48, freePreviewCount: 3, recurringAvailable: true },
+      recommendations,
+    });
+    if (!outcome.draft || !personalizationIsGrounded(outcome.draft)) {
+      report.skipped.push({ domain, reasons: [outcome.refusal ?? 'NOT_GROUNDED', outcome.reason] });
+      continue;
+    }
+
+    const d = outcome.draft;
+    const saved = repos.salesLoop.saveDraft({
+      domain, companyName: p.companyName, recipient: p.contactEmail!, subject: d.subject, body: d.messageEmail,
+      purpose: 'FIRST_TOUCH', conversionScore: p.score, rationale: p.whyFit,
+      sources: [
+        { quote: d.evidenceExcerpt, sourceUrl: d.sourceUsedForPersonalization },
+        ...d.recommendations.map((r) => ({ quote: r.fitReason, sourceUrl: r.sourceUrl })),
+      ],
+      createdBy: FIRST_TOUCH_ACTOR,
+    });
+    if (repos.salesLoop.currentState(domain) === null) move(repos, domain, 'QUALIFYING', 'prospect canonique prêt au premier contact');
+    move(repos, domain, 'READY_FOR_APPROVAL', `brouillon ${saved.id}`);
+    report.drafted += 1;
+  }
+
+  report.autoApproved = autoApproveFirstTouch(repos, config, options.now, options.transportConfigured);
+  return report;
+}
+
+/**
+ * L'approbation automatique, quand la configuration la permet. Seuls les
+ * brouillons de ce pipeline, et seulement ceux que la politique d'envoi
+ * complète laisserait partir maintenant. Chaque approbation est consignée
+ * (décision signée) et publiée (événement).
+ */
+export function autoApproveFirstTouch(repos: Repositories, config: AtlasConfig, now: Date, transportConfigured: boolean): number {
+  if (config.sales.humanApprovalRequired) return 0;
+  const policy = sendPolicyOf(config);
+  let approved = 0;
+  for (const draft of repos.salesLoop.draftsInState('READY_FOR_APPROVAL')) {
+    if (draft.createdBy !== FIRST_TOUCH_ACTOR || draft.purpose !== 'FIRST_TOUCH') continue;
+    const verdict = evaluateSendPolicy(policy, policyStateFor(repos, config, draft, now, transportConfigured));
+    if (verdict.blocks.length > 0) continue;
+    if (repos.sales.ledgerFor(draft.domain) !== null || repos.salesLoop.lastSentTo(draft.domain) !== null) continue;
+    const note = 'humanApprovalRequired=false · politique d’envoi sans blocage · faits et échantillon sourcés';
+    const decided = repos.salesLoop.decideDraft({ draftId: draft.id, decision: 'APPROVED_TO_SEND', decidedBy: AUTO_APPROVAL_ACTOR, note });
+    if (!decided.applied) continue;
+    move(repos, draft.domain, 'APPROVED_TO_SEND', `approbation automatique de ${draft.id}`);
+    repos.events.append({
+      id: id('evt'), type: 'system.alert', severity: 'info', source: AUTO_APPROVAL_ACTOR, missionId: null, agentKey: null,
+      message: `Premier contact approuvé automatiquement — ${draft.domain} (${draft.id})`,
+      payload: { draftId: draft.id, domain: draft.domain, note }, createdAt: nowIso(),
+    });
+    approved += 1;
+  }
+  return approved;
 }
 
 // ─── Le cycle d'envoi ────────────────────────────────────────────────────────

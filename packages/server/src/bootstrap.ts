@@ -41,6 +41,11 @@ import {
   createAutopilotHandlers,
   createExpansionHandlers,
   scheduleAutopilotCycle,
+  createControllerHandlers,
+  scheduleControllerPoll,
+  createSupervisorHandlers,
+  scheduleSupervisorPoll,
+  createAiProviders,
   DEMO_HANDLERS,
   type RecoveryReport,
 } from '@atlas/runtime';
@@ -340,13 +345,26 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
   // déterministe du serveur — le moteur de recherche et le modèle plafonné
   // sont ceux du serveur, aucun script, aucune voie externe.
   const expansionHandlers = createExpansionHandlers({ repos, config, logger, search: engine, provider });
+  // Le pont contrôleur : le sondage est déterministe et servi ici ; la tâche
+  // ENGINEERING_CHANGE qu'il pose suit la route existante (CLAUDE_CODE), donc
+  // le runner d'ingénierie. Cadencé seulement par ATLAS_CONTROLLER_ENABLED.
+  const controllerHandlers = createControllerHandlers({ repos, config, logger, actor: `atlas-server#${process.pid}` });
+  const controllerEnabled = config.controller.enabled && options.daemon === true;
+  // Le superviseur GPT : relire ce que Claude Code a produit et décider de la
+  // suite. Servi ici, par le daemon du serveur — le seul qui ait la clé
+  // OpenAI — et cadencé seulement par ATLAS_SUPERVISOR_ENABLED. Il ne lance
+  // jamais Claude Code : la suite qu'il pose suit la route CLAUDE_CODE.
+  const supervisorHandlers = createSupervisorHandlers({
+    repos, config, logger, provider: createAiProviders({ config, logger, repos }).openai, actor: `atlas-server#${process.pid}`,
+  });
+  const gptSupervisorEnabled = config.supervisor.enabled && options.daemon === true;
   const workers = createWorkerRegistry({
-    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers, ...expansionHandlers }, workspaceRoot: process.cwd(),
+    config, logger, repos, handlers: { ...DEMO_HANDLERS, ...salesHandlers, ...autopilotHandlers, ...expansionHandlers, ...controllerHandlers, ...supervisorHandlers }, workspaceRoot: process.cwd(),
   });
   // Hermes avance les chaînes (une revue qui demande une correction en crée
   // la tâche) ; en ingénierie externe, CLAUDE / CLAUDE_CODE restent en file
   // pour le service atlas-engineer, seul à porter git et le binaire.
-  const daemon = salesEnabled || autopilotEnabled
+  const daemon = salesEnabled || autopilotEnabled || controllerEnabled || gptSupervisorEnabled
     ? new AtlasDaemon({
       repos, registry: workers.registry, logger, hermes: workers.hermes,
       workerTypes: serverWorkerTypes(config.engineering.runner),
@@ -367,6 +385,8 @@ export function createSystem(config: AtlasConfig, options: CreateSystemOptions =
     settings,
     salesScheduler: salesEnabled ? (now) => scheduleSalesCycle(repos, config, now) : undefined,
     autopilotScheduler: autopilotEnabled ? (now) => scheduleAutopilotCycle(repos, config, now) : undefined,
+    controllerScheduler: controllerEnabled ? (now) => scheduleControllerPoll(repos, config, now) : undefined,
+    gptSupervisorScheduler: gptSupervisorEnabled ? (now) => scheduleSupervisorPoll(repos, config, now) : undefined,
   });
 
   seed(repos, config, logger);

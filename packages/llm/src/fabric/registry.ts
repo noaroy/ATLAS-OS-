@@ -65,6 +65,12 @@ export interface InferenceMetrics {
   rateLimitHits: number;
   totalDurationMs: number;
   totalCostUsd: number;
+  /**
+   * Appels réussis dont le tarif est inconnu. Leur coût n'entre pas dans
+   * `totalCostUsd` — et n'y entre surtout pas comme zéro : un total qui les
+   * compterait gratuits annoncerait une dépense plus faible que la vraie.
+   */
+  unpricedCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;
 }
@@ -76,6 +82,7 @@ const emptyMetrics = (): InferenceMetrics => ({
   rateLimitHits: 0,
   totalDurationMs: 0,
   totalCostUsd: 0,
+  unpricedCalls: 0,
   totalInputTokens: 0,
   totalOutputTokens: 0,
 });
@@ -169,7 +176,7 @@ export class InferenceProviderRegistry {
   }
 
   /** Enregistre ce qu'un appel réel a appris. Seul point d'entrée des métriques. */
-  recordSuccess(id: string, response: LlmResponse, durationMs: number, costUsd: number): void {
+  recordSuccess(id: string, response: LlmResponse, durationMs: number, costUsd: number | null): void {
     const record = this.#records.get(id);
     if (!record) return;
 
@@ -177,7 +184,8 @@ export class InferenceProviderRegistry {
     m.calls += 1;
     m.successes += 1;
     m.totalDurationMs += durationMs;
-    m.totalCostUsd += costUsd;
+    if (costUsd === null) m.unpricedCalls += 1;
+    else m.totalCostUsd += costUsd;
     m.totalInputTokens += response.usage.inputTokens;
     m.totalOutputTokens += response.usage.outputTokens;
 
@@ -238,7 +246,8 @@ export class InferenceProviderRegistry {
     const successRate = m.successes / m.calls;
     const errorRate = m.failures / m.calls;
     const averageLatencyMs = m.totalDurationMs / m.calls;
-    const averageCostUsd = m.successes > 0 ? m.totalCostUsd / m.successes : 0;
+    const priced = m.successes - m.unpricedCalls;
+    const averageCostUsd = priced > 0 ? m.totalCostUsd / priced : 0;
 
     // La latence entre par une décroissance douce plutôt qu'un seuil : entre
     // 4 999 ms et 5 001 ms il n'y a rien à décider, et un seuil prétendrait le

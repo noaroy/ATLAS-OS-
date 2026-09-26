@@ -15,6 +15,7 @@
 #   ./deployment/atlas-cli.sh autopilot-once | autopilot-status | autopilot-queue | autopilot-report   # la boucle de contrôle : un cycle, l'état, la file, les cycles
 #   ./deployment/atlas-cli.sh autopilot pause "motif" | resume | decide <id> done|reject
 #   ./deployment/atlas-cli.sh expansion-run [--seed=<domaine>] | expansion-status | expansion-report | expansion graph <domaine> | expansion candidates   # l'expansion de prospects, aucun envoi
+#   ./deployment/atlas-cli.sh controller-status | controller validate --file=<json> | controller poll   # le pont contrôleur GitHub, jeton jamais affiché
 #   ./deployment/atlas-cli.sh npm run client:status          # une commande npm brute
 #   ./deployment/atlas-cli.sh --shell                        # un shell dans le conteneur
 #   ./deployment/atlas-cli.sh --build                        # construire l'image outils (une fois par version)
@@ -37,7 +38,7 @@ SERVICE="${ATLAS_CLI_SERVICE:-atlas-cli}"
 IMAGE="${ATLAS_CLI_IMAGE:-atlas-os-cli:1.0.0}"
 
 die() { printf 'atlas-cli : %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # ── La commande demandée → la commande npm ────────────────────────────────────
 # Une liste fermée : ce wrapper ne devine pas. `npm`, `node`, `sh`, `bash`
@@ -74,6 +75,8 @@ npm_script_of() {
     expansion-run)    printf 'expansion:run' ;;
     expansion-status) printf 'expansion:status' ;;
     expansion-report) printf 'expansion:report' ;;
+    controller)        printf 'controller' ;;
+    controller-status) printf 'controller:status' ;;
     *) return 1 ;;
   esac
 }

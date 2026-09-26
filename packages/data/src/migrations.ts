@@ -2574,4 +2574,85 @@ CREATE INDEX IF NOT EXISTS idx_prospect_evidence_entity ON prospect_evidence(ent
 CREATE INDEX IF NOT EXISTS idx_prospect_evidence_run ON prospect_evidence(run_id);
 `,
   },
+  {
+    version: 39,
+    name: 'gpt-supervisor',
+    sql: `
+-- --- Le superviseur GPT -----------------------------------------------------
+--
+-- Un objectif autonome est une chaine de taches ENGINEERING_CHANGE : Claude
+-- Code produit un diff et s'arrete a READY_FOR_REVIEW ; GPT relit et decide
+-- COMPLETE, NEXT_TASK, CORRECT ou BLOCKED. Deux tables, et seulement l'etat
+-- que la file de taches ne porte pas deja :
+--
+--   supervisor_objectives  l'objectif, ses bornes, son issue terminale ;
+--   supervisor_reviews     une revue par tache relue, jamais deux.
+--
+-- L'unicite est tenue par la base, pas par une lecture prealable : une tache
+-- n'a qu'une revue (task_id UNIQUE), un cycle n'a qu'une revue
+-- (objective_id, cycle), et une revue ne pose qu'une suite (child_task_id).
+-- La suite elle-meme passe par le registre des operations externes, avec une
+-- cle par objectif et par cycle.
+CREATE TABLE IF NOT EXISTS supervisor_objectives (
+  objective_id        TEXT PRIMARY KEY,
+  root_task_id        TEXT NOT NULL UNIQUE,
+  chain_id            TEXT NOT NULL,
+  -- cli · controller-bridge
+  source              TEXT NOT NULL,
+  objective           TEXT NOT NULL,
+  -- allowed_paths, test_commands, acceptance_criteria, constraints, limits, repo_target
+  spec_json           TEXT NOT NULL,
+  -- ACTIVE · COMPLETE · BLOCKED
+  status              TEXT NOT NULL DEFAULT 'ACTIVE',
+  max_cycles          INTEGER NOT NULL,
+  max_corrections     INTEGER NOT NULL,
+  max_cost_usd        REAL NOT NULL,
+  deadline_at         TEXT NOT NULL,
+  -- les taches posees pour l'objectif, racine comprise
+  cycles              INTEGER NOT NULL DEFAULT 1,
+  corrections         INTEGER NOT NULL DEFAULT 0,
+  -- le commit dont partent tous les worktrees de l'objectif
+  base_commit         TEXT,
+  terminal_code       TEXT,
+  terminal_reason     TEXT,
+  terminal_review_id  TEXT,
+  result_json         TEXT,
+  last_note           TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  finished_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_supervisor_objectives_status ON supervisor_objectives(status, created_at);
+
+CREATE TABLE IF NOT EXISTS supervisor_reviews (
+  review_id      TEXT PRIMARY KEY,
+  objective_id   TEXT NOT NULL REFERENCES supervisor_objectives(objective_id),
+  task_id        TEXT NOT NULL UNIQUE,
+  cycle          INTEGER NOT NULL,
+  -- RESERVED · DECIDED
+  state          TEXT NOT NULL,
+  attempts       INTEGER NOT NULL DEFAULT 1,
+  reserved_by    TEXT NOT NULL,
+  reserved_at    TEXT NOT NULL,
+  lease_until    TEXT NOT NULL,
+  -- GPT · GUARD
+  reviewer       TEXT,
+  -- COMPLETE · NEXT_TASK · CORRECT · BLOCKED
+  decision       TEXT,
+  code           TEXT,
+  reason         TEXT,
+  decision_json  TEXT,
+  diff_hash      TEXT,
+  child_task_id  TEXT,
+  model          TEXT,
+  calls          INTEGER NOT NULL DEFAULT 0,
+  cost_usd       REAL,
+  decided_at     TEXT,
+  UNIQUE(objective_id, cycle)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_supervisor_reviews_child
+  ON supervisor_reviews(child_task_id) WHERE child_task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_supervisor_reviews_objective ON supervisor_reviews(objective_id, cycle);
+`,
+  },
 ];

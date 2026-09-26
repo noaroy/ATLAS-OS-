@@ -803,6 +803,10 @@ export class TaskRepository {
    * La généralisation de ce qui protégeait l'envoi commercial. Même principe,
    * même conséquence assumée : un plantage entre la réservation et la
    * confirmation laisse l'opération bloquée plutôt que de risquer un doublon.
+   *
+   * `blockedBy` : une autre réservation qui, si elle existe, interdit
+   * celle-ci. Vérifiée par la même instruction que l'insertion — il n'y a pas
+   * d'instant où l'une est lue et l'autre pas encore écrite.
    */
   reserveExternalOperation(input: {
     idempotencyKey: string;
@@ -811,41 +815,86 @@ export class TaskRepository {
     target?: string | null;
     summary?: string | null;
     claimedBy: string;
-  }): { reserved: boolean; confirmed: boolean; externalRef: string | null; reason: string } {
-    const existing = this.db
-      .prepare('SELECT idempotency_key FROM external_operations WHERE idempotency_key = ?')
-      .get(input.idempotencyKey) as { idempotency_key: string } | undefined;
-
-    if (existing) {
-      const done = this.db
-        .prepare(
-          `SELECT external_ref, occurred_at FROM external_operation_events
-            WHERE idempotency_key = ? AND phase = 'CONFIRMED' LIMIT 1`,
-        )
-        .get(input.idempotencyKey) as
-        | { external_ref: string | null; occurred_at: string }
-        | undefined;
-      return {
-        reserved: false,
-        confirmed: Boolean(done),
-        externalRef: done?.external_ref ?? null,
-        reason: done
-          ? `déjà exécutée le ${done.occurred_at}`
-          : 'une tentative est déjà engagée : reprise interdite sans décision humaine',
-      };
-    }
-
-    this.db
+    blockedBy?: string | null;
+  }): { reserved: boolean; confirmed: boolean; externalRef: string | null; blocked: boolean; reason: string } {
+    // L'insertion est la question : deux processus qui réservent ensemble ne
+    // peuvent pas gagner tous deux, et le perdant l'apprend par une réponse,
+    // pas par une exception de contrainte.
+    const inserted = this.db
       .prepare(
         `INSERT INTO external_operations
            (idempotency_key, kind, task_id, target, summary, claimed_at, claimed_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?
+          WHERE NOT EXISTS (SELECT 1 FROM external_operations WHERE idempotency_key = ?)
+         ON CONFLICT(idempotency_key) DO NOTHING`,
       )
       .run(
         input.idempotencyKey, input.kind, input.taskId ?? null,
         input.target ?? null, input.summary ?? null, nowIso(), input.claimedBy,
+        input.blockedBy ?? null,
       );
-    return { reserved: true, confirmed: false, externalRef: null, reason: 'place réservée' };
+    if (inserted.changes === 1) {
+      return { reserved: true, confirmed: false, externalRef: null, blocked: false, reason: 'place réservée' };
+    }
+
+    const own = this.db
+      .prepare('SELECT 1 FROM external_operations WHERE idempotency_key = ?')
+      .get(input.idempotencyKey);
+    if (!own) {
+      return {
+        reserved: false, confirmed: false, externalRef: null, blocked: true,
+        reason: `interdite : ${input.blockedBy} est déjà réservée`,
+      };
+    }
+
+    const done = this.db
+      .prepare(
+        `SELECT external_ref, occurred_at FROM external_operation_events
+          WHERE idempotency_key = ? AND phase = 'CONFIRMED' LIMIT 1`,
+      )
+      .get(input.idempotencyKey) as
+      | { external_ref: string | null; occurred_at: string }
+      | undefined;
+    return {
+      reserved: false,
+      confirmed: Boolean(done),
+      externalRef: done?.external_ref ?? null,
+      blocked: false,
+      reason: done
+        ? `déjà exécutée le ${done.occurred_at}`
+        : 'une tentative est déjà engagée : reprise interdite sans décision humaine',
+    };
+  }
+
+  /**
+   * Créer une tâche et la lier à une opération, ou ne rien créer.
+   *
+   * Dans une seule transaction IMMEDIATE : la réservation est relue, la tâche
+   * créée (ou retrouvée par sa clé d'idempotence), la réservation écrite et
+   * confirmée. Deux processus qui reçoivent la même demande au même instant —
+   * ou deux versions d'une même demande — sont sérialisés par SQLite : le
+   * second trouve la réservation du premier et ne crée rien.
+   */
+  createClaimedTask(input: CreateTaskInput, claim: {
+    idempotencyKey: string;
+    kind: string;
+    target?: string | null;
+    summary?: string | null;
+    claimedBy: string;
+  }): { claimed: true; task: TaskRow; created: boolean } | { claimed: false; taskId: string | null } {
+    const write = this.db.transaction(() => {
+      const existing = this.db
+        .prepare('SELECT task_id FROM external_operations WHERE idempotency_key = ?')
+        .get(claim.idempotencyKey) as { task_id: string | null } | undefined;
+      if (existing) return { claimed: false as const, taskId: existing.task_id ?? null };
+
+      const { task, created } = this.create(input);
+      const reserved = this.reserveExternalOperation({ ...claim, taskId: task.taskId });
+      if (!reserved.reserved) throw new Error(`réservation ${claim.idempotencyKey} perdue dans sa propre transaction`);
+      this.confirmExternalOperation({ idempotencyKey: claim.idempotencyKey, phase: 'CONFIRMED', externalRef: task.taskId });
+      return { claimed: true as const, task, created };
+    });
+    return write.immediate();
   }
 
   confirmExternalOperation(input: {
@@ -873,6 +922,66 @@ export class TaskRepository {
       }
       throw error;
     }
+  }
+
+  /**
+   * Relire une réservation, sans rien écrire.
+   *
+   * `reserveExternalOperation` répond aussi à la question « existe-t-elle ? »,
+   * mais en réservant quand la réponse est non. Un appelant qui doit décider
+   * avant d'agir — le pont contrôleur retrouve la tâche d'une issue — a besoin
+   * de la lecture seule.
+   */
+  externalOperation(idempotencyKey: string): {
+    idempotencyKey: string; kind: string; taskId: string | null; target: string | null;
+    summary: string | null; claimedAt: string; confirmed: boolean; externalRef: string | null; failed: boolean;
+  } | null {
+    const row = this.db
+      .prepare('SELECT * FROM external_operations WHERE idempotency_key = ?')
+      .get(idempotencyKey) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const done = this.db
+      .prepare(
+        `SELECT external_ref FROM external_operation_events
+          WHERE idempotency_key = ? AND phase = 'CONFIRMED' LIMIT 1`,
+      )
+      .get(idempotencyKey) as { external_ref: string | null } | undefined;
+    const failed = this.db
+      .prepare(
+        `SELECT 1 FROM external_operation_events
+          WHERE idempotency_key = ? AND phase = 'FAILED' LIMIT 1`,
+      )
+      .get(idempotencyKey);
+    return {
+      idempotencyKey: row.idempotency_key as string,
+      kind: row.kind as string,
+      taskId: (row.task_id as string | null) ?? null,
+      target: (row.target as string | null) ?? null,
+      summary: (row.summary as string | null) ?? null,
+      claimedAt: row.claimed_at as string,
+      confirmed: Boolean(done),
+      externalRef: done?.external_ref ?? null,
+      failed: Boolean(failed),
+    };
+  }
+
+  /** Les réservations d'un genre, les plus récentes d'abord. Lecture seule. */
+  externalOperationsOfKind(kind: string, limit = 20): Array<{
+    idempotencyKey: string; taskId: string | null; target: string | null; summary: string | null; claimedAt: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT idempotency_key, task_id, target, summary, claimed_at FROM external_operations
+          WHERE kind = ? ORDER BY claimed_at DESC LIMIT ?`,
+      )
+      .all(kind, limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      idempotencyKey: r.idempotency_key as string,
+      taskId: (r.task_id as string | null) ?? null,
+      target: (r.target as string | null) ?? null,
+      summary: (r.summary as string | null) ?? null,
+      claimedAt: r.claimed_at as string,
+    }));
   }
 
   // --- Chaines ------------------------------------------------------------
@@ -918,6 +1027,23 @@ export class TaskRepository {
       )
       .get(chainId) as { calls: number; known: number; unknown: number | null };
     return { knownUsd: row.known, unknownCalls: row.unknown ?? 0, calls: row.calls };
+  }
+
+  /**
+   * Les appels au tarif inconnu d'une chaine, un par un.
+   *
+   * `chainCost` les compte ; un appelant qui doit decider si chacun est
+   * justifie — Claude Code sur abonnement n'a pas de prix a l'appel — a besoin
+   * de savoir lesquels, et pour quelle tache.
+   */
+  unknownCostCalls(chainId: string): Array<{ taskId: string | null; provider: string; model: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT task_id, provider, model FROM ai_calls
+          WHERE chain_id = ? AND cost_basis = 'UNKNOWN_PRICE' ORDER BY occurred_at ASC`,
+      )
+      .all(chainId) as Array<{ task_id: string | null; provider: string; model: string }>;
+    return rows.map((r) => ({ taskId: r.task_id ?? null, provider: r.provider, model: r.model }));
   }
 
   /** Depuis combien de minutes la chaine tourne. */

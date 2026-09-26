@@ -94,7 +94,9 @@ services:
   #   – pas d'`env_file` : seules les variables listées ci-dessous lui
   #     parviennent — ni Gmail, ni OpenAI, ni le secret de session réel ;
   #   – pas de port, pas de réseau interne : il ne joint ni le serveur, ni
-  #     SearXNG, ni n8n — seulement l'API Anthropic, par la sortie du VPS ;
+  #     SearXNG, ni n8n — seulement Anthropic, par la sortie du VPS ;
+  #   – pas de clé d'API pour Claude Code : il tourne sur l'abonnement (la
+  #     clé, présente pour les workers Anthropic directs, lui est retirée) ;
   #   – aucun déploiement : `atlas:apply` reste un geste humain.
   # Le daemon du serveur laisse ces tâches dans la file quand
   # ATLAS_ENGINEERING_RUNNER=external (dans .env) : un seul preneur.
@@ -118,10 +120,15 @@ services:
       ATLAS_ENGINEER_REPO: /work/repo
       ATLAS_ENGINEERING_WORKSPACE_ROOT: /work/worktrees
       ATLAS_HOST_REPO: /host-repo
-      # Claude Code en mode headless, facturé à la clé d'API — choisi, jamais
-      # hérité. La clé vient du .env par interpolation Compose, et d'elle seule.
-      ATLAS_CLAUDE_CODE_USE_API_KEY: "true"
+      # Claude Code en mode headless, par abonnement. La session vit dans le
+      # volume `atlas-engineer-claude` (/home/node/.claude), ouverte une fois à
+      # la main (`claude` dans le conteneur), et survit aux recréations.
+      ATLAS_CLAUDE_CODE_USE_API_KEY: "false"
       ATLAS_CLAUDE_CODE_BIN: claude
+      # La clé sert les autres workers IA du runner (fournisseur Anthropic
+      # direct), par interpolation depuis le .env, jamais en clair. Claude Code
+      # ne la voit pas : avec USE_API_KEY=false, runClaudeCode la retire de
+      # l'environnement du binaire (childEnv, claude-code.ts).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ATLAS_AI_LIVE: ${ATLAS_AI_LIVE:-false}
       ATLAS_ANTHROPIC_MODEL: ${ATLAS_ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
@@ -153,6 +160,8 @@ services:
       # Le dépôt déployé, en lecture seule : lu pour cloner, jamais écrit.
       - ..:/host-repo:ro
       - atlas-engineer-work:/work
+      # La session Claude Code par abonnement : hors du dépôt, hors de l'image.
+      - atlas-engineer-claude:/home/node/.claude
     networks: [engineering]
     stop_grace_period: 30s
     logging:
@@ -236,6 +245,7 @@ services:
 volumes:
   atlas-data:
   atlas-engineer-work:
+  atlas-engineer-claude:
   n8n-data:
   searxng-data:
   caddy-data:

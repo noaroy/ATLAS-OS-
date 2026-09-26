@@ -833,6 +833,9 @@ export interface SalesDashboard {
     receivedAt: string; subject: string | null; excerpt: string | null; status: 'OPEN' | 'HANDLED';
   }>;
   hotLeadsTotal: number;
+  /** Les prospects encore à saisir, tels qu'enregistrés — lecture seule. */
+  opportunities: SalesOpportunity[];
+  opportunitiesTotal: number;
   system: {
     search: SystemLight; llm: SystemLight; gmail: GmailLight; workers: SystemLight; database: SystemLight;
     outbound: { enabled: boolean; mode: string; paused: boolean; pauseReason: string | null; window: string; windowOpen: boolean };
@@ -840,6 +843,17 @@ export interface SalesDashboard {
     openInsights: number;
     detail: string[];
   };
+}
+
+export interface SalesOpportunity {
+  prospectId: string; companyName: string; domain: string; website: string | null;
+  state: string; tier: string | null; score: number | null; whyFit: string | null;
+  contact: {
+    name: string | null; role: string | null; email: string | null; phone: string | null; page: string | null;
+    method: string | null; observed: boolean; sourceUrl: string | null;
+  };
+  sourceUrl: string | null;
+  updatedAt: string;
 }
 
 export const sales = {

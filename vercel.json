@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build:console",
+  "outputDirectory": "dist/console",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://atlas.148.113.240.18.sslip.io/api/:path*" },
+    { "source": "/healthz", "destination": "https://atlas.148.113.240.18.sslip.io/healthz" },
+    { "source": "/((?!api/|healthz$).*)", "destination": "/index.html" }
+  ]
+}

@@ -381,6 +381,13 @@ export class AtlasDaemon {
     const hermes = this.options.hermes;
     const proposed = nextTasksOf(outcome.result);
     if (!hermes || proposed.length === 0) return;
+    // Une tâche d'objectif autonome n'a qu'un seul arbitre de sa suite : le
+    // superviseur GPT, qui relit et pose au plus une tâche par cycle. Laisser
+    // Hermes créer aussi les suites proposées par l'agent en ferait deux.
+    if ((task.payload as Record<string, unknown>).supervisor) {
+      log('info', 'suites proposées ignorées : l’objectif autonome est piloté par le superviseur GPT', { proposed: proposed.length });
+      return;
+    }
     const next = proposed.filter((t) => ROUTED_TASK_TYPES.includes(t.task_type));
     const refused = proposed.filter((t) => !ROUTED_TASK_TYPES.includes(t.task_type));
     if (refused.length > 0) log('warn', 'suites hors de la table de routage, ignorées', { refused: refused.map((t) => `${t.task_type}: ${t.objective}`) });

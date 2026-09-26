@@ -431,11 +431,13 @@ describe('5. atlas-engineer, tel que Compose et le Dockerfile le décrivent', ()
     assert.match(block, /- \.\.:\/host-repo:ro/, 'le dépôt déployé, en lecture seule');
     assert.match(block, /- atlas-data:\/data/, 'la base canonique : la file de tâches vit là');
     assert.match(block, /- atlas-engineer-work:\/work/);
+    assert.match(block, /- atlas-engineer-claude:\/home\/node\/\.claude$/m, 'la session par abonnement survit aux recréations');
     assert.match(block, /networks: \[engineering\]/, 'jamais sur le réseau du serveur');
     assert.doesNotMatch(block, /networks: \[atlas\]/);
     assert.match(block, /target: engineer/);
     assert.match(compose, /^\s+engineering:\n\s+driver: bridge/m);
     assert.match(compose, /^\s+atlas-engineer-work:$/m);
+    assert.match(compose, /^volumes:\n(?: {2}[a-z0-9-]+:\n)* {2}atlas-engineer-claude:$/m, 'le volume de session, déclaré au niveau racine');
   });
 
   test('les variables : une liste fermée — ni Gmail, ni OpenAI, ni le secret de session réel ; envoi coupé, mode interne', () => {
@@ -459,8 +461,11 @@ describe('5. atlas-engineer, tel que Compose et le Dockerfile le décrivent', ()
     }
     assert.match(block, /ATLAS_OUTBOUND_ENABLED: "false"/);
     assert.match(block, /ATLAS_ENGINE_MODE: INTERNAL_TEST/);
-    assert.match(block, /ATLAS_CLAUDE_CODE_USE_API_KEY: "true"/, 'facturation à la clé, choisie explicitement');
-    assert.match(block, /ANTHROPIC_API_KEY: \$\{ANTHROPIC_API_KEY:-\}/, 'la clé par interpolation, jamais en clair');
+    // Deux choses distinctes : Claude Code sur l'abonnement, et la clé Anthropic
+    // présente pour les autres workers IA. C'est childEnv (claude-code.ts) qui
+    // la retire au seul binaire Claude Code — voir claude-code.test.ts.
+    assert.match(block, /ATLAS_CLAUDE_CODE_USE_API_KEY: "false"/, 'Claude Code sur l’abonnement, jamais facturé à la clé');
+    assert.match(block, /ANTHROPIC_API_KEY: \$\{ANTHROPIC_API_KEY:-\}/, 'la clé des workers Anthropic directs, par interpolation, jamais en clair');
     assert.match(block, /ATLAS_SESSION_SECRET: atlas-engineer-has-no-http-server/, 'pas le secret du serveur');
     assert.match(block, /ATLAS_ENGINEER_REPO: \/work\/repo/);
     // Le serveur, lui, garde son .env entier ; et rien de ce qu'on ajoute ne le touche.

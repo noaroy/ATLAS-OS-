@@ -2,8 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildOutreachDraft, pickPersonalizationFact, observationPhrase, customerFacingObservation,
-  outreachFactFrom, isCommercialEvidence, personalizationIsGrounded, elide,
-  type OutreachFact, type StoredEvidence,
+  outreachFactFrom, isCommercialEvidence, personalizationIsGrounded, elide, validateRecommendations,
+  type OutreachFact, type StoredEvidence, type TargetRecommendation,
 } from '../src/outreach.ts';
 import { checkHumanization } from '../src/humanization.ts';
 import { INTERPRETATION_PREFIX } from '../src/verbatim-selection.ts';
@@ -340,5 +340,52 @@ describe('bout en bout, dans l’ordre du lot', () => {
     const facts = [preuveAncienne('a1', 'Asytec vend aux industriels.'), preuveAncienne('a2', 'Nous sommes à la recherche de distributeurs !')]
       .map(outreachFactFrom);
     assert.equal(brouillon(facts).draft, null);
+  });
+});
+
+describe('l’échantillon de cibles : 2 à 3, sourcées, fermé par défaut', () => {
+  const cible = (domain: string, quote = 'Nous distribuons des pièces industrielles dans toute la France.'): TargetRecommendation => ({
+    company: domain.split('.')[0]!.toUpperCase(), domain, sourceUrl: `https://${domain}/a-propos`,
+    evidenceQuote: quote, fitReason: 'Nous distribuons des pièces industrielles',
+  });
+  const avec = (recommendations: TargetRecommendation[]) => buildOutreachDraft({
+    company: 'ASYTEC', website: 'https://asytec.fr', facts: [outreachFactFrom(preuveVerbatim('t', TOLERIE, 'tôlerie'))], contact,
+    whyThisCompany: 'x', senderName: 'Noa Roy', offer: { priceEur: 49, deliveryHours: 24 }, recommendations,
+  });
+
+  test('trois cibles uniques s’affichent avec leur raison et leur adresse ; la quatrième et les doublons sont écartés', () => {
+    const out = avec([cible('alpha.fr'), cible('beta.fr'), cible('alpha.fr'), cible('gamma.fr'), cible('delta.fr')]);
+    assert.ok(out.draft, out.reason);
+    assert.deepEqual(out.draft.recommendations.map((r) => r.domain), ['alpha.fr', 'beta.fr', 'gamma.fr']);
+    for (const r of out.draft.recommendations) {
+      assert.ok(out.draft.messageEmail.includes(`${r.company} (${r.domain}) : « ${r.fitReason} » — ${r.sourceUrl}`));
+    }
+    assert.ok(personalizationIsGrounded(out.draft));
+  });
+
+  test('moins de deux cibles, ou la propre entreprise du destinataire : aucun brouillon', () => {
+    assert.equal(avec([cible('alpha.fr')]).refusal, 'INSUFFICIENT_RECOMMENDATIONS');
+    assert.equal(avec([cible('alpha.fr'), cible('asytec.fr')]).refusal, 'INSUFFICIENT_RECOMMENDATIONS');
+    assert.equal(avec([]).draft, null);
+  });
+
+  test('une intention que la citation ne porte pas fait refuser tout l’échantillon', () => {
+    const inventee = { ...cible('beta.fr'), fitReason: 'Ils cherchent un nouveau fournisseur' };
+    const check = validateRecommendations([cible('alpha.fr'), inventee, cible('gamma.fr')], 'asytec.fr');
+    assert.equal(check.ok, false);
+    assert.match(check.reason, /intention non sourcée/);
+    assert.equal(avec([cible('alpha.fr'), inventee, cible('gamma.fr')]).draft, null);
+  });
+
+  test('une provenance illisible ou non web est refusée', () => {
+    assert.equal(validateRecommendations([cible('alpha.fr'), { ...cible('beta.fr'), sourceUrl: 'pas une url' }], null).ok, false);
+    assert.equal(validateRecommendations([cible('alpha.fr'), { ...cible('beta.fr'), sourceUrl: 'ftp://beta.fr/x' }], null).ok, false);
+  });
+
+  test('sans échantillon demandé, le message d’origine est inchangé', () => {
+    const out = brouillon([outreachFactFrom(preuveVerbatim('t', TOLERIE, 'tôlerie'))]);
+    assert.ok(out.draft);
+    assert.deepEqual(out.draft.recommendations, []);
+    assert.doesNotMatch(out.draft.messageEmail, /Pour exemple/);
   });
 });

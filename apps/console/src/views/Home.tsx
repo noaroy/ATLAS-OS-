@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { cc, sales, type SalesDashboard, type DashboardRange } from '../lib/api.ts';
 import {
   freshnessOf, applyResult, ago, mainResultOf, rankSegments, todoLines, describeRecommendation, systemProblems,
-  SEGMENT_STATE_LABEL, type LiveState,
+  systemVerdict, opportunitySummary, SEGMENT_STATE_LABEL, type LiveState,
 } from '../lib/dashboard-view.ts';
 import { useAtlas } from '../store.ts';
 import '../home.css';
@@ -141,6 +141,8 @@ export function HomeView() {
   const [primary, ...others] = data.recommendations.filter((r) => r.status === 'PROPOSED');
   const reco = primary ? describeRecommendation(primary) : null;
   const problems = systemProblems(system);
+  const verdict = systemVerdict(system);
+  const opportunities = data.opportunities.slice(0, 5);
   const light = (state: string) => `home-dot ${state === 'ok' ? 'home-dot--ok' : state === 'warn' ? 'home-dot--warn' : state === 'down' ? 'home-dot--bad' : ''}`;
 
   return (
@@ -151,6 +153,10 @@ export function HomeView() {
           {fresh.label}{fresh.state !== 'fresh' ? ' — dernières valeurs connues conservées' : ''}
         </p>
         {notice ? <p className="home-notice">{notice}</p> : null}
+        <div className={`home-verdict home-verdict--${verdict.tone}`} role="status" aria-label="Verdict système">
+          <strong>{verdict.headline}</strong>
+          {verdict.blockers.length > 0 ? <ul>{verdict.blockers.map((b) => <li key={b}>{b}</li>)}</ul> : null}
+        </div>
 
         {/* 1 — Business */}
         <section className="home-section" aria-label="Business">
@@ -163,6 +169,33 @@ export function HomeView() {
           <p className="home-pipeline" title={cards.pipelineExplanation.join(' · ')}>
             Pipeline actif : {cards.pipelinePotential === null ? '— (pas encore de client gagné avec montant)' : eur(cards.pipelinePotential, cards.currency)}
           </p>
+        </section>
+
+        {/* Opportunités — lecture seule : aucun geste commercial d'ici. */}
+        <section className="home-section" id="opportunities" aria-label="Opportunités">
+          <h2>Opportunités · {int(data.opportunitiesTotal)}</h2>
+          {opportunities.length === 0 ? (
+            <p className="home-empty">Aucune opportunité ouverte dans le registre.</p>
+          ) : (
+            <ul className="home-list">
+              {opportunities.map((o) => {
+                const s = opportunitySummary(o);
+                return (
+                  <li key={o.prospectId} className="home-opp">
+                    <div className="row">
+                      <span className="company">{o.companyName}</span>
+                      <span className="home-muted">{o.domain}</span>
+                      <span className="home-spacer" />
+                      <span className="home-state">{s.tier}</span>
+                    </div>
+                    {o.whyFit ? <div className="why">{o.whyFit}</div> : null}
+                    <div className="meta"><span className={`home-dot ${s.ready ? 'home-dot--ok' : 'home-dot--warn'}`} /> {s.contact}</div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {data.opportunitiesTotal > opportunities.length ? <p className="home-muted" style={{ marginTop: 8 }}><Link to="/cc/sales">Voir toutes les opportunités ({data.opportunitiesTotal})</Link></p> : null}
         </section>
 
         {/* 2 — Prospection */}
@@ -237,7 +270,7 @@ export function HomeView() {
                     <span>{ago(h.receivedAt, now)}</span>
                     <span className="home-spacer" />
                     <Link className="home-btn" to={`/cc/companies/${h.domain}`}>Ouvrir</Link>
-                    <button type="button" className="home-btn" disabled={busy !== null}
+                    <button type="button" className="home-btn atlas-write" disabled={busy !== null}
                       onClick={() => act(`lead-${h.domain}`, () => sales.leadHandled(h.domain), `${h.companyName} : traité`)}>Traité</button>
                   </div>
                 </li>
@@ -262,7 +295,7 @@ export function HomeView() {
               <p className="headline">{reco.headline}</p>
               <p className="question">{reco.question}</p>
               {founder ? (
-                <div className="actions">
+                <div className="actions atlas-write">
                   <button type="button" className="home-btn home-btn--accent" disabled={busy !== null}
                     onClick={() => act(primary.id, () => sales.decide(primary.id, reco.yesDecision), reco.yesDecision === 'test' ? 'Test lancé : ATLAS ajuste par petits pas et mesure.' : 'Décision consignée.')}>{reco.yes}</button>
                   <button type="button" className="home-btn" disabled={busy !== null}

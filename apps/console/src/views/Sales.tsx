@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cc, sales, type SalesDashboard, type DashboardRange, type SystemLight } from '../lib/api.ts';
 import { CcHead, Panel, Stat, Badge, Empty, useLive, moment, pct } from '../components/cc.tsx';
+import { systemVerdict, opportunitySummary } from '../lib/dashboard-view.ts';
 import { useAtlas } from '../store.ts';
+import '../home.css';
 
 /**
  * La page unique du moteur commercial.
@@ -101,6 +103,7 @@ export function SalesView() {
 
   const { cards, funnel, performance: perf, system } = data;
   const contactedTotal = funnel.find((f) => f.stage === 'contacted')?.count ?? 0;
+  const verdict = systemVerdict(system);
 
   return (
     <div className="cc">
@@ -112,6 +115,9 @@ export function SalesView() {
             ATLAS est en PAUSE — {system.outbound.pauseReason ?? 'sans motif'}. Aucun message ne part.
           </p>
         ) : null}
+        <p className={`cc-alert${verdict.tone === 'ok' ? '' : ' cc-alert--warn'}`} role="status">
+          <strong>{verdict.headline}</strong>{verdict.blockers.length > 0 ? ` — ${verdict.blockers.join(' · ')}` : ''}
+        </p>
 
         {/* 1 — Ce que ça rapporte */}
         <dl className="cc-stats">
@@ -142,6 +148,32 @@ export function SalesView() {
           </table>
         </Panel>
 
+        {/* Les opportunités — lecture du registre, aucun geste d'ici */}
+        <Panel title={`Opportunités — ${data.opportunitiesTotal} ouvertes`} note="jamais contactées, ni rejetées, ni conclues">
+          {data.opportunities.length === 0 ? (
+            <Empty>Aucune opportunité ouverte dans le registre.</Empty>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="cc-table">
+                <thead><tr><th>Entreprise</th><th>Profil</th><th>Pourquoi</th><th>Contact</th></tr></thead>
+                <tbody>
+                  {data.opportunities.map((o) => {
+                    const s = opportunitySummary(o);
+                    return (
+                      <tr key={o.prospectId}>
+                        <td><Link to={`/cc/companies/${o.domain}`}>{o.companyName}</Link><div className="cc-meta">{o.domain} · {o.state}</div></td>
+                        <td><Badge state={s.ready ? 'ok' : 'warn'}>{s.tier}</Badge></td>
+                        <td className="cc-excerpt">{o.whyFit ?? '—'}</td>
+                        <td className="cc-meta">{s.contact}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+
         {/* 3 — La performance */}
         <dl className="cc-stats">
           <Stat label="Réponses positives" value={perf.positiveReplyRate} format={pct} hint="par contacté" />
@@ -164,7 +196,7 @@ export function SalesView() {
                 <tr>
                   <th>Segment</th><th>Statut</th><th className="cc-num">Contactés</th><th className="cc-num">Réponses +</th>
                   <th className="cc-num">RDV</th><th className="cc-num">Clients</th><th className="cc-num">CA / 100</th><th>Décision</th>
-                  {founder ? <th /> : null}
+                  {founder ? <th className="atlas-write" /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -179,7 +211,7 @@ export function SalesView() {
                     <td className="cc-num">{money(s.revenuePer100, cards.currency)}</td>
                     <td title={s.decisionReason}>{s.decision}</td>
                     {founder ? (
-                      <td className="cc-actions">
+                      <td className="cc-actions atlas-write">
                         {!s.approvedForSend ? (
                           <button type="button" className="cc-btn" disabled={busy !== null}
                             onClick={() => act(`seg-${s.id}`, () => sales.segmentAction(s.id, 'approve'), `${s.name} approuvé pour l’envoi`)}>
@@ -229,7 +261,7 @@ export function SalesView() {
                     <div className="cc-meta">{r.reason} · échantillon {r.sampleSize}{r.expectedImpact ? ` · ${r.expectedImpact}` : ''}</div>
                   </div>
                   {founder ? (
-                    <span className="cc-actions">
+                    <span className="cc-actions atlas-write">
                       {r.status === 'PROPOSED' && r.hasChange ? (
                         <button type="button" className="cc-btn" disabled={busy !== null}
                           onClick={() => act(r.id, () => sales.decide(r.id, 'test'), 'Test lancé (demi-pas, versionné)')}>TESTER</button>
@@ -260,7 +292,7 @@ export function SalesView() {
                     <td title={`confiance ${Math.round(h.confidence * 100)} %`}><Badge state={h.intent === 'POSITIVE' ? 'ok' : 'warn'}>{INTENT_LABEL[h.intent] ?? h.intent}</Badge></td>
                     <td>{moment(h.receivedAt)}</td>
                     <td className="cc-excerpt">{h.subject ? <strong>{h.subject} — </strong> : null}{h.excerpt ?? ''}</td>
-                    <td className="cc-actions">
+                    <td className="cc-actions atlas-write">
                       {h.status === 'OPEN' ? (
                         <button type="button" className="cc-btn" disabled={busy !== null}
                           onClick={() => act(`lead-${h.domain}`, () => sales.leadHandled(h.domain), `${h.companyName} marqué traité`)}>Traité</button>
@@ -284,10 +316,10 @@ export function SalesView() {
           note={system.lastCycleAt ? `dernier cycle ${moment(system.lastCycleAt)}` : 'aucun cycle planifié encore'}
           actions={founder ? (
             system.outbound.paused ? (
-              <button type="button" className="cc-btn cc-btn--primary" disabled={busy !== null}
+              <button type="button" className="cc-btn cc-btn--primary atlas-write" disabled={busy !== null}
                 onClick={() => act('resume', () => sales.resume(), 'ATLAS reprend')}>RESUME</button>
             ) : (
-              <button type="button" className="cc-btn" disabled={busy !== null}
+              <button type="button" className="cc-btn atlas-write" disabled={busy !== null}
                 onClick={() => act('pause', () => sales.pause('pause depuis le tableau de bord'), 'ATLAS en pause')}>PAUSE ATLAS</button>
             )
           ) : undefined}

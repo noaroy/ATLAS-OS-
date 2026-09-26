@@ -239,6 +239,11 @@ const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{16,}/g,
   /sk-ant-[A-Za-z0-9_-]{16,}/g,
   /ghp_[A-Za-z0-9]{20,}/g,
+  // Les autres jetons GitHub : fins (github_pat_), OAuth, serveur, utilisateur,
+  // rafraîchissement. Le pont contrôleur écrit sur GitHub : c'est là qu'un
+  // jeton recopié dans un commentaire serait le plus visible.
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /gh[osur]_[A-Za-z0-9]{20,}/g,
   /Bearer\s+[A-Za-z0-9._-]{20,}/gi,
   /(?:api[_-]?key|secret|password|token)["'\s:=]+[A-Za-z0-9._-]{12,}/gi,
 ];

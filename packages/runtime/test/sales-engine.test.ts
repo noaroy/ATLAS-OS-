@@ -20,7 +20,10 @@ import {
   recordSalesOutcome,
   runOptimizationCycle,
   readStrategy,
+  materializeFirstTouchDrafts,
+  AUTO_APPROVAL_ACTOR,
   SALES_ENGINE_TASKS,
+  type FirstTouchRecommendation,
 } from '../src/sales-engine.ts';
 import { buildSalesDashboard } from '../src/sales-dashboard.ts';
 import { AtlasDaemon } from '../src/daemon.ts';
@@ -617,4 +620,171 @@ describe('interrupteur fermé : aucun chemin ne poste (§66)', () => {
     assert.ok(result.blocked[0]!.reasons.includes('OUTBOUND_DISABLED'));
     assert.ok(result.blocked[0]!.reasons.includes('INTERNAL_TEST_MODE'));
   });
+});
+
+describe('premier contact automatique : prospect canonique → outreach_draft', () => {
+  const TOLERIE = 'L’atelier de tôlerie industrielle est notre second pôle de compétences. Nous réalisons vos pièces.';
+  const DISTRIB = 'Nous distribuons des pièces industrielles dans toute la France.';
+
+  function prospect(domain: string, segmentId: string, opts: { email?: string; facts?: string[] } = {}) {
+    const { prospect: p } = repos.sales.discover({
+      batchId: 'B-FT', companyName: domain.split('.')[0]!.toUpperCase(), domain, website: `https://${domain}`, country: 'FR',
+      sourceUrl: `https://${domain}/`, pageType: 'OFFICIAL_COMPANY_SITE', guardVersion: 'test',
+    });
+    repos.sales.setScore(p.id, { score: 90, tier: 'PRIORITY', detail: {}, whyFit: 'fabricant industriel' });
+    repos.sales.setState(p.id, 'QUALIFIED');
+    repos.sales.setContact(p.id, { email: opts.email ?? `contact@${domain}`, sourceUrl: `https://${domain}/contact`, observed: true, method: 'EMAIL' });
+    (opts.facts ?? [TOLERIE, DISTRIB]).forEach((claim, i) => repos.sales.addEvidence({
+      prospectId: p.id, field: `verbatim:${i}`, claim, nature: 'observed', sourceUrl: `https://${domain}/page-${i}`, basis: null, confidence: 0.9,
+    }));
+    repos.salesEngine.attribute({ domain, prospectId: p.id, segmentId, messageVariant: 'A' });
+    return p;
+  }
+  const segment = () => {
+    const { segment: s } = repos.salesEngine.createSegment({ name: 'Industrie FR', countries: ['FR'] });
+    repos.salesEngine.approveSegmentForSend(s.id, 'founder@test.local');
+    return s;
+  };
+  const recs = (n: number): FirstTouchRecommendation[] => ['alpha.fr', 'beta.fr', 'gamma.fr'].slice(0, n).map((domain) => ({
+    company: domain, domain, sourceUrl: `https://${domain}/`, evidenceQuote: DISTRIB, fitReason: 'Nous distribuons des pièces industrielles',
+  }));
+
+  test('approbation humaine requise : le brouillon attend en READY_FOR_APPROVAL, une seule fois, et rien ne part', async () => {
+    const s = segment();
+    prospect('acme.fr', s.id);
+    const prod = production(config);
+    const report = materializeFirstTouchDrafts(repos, prod, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(3) });
+    assert.equal(report.drafted, 1, JSON.stringify(report));
+    assert.equal(report.autoApproved, 0);
+    const [draft] = repos.salesLoop.draftsForDomain('acme.fr');
+    assert.equal(draft!.state, 'READY_FOR_APPROVAL');
+    assert.equal(draft!.recipient, 'contact@acme.fr');
+    assert.equal(draft!.sources.length, 4, 'le fait personnel et les trois cibles, chacun avec son adresse');
+    assert.match(draft!.body, /Pour exemple, 3 entreprises relevées/);
+    assert.equal(repos.salesLoop.currentState('acme.fr'), 'READY_FOR_APPROVAL');
+
+    const again = materializeFirstTouchDrafts(repos, prod, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(3) });
+    assert.equal(again.drafted, 0);
+    assert.ok(again.skipped[0]!.reasons.includes('PRIOR_FIRST_TOUCH'));
+    const outbound = new CountingOutbound();
+    assert.equal((await runSendCycle({ repos, config: prod, logger }, { outbound: async () => outbound, now: NOW })).considered, 0);
+    assert.equal(outbound.sent.length, 0);
+  });
+
+  test('les gardes ferment : webmail, faits insuffisants, suppression, registre, échantillon incomplet', () => {
+    const s = segment();
+    prospect('webmail.fr', s.id, { email: 'patron@gmail.com' });
+    prospect('maigre.fr', s.id, { facts: [TOLERIE] });
+    prospect('supprime.fr', s.id);
+    repos.salesEngine.suppress({ kind: 'DOMAIN', value: 'supprime.fr', reason: 'OPT_OUT', source: 'test', evidence: null, createdBy: 'test' });
+    prospect('registre.fr', s.id);
+    repos.sales.recordOutreach({ domain: 'registre.fr', kind: 'DO_NOT_CONTACT', recordedBy: 'test', channel: 'email' });
+    prospect('seul.fr', s.id);
+    const report = materializeFirstTouchDrafts(repos, production(config), {
+      now: NOW, transportConfigured: true, recommendationsFor: (p) => recs(p.domain === 'seul.fr' ? 1 : 3),
+    });
+    assert.equal(report.drafted, 0, JSON.stringify(report));
+    const why = Object.fromEntries(report.skipped.map((k) => [k.domain, k.reasons.join(',')]));
+    assert.match(why['webmail.fr']!, /EMAIL_NOT_COMMERCIAL/);
+    assert.match(why['maigre.fr']!, /SOURCED_FACTS_1\/2/);
+    assert.match(why['supprime.fr']!, /SUPPRESSED/);
+    assert.match(why['registre.fr']!, /DO_NOT_CONTACT/);
+    assert.match(why['seul.fr']!, /INSUFFICIENT_RECOMMENDATIONS/);
+  });
+
+  test('approbation humaine levée : seul un brouillon sans aucun blocage est approuvé, signé, puis part par runSendCycle', async () => {
+    const s = segment();
+    prospect('acme.fr', s.id);
+    const auto = { ...production(config), sales: { ...production(config).sales, humanApprovalRequired: false } };
+
+    setGlobalPause(repos, true, 'founder@test.local', 'test');
+    const paused = materializeFirstTouchDrafts(repos, auto, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(2) });
+    assert.equal(paused.drafted, 1);
+    assert.equal(paused.autoApproved, 0, 'pause générale : le brouillon attend');
+    assert.equal(repos.salesLoop.draftsForDomain('acme.fr')[0]!.state, 'READY_FOR_APPROVAL');
+
+    setGlobalPause(repos, false, 'founder@test.local', null);
+    assert.equal(materializeFirstTouchDrafts(repos, auto, { now: NOW, transportConfigured: false, recommendationsFor: () => recs(2) }).autoApproved, 0, 'transport absent');
+    const report = materializeFirstTouchDrafts(repos, auto, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(2) });
+    assert.equal(report.autoApproved, 1);
+    const draft = repos.salesLoop.draftsForDomain('acme.fr')[0]!;
+    assert.equal(draft.state, 'APPROVED_TO_SEND');
+    const decision = repos.db.prepare('SELECT decided_by, note FROM outreach_draft_decisions WHERE draft_id = ?').get(draft.id) as { decided_by: string; note: string };
+    assert.equal(decision.decided_by, AUTO_APPROVAL_ACTOR);
+    assert.match(decision.note, /humanApprovalRequired=false/);
+
+    const outbound = new CountingOutbound();
+    const sent = await runSendCycle({ repos, config: auto, logger }, { outbound: async () => outbound, now: NOW });
+    assert.equal(sent.sent, 1, JSON.stringify(sent));
+    assert.equal(outbound.sent.length, 1);
+  });
+
+  test('l’échantillon par défaut vient des relations commerciales vérifiées du prospect', () => {
+    const s = segment();
+    prospect('acme.fr', s.id);
+    prospect('pair-un.fr', s.id, { email: 'x@gmail.com' });
+    prospect('pair-deux.fr', s.id, { email: 'x@gmail.com' });
+
+    const empty = materializeFirstTouchDrafts(repos, production(config), { now: NOW, transportConfigured: true });
+    assert.equal(empty.drafted, 0, JSON.stringify(empty));
+    const acmeBlocked = empty.skipped.find((x) => x.domain === 'acme.fr');
+    assert.ok(acmeBlocked?.reasons.includes('INSUFFICIENT_RECOMMENDATIONS'), JSON.stringify(empty));
+
+    const relationship = (input: {
+      sourceKey?: string; targetKey: string; targetName: string; relationshipType: string;
+      confidence: number; status?: 'VERIFIED' | 'INFERRED';
+    }) => repos.expansion.addRelationship({
+      runId: null,
+      sourceKey: input.sourceKey ?? 'acme.fr', sourceName: 'ACME', sourceKind: 'COMPANY',
+      targetKey: input.targetKey, targetName: input.targetName, relationshipType: input.relationshipType,
+      confidence: input.confidence, status: input.status ?? 'VERIFIED',
+      evidenceUrl: `https://${input.targetKey}/preuve`,
+      evidenceSummary: `${input.targetName} est cité comme partenaire commercial vérifié d'ACME.`,
+      sourceMethod: 'test', sourceTrust: 'OFFICIAL', country: 'France', sourceDate: null,
+    });
+
+    relationship({ targetKey: 'alpha.fr', targetName: 'Alpha', relationshipType: 'DISTRIBUTOR', confidence: 0.90 });
+    relationship({ targetKey: 'beta.fr', targetName: 'Beta', relationshipType: 'RESELLER', confidence: 0.80 });
+    relationship({ sourceKey: 'other.fr', targetKey: 'acme.fr', targetName: 'Incoming', relationshipType: 'DISTRIBUTOR', confidence: 0.99 });
+    relationship({ targetKey: 'www.acme.fr', targetName: 'ACME sous-domaine', relationshipType: 'RESELLER', confidence: 0.98 });
+    relationship({ targetKey: 'rival.fr', targetName: 'Rival', relationshipType: 'COMPETITOR', confidence: 0.97 });
+    relationship({ targetKey: 'gamma.fr', targetName: 'Gamma', relationshipType: 'DISTRIBUTOR', confidence: 0.96, status: 'INFERRED' });
+
+    const report = materializeFirstTouchDrafts(repos, production(config), { now: NOW, transportConfigured: true });
+    assert.equal(report.drafted, 1, JSON.stringify(report));
+    const draft = repos.salesLoop.draftsForDomain('acme.fr')[0]!;
+    assert.deepEqual(
+      draft.sources.slice(1).map((x) => new URL(x.sourceUrl).hostname).sort(),
+      ['alpha.fr', 'beta.fr'],
+    );
+    assert.match(draft.body, /Alpha/);
+    assert.match(draft.body, /Beta/);
+    assert.doesNotMatch(draft.body, /pair-un\.fr|pair-deux\.fr|rival\.fr|gamma\.fr/i);
+  });
+  test('abandon d’un premier brouillon : un nouveau est reproposé au cycle suivant', () => {
+    const s = segment();
+    prospect('acme.fr', s.id);
+    const prod = production(config);
+
+    const firstMat = materializeFirstTouchDrafts(repos, prod, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(2) });
+    assert.equal(firstMat.drafted, 1, JSON.stringify(firstMat));
+    const first = repos.salesLoop.draftsForDomain('acme.fr')[0]!;
+    assert.equal(first.state, 'READY_FOR_APPROVAL');
+
+    repos.salesLoop.decideDraft({ draftId: first.id, decision: 'ABANDONED', decidedBy: 'test', note: 'obsolete' });
+    const afterDecision = repos.salesLoop.draftsForDomain('acme.fr').find((d) => d.id === first.id)!;
+    assert.equal(afterDecision.state, 'ABANDONED');
+    assert.equal(repos.salesLoop.currentState('acme.fr'), 'READY_FOR_APPROVAL');
+
+    const secondMat = materializeFirstTouchDrafts(repos, prod, { now: NOW, transportConfigured: true, recommendationsFor: () => recs(2) });
+    assert.equal(secondMat.drafted, 1, JSON.stringify(secondMat));
+
+    const drafts = repos.salesLoop.draftsForDomain('acme.fr');
+    assert.equal(drafts.length, 2);
+    const oldDraft = drafts.find((d) => d.id === first.id)!;
+    const newDraft = drafts.find((d) => d.id !== first.id)!;
+    assert.equal(oldDraft.state, 'ABANDONED');
+    assert.equal(newDraft.state, 'READY_FOR_APPROVAL');
+  });
+
 });

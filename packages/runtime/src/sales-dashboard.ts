@@ -1,5 +1,5 @@
 import type { AtlasConfig } from '@atlas/core';
-import type { Repositories, TaskRow, FrictionEvent } from '@atlas/data';
+import type { Repositories, TaskRow, FrictionEvent, ProspectState, ProspectTier } from '@atlas/data';
 import {
   classifyReplyIntent,
   funnelRates,
@@ -113,6 +113,14 @@ export interface SalesDashboard {
     status: 'OPEN' | 'HANDLED';
   }>;
   hotLeadsTotal: number;
+  /**
+   * Les opportunités : les prospects du registre commercial encore à saisir —
+   * jamais contactés, ni rejetés, ni perdus. Une lecture de ce qui est
+   * enregistré, rien de recalculé ni d'inventé, dans un ordre déterministe :
+   * palier, score, dernière mise à jour, domaine.
+   */
+  opportunities: SalesOpportunity[];
+  opportunitiesTotal: number;
   system: {
     search: SystemLight;
     llm: SystemLight;
@@ -125,6 +133,37 @@ export interface SalesDashboard {
     detail: string[];
   };
 }
+
+export interface SalesOpportunity {
+  prospectId: string;
+  companyName: string;
+  domain: string;
+  website: string | null;
+  state: ProspectState;
+  tier: ProspectTier | null;
+  score: number | null;
+  /** La raison enregistrée au scoring, telle quelle. */
+  whyFit: string | null;
+  contact: {
+    name: string | null;
+    role: string | null;
+    email: string | null;
+    phone: string | null;
+    page: string | null;
+    method: string | null;
+    /** Vrai seulement si une page officielle a livré la coordonnée. */
+    observed: boolean;
+    sourceUrl: string | null;
+  };
+  /** D'où vient le prospect : la page qui l'a fait découvrir. */
+  sourceUrl: string | null;
+  updatedAt: string;
+}
+
+/** Les états d'un prospect encore à saisir : avant tout contact, hors rejet. */
+const OPEN_OPPORTUNITY_STATES: readonly ProspectState[] = ['DISCOVERED', 'QUALIFIED', 'READY_FOR_REVIEW', 'APPROVED_TO_CONTACT'];
+const TIER_RANK: Record<string, number> = { PRIORITY: 0, GOOD_FIT: 1, WATCH: 2 };
+export const OPPORTUNITIES_SHOWN = 25;
 
 export interface SystemLight {
   state: 'ok' | 'warn' | 'down' | 'off';
@@ -372,6 +411,35 @@ export function buildSalesDashboard(
     openMeetings, hotLeads: openHot.length, averageDealValue: averageDeal, meetingToClientRate, leadToMeetingRate,
   });
 
+  // ── Les opportunités ────────────────────────────────────────────────────
+  // Le registre fait foi, comme pour « contacté » — mais à toute date : un
+  // domaine contacté il y a trois mois n'est plus une opportunité à saisir.
+  // Un domaine dont l'issue est consignée (rendez-vous, gagné, perdu) non plus.
+  const everContacted = new Set(repos.sales.ledgerDomains()
+    .filter((row) => row.kind === 'CONTACTED' && !isSimulated(row.note)).map((row) => row.domain));
+  const decided = new Set(allOutcomes.map((o) => o.domain));
+  const seenOpportunity = new Set<string>();
+  const opportunities: SalesOpportunity[] = allProspects
+    .filter((p): p is typeof p & { domain: string } => p.domain !== null && inScope(p.domain))
+    .filter((p) => OPEN_OPPORTUNITY_STATES.includes(p.state) && p.tier !== 'REJECTED' && !p.contactedAt
+      && !everContacted.has(p.domain) && !decided.has(p.domain))
+    .sort((a, b) => (TIER_RANK[a.tier ?? ''] ?? 3) - (TIER_RANK[b.tier ?? ''] ?? 3)
+      || (b.score ?? -1) - (a.score ?? -1)
+      || b.updatedAt.localeCompare(a.updatedAt)
+      || a.domain.localeCompare(b.domain)
+      || a.id.localeCompare(b.id))
+    // Un domaine, une ligne : la mieux classée.
+    .filter((p) => !seenOpportunity.has(p.domain) && Boolean(seenOpportunity.add(p.domain)))
+    .map((p) => ({
+      prospectId: p.id, companyName: p.companyName, domain: p.domain, website: p.website,
+      state: p.state, tier: p.tier, score: p.score, whyFit: p.whyFit,
+      contact: {
+        name: p.contactName, role: p.contactRole, email: p.contactEmail, phone: p.contactPhone, page: p.contactPage,
+        method: p.contactMethod, observed: p.contactObserved, sourceUrl: p.contactSourceUrl,
+      },
+      sourceUrl: p.sourceUrl, updatedAt: p.updatedAt,
+    }));
+
   // ── Les segments ────────────────────────────────────────────────────────
   const stats = gatherSalesStats(repos, since);
   const segments = repos.salesEngine.segments().map((s) => {
@@ -496,6 +564,8 @@ export function buildSalesDashboard(
     insufficient: lastOptimization.insufficient ?? [],
     hotLeads: hot.slice(0, 10),
     hotLeadsTotal: openHot.length,
+    opportunities: opportunities.slice(0, OPPORTUNITIES_SHOWN),
+    opportunitiesTotal: opportunities.length,
     system: {
       search, llm, gmail, workers, database,
       outbound: {

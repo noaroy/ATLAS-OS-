@@ -689,6 +689,14 @@ export class SalesLoopRepository {
     return row ? this.toDraft(row) : null;
   }
 
+  /** Tous les brouillons d'un domaine, quel que soit leur état — y compris refusés. */
+  draftsForDomain(domain: string): OutreachDraftRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM outreach_drafts WHERE domain = ? ORDER BY created_at ASC')
+      .all(canonicalDomainOf(domain)) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.toDraft(r));
+  }
+
   draftsInState(state: string): OutreachDraftRow[] {
     const rows = this.db
       .prepare('SELECT * FROM outreach_drafts WHERE state = ? ORDER BY created_at ASC')

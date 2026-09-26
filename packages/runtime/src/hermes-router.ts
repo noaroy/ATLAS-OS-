@@ -67,6 +67,15 @@ const ROUTES: Readonly<Record<string, RouteTarget>> = {
   // pages, modèle plafonné et dépôts vivent dans l'image serveur. Le worker
   // déterministe du serveur la sert ; aucun script, aucune voie externe.
   PROSPECT_EXPANSION: 'DETERMINISTIC',
+  // Le sondage du pont contrôleur : lire des issues GitHub, valider une
+  // enveloppe, poser une tâche ENGINEERING_CHANGE, publier un résultat. Aucun
+  // modèle — c'est ENGINEERING_CHANGE, routée plus haut, qui porte le travail.
+  CONTROLLER_BRIDGE_POLL: 'DETERMINISTIC',
+  // Le sondage du superviseur GPT : relire les tâches d'objectif arrivées en
+  // READY_FOR_REVIEW, appeler GPT, poser au plus une suite. Servi par le
+  // daemon du serveur (celui qui a la clé OpenAI) ; la suite, elle, est une
+  // ENGINEERING_CHANGE routée plus haut vers CLAUDE_CODE.
+  SUPERVISOR_REVIEW_POLL: 'DETERMINISTIC',
 };
 
 /**

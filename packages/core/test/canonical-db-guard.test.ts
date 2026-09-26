@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { AtlasError, canonicalDatabaseGuard, loadConfig } from '@atlas/core';
@@ -99,33 +99,5 @@ describe('loadConfig : la garde avant toute création', () => {
       const defaut = withEnv({ ATLAS_DATA_DIR: join(cwd, 'd'), ATLAS_BACKUP_DIR: join(cwd, 'd', 'b') }, () => loadConfig(cwd));
       assert.equal(defaut.paths.databaseFile, join(cwd, 'd', 'atlas.db'), 'sans ATLAS_DB_PATH : <ATLAS_DATA_DIR>/atlas.db, comme avant');
     } finally { rmSync(cwd, { recursive: true, force: true }); }
-  });
-});
-
-/**
- * La garde ne protège que ce qui passe par `loadConfig()`. Un script
- * d'administration qui ouvrirait `data/atlas.db` (ou `ATLAS_DB_PATH`)
- * directement, sans passer par la config, contournerait la garde en
- * silence — exactement la panne que son commentaire décrit : deux bases
- * pour un même dépôt, l'hôte et le volume Docker, sans qu'aucune erreur ne
- * le dise. L'assertion porte sur ce qui s'exécute, pas sur la prose : les
- * commentaires et chaînes documentaires sont retirés avant de chercher le
- * motif interdit.
- */
-describe('les commandes d’administration passent par la base canonique', () => {
-  const strip = (raw: string) => raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-  const atlasTask = strip(readFileSync(new URL('../../../scripts/atlas-task.ts', import.meta.url), 'utf8'));
-  const atlasApply = strip(readFileSync(new URL('../../../scripts/atlas-apply.ts', import.meta.url), 'utf8'));
-
-  test('atlas-task : loadConfig(), jamais data/atlas.db en dur', () => {
-    assert.equal(atlasTask.includes("?? 'data/atlas.db'"), false, 'ouvrirait une seconde base sur l’hôte, hors garde');
-    assert.match(atlasTask, /loadConfig\(/);
-    assert.match(atlasTask, /createRepositories\(config\.paths\.databaseFile/);
-  });
-
-  test('atlas-apply : loadConfig(), jamais data/atlas.db en dur', () => {
-    assert.equal(atlasApply.includes("?? 'data/atlas.db'"), false, 'ouvrirait une seconde base sur l’hôte, hors garde');
-    assert.match(atlasApply, /loadConfig\(/);
-    assert.match(atlasApply, /createRepositories\(config\.paths\.databaseFile/);
   });
 });

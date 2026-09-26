@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { createLogger } from '@atlas/core';
 import { createRepositories, type Repositories } from '@atlas/data';
 import {
-  ClaudeCodeWorker, detectClaudeCode, detectClaudeCodeAuth, usesApiKeyBilling,
+  ClaudeCodeWorker, detectClaudeCode, detectClaudeCodeAuth, usesApiKeyBilling, runClaudeCode,
   extractLastJson, buildMission,
   routeTask, inspectRepo, DEFAULT_ALLOWED_TOOLS,
 } from '../src/index.ts';
@@ -42,7 +42,7 @@ const git = (args: string[], cwd: string) => execFileSync('git', args, { cwd, en
  * s'éterniser, ou échouer. C'est ce qui permet d'éprouver les gardes sur un
  * agent qui écrit lui-même, plutôt que sur un modèle qui propose.
  */
-function fakeClaudeCode(behaviour: 'edit' | 'escape' | 'hang' | 'fail' | 'nojson'): string {
+function fakeClaudeCode(behaviour: 'edit' | 'escape' | 'hang' | 'fail' | 'nojson' | 'tamper'): string {
   const script = join(dir, `fake-claude-${behaviour}.cjs`);
   const body = [
     // `--version` repond avant toute lecture : une sonde n'envoie rien sur
@@ -59,6 +59,12 @@ function fakeClaudeCode(behaviour: 'edit' | 'escape' | 'hang' | 'fail' | 'nojson
     "  if (mode === 'escape') {",
     "    fs.writeFileSync('README.md', 'écrasé hors périmètre\\n');",
     "  } else {",
+    // `tamper` : l'édition légitime, plus un node_modules réel à la place du lien.
+    "    if (mode === 'tamper') {",
+    "      fs.rmSync('node_modules');",
+    "      fs.mkdirSync('node_modules/dep', { recursive: true });",
+    "      fs.writeFileSync('node_modules/dep/index.js', 'module.exports = \"piégé\";\\n');",
+    "    }",
     "    fs.mkdirSync('fixture', { recursive: true });",
     "    fs.writeFileSync('fixture/add.ts',",
     "      'export function add(a, b) {\\n  if (!Number.isFinite(a)) throw new TypeError(\\\"a\\\");\\n  return a + b;\\n}\\n');",
@@ -323,6 +329,47 @@ describe('l’exécution réelle, avec un faux binaire', () => {
   });
 });
 
+describe('le lien node_modules du worktree', { skip: process.platform === 'win32' && 'liens POSIX seulement' }, () => {
+  // La forme réelle du dépôt ATLAS : `node_modules/` ignoré, dépendances
+  // installées à la racine. C'est ce qui faisait échouer l'essai du Controller
+  // Bridge en SECURITY_VIOLATION sur une mission par ailleurs irréprochable.
+  beforeEach(() => {
+    writeFileSync(join(repoRoot, '.gitignore'), 'node_modules/\n.env\n', 'utf8');
+    git(['add', '.gitignore'], repoRoot);
+    git(['commit', '--quiet', '-m', 'gitignore'], repoRoot);
+    mkdirSync(join(repoRoot, 'node_modules', 'dep'), { recursive: true });
+    writeFileSync(join(repoRoot, 'node_modules', 'dep', 'index.js'), 'module.exports = 1;\n', 'utf8');
+  });
+
+  test('le lien posé par le runner ne fait pas échouer une mission dans le périmètre', async () => {
+    const task = newTask({ objective: 'valider add()', allowed_paths: ['fixture'] });
+    const outcome = await worker(fakeClaudeCode('edit')).execute(task, ctx());
+
+    assert.equal(outcome.kind, 'DONE', `${outcome.errorCode} ${outcome.errorMessage}`);
+    const result = outcome.result as Record<string, unknown>;
+    assert.deepEqual(result.files_changed, ['fixture/add.ts']);
+    assert.deepEqual(result.files_added, []);
+    assert.doesNotMatch(String(result.diff_summary), /node_modules/);
+    assert.match(String(result.diff_summary), /fixture\/add\.ts/);
+
+    const workspace = repos.tasks.workspaceFor(task.taskId)!;
+    execFileSync('git', ['worktree', 'remove', '--force', workspace.path], { cwd: repoRoot });
+    assert.ok(existsSync(join(repoRoot, 'node_modules', 'dep', 'index.js')));
+  });
+
+  test('un agent qui remplace node_modules fait échouer la tâche', async () => {
+    const task = newTask({ objective: 'o', allowed_paths: ['fixture'] });
+    const outcome = await worker(fakeClaudeCode('tamper')).execute(task, ctx());
+
+    assert.equal(outcome.kind, 'FAILED');
+    assert.equal(outcome.errorCode, 'SECURITY_VIOLATION');
+    assert.match(String(outcome.errorMessage), /node_modules/);
+    assert.equal(repos.tasks.workspaceFor(task.taskId)?.state, 'ABANDONED');
+    assert.equal(inspectRepo(repoRoot).clean, true, 'le dépôt principal reste intact');
+    assert.match(readFileSync(join(repoRoot, 'node_modules', 'dep', 'index.js'), 'utf8'), /= 1;/);
+  });
+});
+
 describe('la facturation de Claude Code', () => {
   const sauvegarde = { ...process.env };
   afterEach(() => {
@@ -356,6 +403,49 @@ describe('la facturation de Claude Code', () => {
     );
     assert.equal(verdict.state, 'READY');
     assert.match(verdict.detail, /FACTURATION/, 'le mode payant se dit à voix haute');
+  });
+
+  /**
+   * Un faux binaire qui ne fait que dire s'il a reçu la clé. C'est l'invariant
+   * d'atlas-engineer : la clé est dans l'environnement du runner — les workers
+   * Anthropic directs s'en servent — mais jamais dans celui de Claude Code.
+   */
+  const keySeenByBinary = async (): Promise<unknown> => {
+    const script = join(dir, 'fake-claude-env.cjs');
+    writeFileSync(script, [
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log(JSON.stringify({ hasKey: Boolean(process.env.ANTHROPIC_API_KEY) }));",
+      "});",
+    ].join('\n'), 'utf8');
+    const launcher = join(dir, `fake-claude-env${process.platform === 'win32' ? '.cmd' : '.sh'}`);
+    writeFileSync(
+      launcher,
+      process.platform === 'win32'
+        ? `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`,
+      'utf8',
+    );
+    if (process.platform !== 'win32') chmodSync(launcher, 0o755);
+    const run = await runClaudeCode({
+      binary: launcher, prompt: 'mission', cwd: dir, timeoutMs: 15_000,
+      allowedTools: DEFAULT_ALLOWED_TOOLS, logger,
+    });
+    assert.equal(run.ok, true, run.raw);
+    return run.payload?.hasKey;
+  };
+
+  test('abonnement : la clé reste au runner, le binaire ne la reçoit pas', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-factice-pour-le-test';
+    process.env.ATLAS_CLAUDE_CODE_USE_API_KEY = 'false';
+    assert.equal(await keySeenByBinary(), false, 'Claude Code ne facture jamais à la clé');
+    assert.equal(process.env.ANTHROPIC_API_KEY, 'sk-ant-factice-pour-le-test', 'les autres workers la gardent');
+  });
+
+  test('facturation à la clé choisie : le binaire la reçoit', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-factice-pour-le-test';
+    process.env.ATLAS_CLAUDE_CODE_USE_API_KEY = 'true';
+    assert.equal(await keySeenByBinary(), true);
   });
 
   test('sans binaire, l’authentification est indéterminable, pas absente', () => {

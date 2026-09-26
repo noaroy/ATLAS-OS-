@@ -34,6 +34,16 @@ export interface SupervisorDeps {
    * Même mécanisme : une tâche à clé de période, servie par le daemon.
    */
   autopilotScheduler?: (now: Date) => { created: string[]; existing: string[] };
+  /**
+   * Le sondage du pont contrôleur, quand ATLAS_CONTROLLER_ENABLED est vrai.
+   * Même mécanisme : une tâche CONTROLLER_BRIDGE_POLL à clé de période.
+   */
+  controllerScheduler?: (now: Date) => { created: string[]; existing: string[] };
+  /**
+   * La revue du superviseur GPT, quand ATLAS_SUPERVISOR_ENABLED est vrai.
+   * Même mécanisme : une tâche SUPERVISOR_REVIEW_POLL à clé de période.
+   */
+  gptSupervisorScheduler?: (now: Date) => { created: string[]; existing: string[] };
 }
 
 /**
@@ -235,6 +245,40 @@ export class RuntimeSupervisor {
           description:
             'Pose le cycle de contrôle de l’Autopilot (observer, proposer, prioriser, confier ce qui est sûr, vérifier, apprendre) avec une clé de période : rien n’est créé deux fois, rien n’est envoyé.',
           trigger: { type: 'schedule', cron: '*/5 * * * *', timezone: 'UTC' },
+        },
+        async () => {
+          const report = schedule(new Date());
+          return { created: report.created.length, existing: report.existing.length };
+        },
+      );
+    }
+
+    if (this.deps.controllerScheduler) {
+      const schedule = this.deps.controllerScheduler;
+      automation.registerInternal(
+        'atlas.controller-bridge',
+        {
+          name: 'Controller bridge poll',
+          description:
+            'Pose le sondage du pont contrôleur (issues GitHub → une tâche ENGINEERING_CHANGE, résultat publié sur l’issue) avec une clé de période : rien n’est créé deux fois, rien n’est appliqué ni déployé.',
+          trigger: { type: 'schedule', cron: '*/5 * * * *', timezone: 'UTC' },
+        },
+        async () => {
+          const report = schedule(new Date());
+          return { created: report.created.length, existing: report.existing.length };
+        },
+      );
+    }
+
+    if (this.deps.gptSupervisorScheduler) {
+      const schedule = this.deps.gptSupervisorScheduler;
+      automation.registerInternal(
+        'atlas.gpt-supervisor',
+        {
+          name: 'GPT supervisor review poll',
+          description:
+            'Pose le tour du superviseur GPT (tâches d’objectif en READY_FOR_REVIEW → décision JSON versionnée → au plus une suite Claude Code) avec une clé de période : rien n’est créé deux fois, rien n’est appliqué, poussé ni déployé.',
+          trigger: { type: 'schedule', cron: '* * * * *', timezone: 'UTC' },
         },
         async () => {
           const report = schedule(new Date());

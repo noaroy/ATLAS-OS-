@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   freshnessOf, applyResult, ago, mainResultOf, rankSegments, todoLines, describeRecommendation, systemProblems,
-  STALE_AFTER_MS, DEAD_AFTER_MS, type LiveState,
+  systemVerdict, opportunitySummary, STALE_AFTER_MS, DEAD_AFTER_MS, type LiveState,
 } from '../src/lib/dashboard-view.ts';
 
 /**
@@ -99,5 +99,25 @@ describe('libellés', () => {
     assert.deepEqual(systemProblems({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: { paused: false, pauseReason: null } }), []);
     const problems = systemProblems({ search: ok, llm: ok, gmail: { state: 'down', detail: 'jeton expiré' }, workers: ok, outbound: { paused: true, pauseReason: 'AUTO_PAUSE_BOUNCE' } });
     assert.deepEqual(problems, ['Email : jeton expiré', 'Envois en pause — AUTO_PAUSE_BOUNCE']);
+  });
+
+  test('le verdict système dit ce qui bloque un premier contact', () => {
+    const ok = { state: 'ok', detail: 'x' };
+    const live = { enabled: true, mode: 'PRODUCTION', paused: false, pauseReason: null };
+    assert.deepEqual(systemVerdict({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: live }), { tone: 'ok', headline: 'En marche — rien ne bloque', blockers: [] });
+    const dry = systemVerdict({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: { ...live, mode: 'DRY_RUN' } });
+    assert.equal(dry.tone, 'warn');
+    assert.deepEqual(dry.blockers, ['Mode DRY_RUN : aucun envoi réel']);
+    const off = systemVerdict({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: { ...live, enabled: false } });
+    assert.equal(off.tone, 'bad');
+    assert.match(off.blockers[0]!, /interrupteur fermé/);
+    assert.equal(systemVerdict({ search: ok, llm: ok, gmail: ok, workers: ok, outbound: { ...live, paused: true, pauseReason: 'x' } }).tone, 'bad');
+  });
+
+  test('une opportunité n’est prête que si son email a été observé', () => {
+    assert.deepEqual(opportunitySummary({ tier: 'PRIORITY', score: 90, contact: { email: 'a@b.fr', observed: true } }),
+      { tier: 'Priorité · 90', contact: 'Email observé : a@b.fr', ready: true });
+    assert.equal(opportunitySummary({ tier: null, score: null, contact: { email: 'a@b.fr', observed: false } }).ready, false);
+    assert.equal(opportunitySummary({ tier: null, score: null, contact: { email: null, observed: false } }).contact, 'Contact à trouver');
   });
 });

@@ -207,3 +207,46 @@ export function systemProblems(system: {
   if (system.outbound.paused) problems.push(`Envois en pause${system.outbound.pauseReason ? ` — ${system.outbound.pauseReason}` : ''}`);
   return problems;
 }
+
+/**
+ * Le verdict en une ligne : ce qui empêche un premier contact de partir.
+ * Une lecture de l'état publié, rien de plus — un voyant éteint n'est pas
+ * un blocage, un interrupteur fermé ou un mode d'essai l'est.
+ */
+export interface SystemVerdict {
+  tone: 'ok' | 'warn' | 'bad';
+  headline: string;
+  blockers: string[];
+}
+
+export function systemVerdict(system: Parameters<typeof systemProblems>[0] & {
+  outbound: { enabled: boolean; mode: string; paused: boolean; pauseReason: string | null };
+}): SystemVerdict {
+  const blockers = systemProblems(system);
+  if (!system.outbound.enabled) blockers.push('Envoi sortant désactivé (interrupteur fermé)');
+  if (system.outbound.mode !== 'PRODUCTION') blockers.push(`Mode ${system.outbound.mode} : aucun envoi réel`);
+  const down = (['search', 'gmail', 'llm', 'workers'] as const).some((k) => system[k].state === 'down');
+  if (down || system.outbound.paused || !system.outbound.enabled) {
+    return { tone: 'bad', headline: 'Bloqué — aucun premier contact ne part', blockers };
+  }
+  if (blockers.length > 0) return { tone: 'warn', headline: 'En marche, avec des réserves', blockers };
+  return { tone: 'ok', headline: 'En marche — rien ne bloque', blockers };
+}
+
+// ─── Opportunités ───────────────────────────────────────────────────────────
+
+const TIER_LABEL: Record<string, string> = { PRIORITY: 'Priorité', GOOD_FIT: 'Bon profil', WATCH: 'À surveiller' };
+
+/** Où en est le contact d'une opportunité : observé sur une page officielle, sinon à trouver. */
+export function opportunitySummary(o: {
+  tier: string | null;
+  score: number | null;
+  contact: { email: string | null; observed: boolean };
+}): { tier: string; contact: string; ready: boolean } {
+  const ready = Boolean(o.contact.email) && o.contact.observed;
+  return {
+    tier: o.tier ? `${TIER_LABEL[o.tier] ?? o.tier}${o.score !== null ? ` · ${o.score}` : ''}` : 'Non évalué',
+    contact: ready ? `Email observé : ${o.contact.email}` : o.contact.email ? 'Email non vérifié' : 'Contact à trouver',
+    ready,
+  };
+}

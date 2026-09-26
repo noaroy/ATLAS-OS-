@@ -65,6 +65,8 @@ interface Progress {
   rawCandidates: number;
   stoppedBy: string[];
   startedAt: string;
+  /** Lectures de pages d'identité (F2) : persisté pour que le plafond par tour survive une reprise. */
+  identityFetches: number;
 }
 
 const MAX_RESULTS_PER_QUERY = 10;
@@ -123,7 +125,7 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
   if (resumed && resumed.status === 'RUNNING') {
     run = resumed;
     const p = resumed.progress as Partial<Progress>;
-    progress = { queue: p.queue ?? [], processed: p.processed ?? [], rawCandidates: p.rawCandidates ?? 0, stoppedBy: p.stoppedBy ?? [], startedAt: p.startedAt ?? resumed.startedAt };
+    progress = { queue: p.queue ?? [], processed: p.processed ?? [], rawCandidates: p.rawCandidates ?? 0, stoppedBy: p.stoppedBy ?? [], startedAt: p.startedAt ?? resumed.startedAt, identityFetches: p.identityFetches ?? 0 };
     logger.info('expansion : reprise', { runId: run.id, restants: progress.queue.length, traités: progress.processed.length });
   } else if (resumed) {
     return { run: resumed, report: expansionReport(repos, resumed.id) };
@@ -133,7 +135,7 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
       purpose, trigger: options.trigger ?? 'cli', missionId: options.missionId ?? null,
       seeds: seeds.map((s) => ({ ...s })), strategies: strategies.map((s) => s.key), limits: { ...limits }, icp: { ...icp }, startedAt: now().toISOString(),
     });
-    progress = { queue: seeds.map((seed) => ({ seed, depth: 0, rootKey: entityKeyOf(seed) })), processed: [], rawCandidates: 0, stoppedBy: [], startedAt: now().toISOString() };
+    progress = { queue: seeds.map((seed) => ({ seed, depth: 0, rootKey: entityKeyOf(seed) })), processed: [], rawCandidates: 0, stoppedBy: [], startedAt: now().toISOString(), identityFetches: 0 };
     for (const seed of seeds) {
       repos.expansion.upsertCandidate({ runId: run.id, entityKey: entityKeyOf(seed), companyName: seed.name, canonicalDomain: seed.domain, website: seed.website, country: seed.country, depth: 0, seedKey: entityKeyOf(seed), isSeed: true, discoveredAt: now().toISOString() });
     }
@@ -142,7 +144,7 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
 
   const counters: Counters = {
     searchCalls: run.searchCalls, searchCostUsd: run.searchCostUsd, fetches: run.fetches, aiCalls: run.aiCalls, aiCostUsd: run.aiCostUsd,
-    rawCandidates: progress.rawCandidates, stoppedBy: new Set(progress.stoppedBy), identityFetches: 0,
+    rawCandidates: progress.rawCandidates, stoppedBy: new Set(progress.stoppedBy), identityFetches: progress.identityFetches,
   };
   const aiBudgetToday = purpose === 'SALES' ? salesAiBudgetRemaining(repos, config, now()) : Number.POSITIVE_INFINITY;
   const seedKeys = new Set(run.seeds.map((s) => entityKeyOf({ domain: typeof s.domain === 'string' ? s.domain : null, name: String(s.name ?? '') })));
@@ -163,6 +165,7 @@ export async function runExpansion(deps: ExpansionDeps, options: ExpansionOption
       const children = await expandSeed(ctx, item, strategies);
       progress.processed.push(key);
       progress.rawCandidates = counters.rawCandidates;
+      progress.identityFetches = counters.identityFetches;
       // Une graine à la profondeur d révèle des candidats à d+1. Un enfant ne
       // devient graine que si ses propres candidats (d+2) restent sous la
       // profondeur maximale : profondeur 1 = les expansions directes, rien
@@ -399,9 +402,9 @@ async function profileSeed(ctx: Ctx, seed: ExpansionSeed): Promise<SeedProfile> 
   }
   if (profile.keywords.length === 0) profile.keywords = keywordsFrom([seed.activity, seed.name]);
   // Le modèle affine les mots de métier — quand il existe, et sous le plafond.
-  if (ctx.deps.provider && profile.homepageText && canSpendAi(ctx, 0.01)) {
-    const outcome = await profileActivity(ctx.deps.provider, ctx.deps.config, profile, { runId: ctx.run.id, missionId: ctx.missionId });
-    ctx.counters.aiCalls += 1;
+  if (ctx.deps.provider && profile.homepageText) {
+    const outcome = await profileActivity(ctx.deps.provider, ctx.deps.config, profile, { runId: ctx.run.id, missionId: ctx.missionId }, (bound) => canSpendAi(ctx, bound));
+    if (outcome.called) ctx.counters.aiCalls += 1;
     ctx.counters.aiCostUsd += outcome.costUsd;
     if (outcome.value) {
       profile.activity = outcome.value.activity ?? profile.activity;
@@ -413,9 +416,21 @@ async function profileSeed(ctx: Ctx, seed: ExpansionSeed): Promise<SeedProfile> 
   return profile;
 }
 
-function canSpendAi(ctx: Ctx, estimateUsd: number): boolean {
-  if (ctx.counters.aiCostUsd + estimateUsd > ctx.limits.maxAiCostUsd) { ctx.counters.stoppedBy.add('MAX_AI_COST'); return false; }
-  if (ctx.counters.aiCostUsd + estimateUsd > ctx.aiBudgetToday) { ctx.counters.stoppedBy.add('DAILY_AI_BUDGET'); return false; }
+/**
+ * La réservation d'un appel IA, avant qu'il parte.
+ *
+ * `boundUsd` est le coût maximal de l'appel au tarif connu ; `null`, le tarif
+ * est inconnu et l'appel n'a pas lieu. Le budget commercial du jour est relu à
+ * chaque réservation : d'autres workers le consomment pendant le tour.
+ */
+function canSpendAi(ctx: Ctx, boundUsd: number | null): boolean {
+  if (boundUsd === null) { ctx.counters.stoppedBy.add('AI_PRICE_UNKNOWN'); return false; }
+  if (ctx.counters.aiCostUsd + boundUsd > ctx.limits.maxAiCostUsd) { ctx.counters.stoppedBy.add('MAX_AI_COST'); return false; }
+  if (ctx.counters.aiCostUsd + boundUsd > ctx.aiBudgetToday) { ctx.counters.stoppedBy.add('DAILY_AI_BUDGET'); return false; }
+  if (ctx.run.purpose === 'SALES' && boundUsd > salesAiBudgetRemaining(ctx.deps.repos, ctx.deps.config, ctx.now())) {
+    ctx.counters.stoppedBy.add('DAILY_AI_BUDGET');
+    return false;
+  }
   return true;
 }
 
@@ -673,8 +688,8 @@ async function confirmInferred(ctx: Ctx, seed: SeedProfile, byKey: Map<string, {
     .map(([key, e]) => ({ key, name: e.ref.name, snippet: e.snippets[0] ?? null, proposed: e.findings.find((f) => f.status === 'INFERRED')!.relationship }));
   for (let i = 0; i < inferred.length; i += 12) {
     const batch = inferred.slice(i, i + 12);
-    if (!canSpendAi(ctx, 0.004 * batch.length)) break;
-    const outcome = await confirmRelationships(ctx.deps.provider, ctx.deps.config, seed, batch, { runId: ctx.run.id, missionId: ctx.missionId });
+    const outcome = await confirmRelationships(ctx.deps.provider, ctx.deps.config, seed, batch, { runId: ctx.run.id, missionId: ctx.missionId }, (bound) => canSpendAi(ctx, bound));
+    if (!outcome.called) break;
     ctx.counters.aiCalls += 1;
     ctx.counters.aiCostUsd += outcome.costUsd;
     for (const o of outcome.value ?? []) out.set(o.key, o);

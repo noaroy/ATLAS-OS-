@@ -1,10 +1,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { AtlasError } from '@atlas/core';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { AtlasError, createLogger, type AtlasConfig } from '@atlas/core';
 import {
   InferenceFabric,
   InferenceProviderRegistry,
   InferenceRouter,
+  buildInferenceRegistry,
+  reloadPricingConfig,
   ANTHROPIC_CAPABILITIES,
   OPENAI_COMPATIBLE_CAPABILITIES,
   SIMULATION_CAPABILITIES,
@@ -494,5 +499,142 @@ describe('disjoncteur et score d’inférence', () => {
     registry.setCredit('anthropic', 'unknown');
     await liveFabric(registry).complete(requestFor());
     assert.equal(registry.statusOf('anthropic')!.credit, 'ok');
+  });
+});
+
+// ─── Secours OpenAI ─────────────────────────────────────────────────────────
+
+describe('secours OpenAI après un compte Anthropic épuisé', () => {
+  /** Anthropic en tête ; le secours ne devient éligible qu'Anthropic tombé. */
+  function gatedFleet(anthropic: 'ok' | Error) {
+    const registry = new InferenceProviderRegistry();
+    const primary = fakeProvider('anthropic', anthropic);
+    const openai = {
+      kind: 'anthropic' as const,
+      calls: 0,
+      async complete(): Promise<LlmResponse> {
+        openai.calls += 1;
+        return okResponse('gpt-5-2025-08-07');
+      },
+    };
+    const simulation = fakeProvider('simulation', 'ok');
+    registry.register({
+      id: 'anthropic', label: 'anthropic', provider: primary, priority: 20, costModel: 'metered',
+      capabilities: ANTHROPIC_CAPABILITIES, available: () => ({ available: true, reason: 'prêt' }),
+    });
+    registry.register({
+      id: 'openai', label: 'openai', provider: openai, priority: 30, costModel: 'metered',
+      capabilities: { ...ANTHROPIC_CAPABILITIES, toolUse: false, serverTools: false, models: ['*'] },
+      available: () => {
+        const a = registry.get('anthropic')!;
+        const down = a.credit === 'exhausted' || (a.credit === 'quota-reached' && a.breaker.state === 'open');
+        return down ? { available: true, reason: 'secours' } : { available: false, reason: 'secours seulement' };
+      },
+    });
+    registry.register({
+      id: 'simulation', label: 'simulation', provider: simulation, priority: 90, costModel: 'free',
+      capabilities: SIMULATION_CAPABILITIES, available: () => ({ available: true, reason: 'toujours' }),
+    });
+    return { registry, primary, openai, simulation };
+  }
+
+  test('Anthropic sain reste le fournisseur principal', async () => {
+    const { registry, primary, openai } = gatedFleet('ok');
+    const fabric = liveFabric(registry);
+    await fabric.complete(requestFor());
+    assert.equal(primary.calls, 1);
+    assert.equal(openai.calls, 0);
+    assert.equal(fabric.lastTrace().selected, 'anthropic');
+  });
+
+  test('crédit épuisé : la même requête bascule sur OpenAI, jamais sur la simulation', async () => {
+    const { registry, openai, simulation } = gatedFleet(new Error('400 Your credit balance is too low'));
+    const fabric = liveFabric(registry);
+    const response = await fabric.complete(requestFor());
+    assert.equal(openai.calls, 1);
+    assert.equal(simulation.calls, 0);
+    assert.equal(fabric.lastTrace().selected, 'openai');
+    assert.equal(response.model, 'gpt-5-2025-08-07', 'le modèle servi reste attribuable');
+    assert.deepEqual(
+      fabric.lastTrace().attempts.map((a) => [a.providerId, a.failureKind]),
+      [['anthropic', 'credit'], ['openai', null]],
+    );
+  });
+
+  test('quota atteint : secours tant que le disjoncteur est ouvert', async () => {
+    const { registry, openai } = gatedFleet(new Error('429 rate limit exceeded'));
+    await liveFabric(registry).complete(requestFor());
+    assert.equal(registry.statusOf('anthropic')!.credit, 'quota-reached');
+    assert.equal(openai.calls, 1);
+  });
+
+  test('une panne sans rapport avec le compte n’ouvre pas le secours', async () => {
+    const { registry, openai, simulation } = gatedFleet(new Error('503 overloaded'));
+    await assert.rejects(liveFabric(registry).complete(requestFor()));
+    assert.equal(openai.calls, 0);
+    assert.equal(simulation.calls, 0);
+  });
+
+  test('un coût au tarif inconnu n’est jamais compté zéro', async () => {
+    const { registry } = registryWith([{ id: 'x' }]);
+    const provider = registry.get('x')!.provider as { complete: LlmProvider['complete'] };
+    provider.complete = async () => okResponse('modele-sans-tarif');
+    await liveFabric(registry).complete(requestFor());
+    const metrics = registry.statusOf('x')!.metrics;
+    assert.equal(metrics.unpricedCalls, 1);
+    assert.equal(metrics.totalCostUsd, 0, 'rien d’inventé dans le total');
+  });
+
+  describe('le parc du déploiement', () => {
+    const config = {
+      llm: { apiKey: 'sk-ant-test', mode: 'live' },
+      ai: { openaiModel: 'gpt-5', openaiTimeoutMs: 5_000 },
+    } as unknown as AtlasConfig;
+    const logger = createLogger({ level: 'error', pretty: false });
+
+    const withOpenAiKey = <T>(fn: () => T): T => {
+      const previous = process.env.ATLAS_OPENAI_API_KEY;
+      process.env.ATLAS_OPENAI_API_KEY = 'sk-test';
+      try {
+        return fn();
+      } finally {
+        if (previous === undefined) delete process.env.ATLAS_OPENAI_API_KEY;
+        else process.env.ATLAS_OPENAI_API_KEY = previous;
+      }
+    };
+
+    test('OpenAI tarifé : écarté tant qu’Anthropic répond, seul éligible une fois son compte vide', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'atlas-pricing-'));
+      const file = join(dir, 'pricing.json');
+      writeFileSync(file, JSON.stringify([{
+        provider: 'openai', model: 'gpt-5', input_per_million: 1.25, output_per_million: 10,
+        effective_from: '2025-08-07', source: 'test',
+      }]));
+      reloadPricingConfig(file);
+      // Sonnet demandé : gpt-5 y est moins cher, la règle « jamais vers plus
+      // cher » ne l'écarte donc pas.
+      const sonnet = requestFor({ model: 'claude-sonnet-5' });
+      try {
+        const registry = withOpenAiKey(() => buildInferenceRegistry(config, logger));
+        assert.equal(registry.statusOf('openai')!.available, false);
+        assert.equal(new InferenceRouter(registry).plan(sonnet).order[0]!.record.id, 'anthropic');
+
+        registry.recordFailure('anthropic', { kind: 'credit', detail: 'credit balance too low' }, 10);
+        const plan = new InferenceRouter(registry).plan(sonnet);
+        assert.deepEqual(plan.order.map((c) => c.record.id), ['openai'], 'ni Anthropic épuisé, ni la simulation');
+      } finally {
+        reloadPricingConfig('');
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('un modèle OpenAI sans tarif connu n’est jamais routé', () => {
+      reloadPricingConfig('');
+      const registry = withOpenAiKey(() => buildInferenceRegistry(config, logger));
+      registry.recordFailure('anthropic', { kind: 'credit', detail: 'credit balance too low' }, 10);
+      const status = registry.statusOf('openai')!;
+      assert.equal(status.available, false);
+      assert.match(status.availabilityReason, /tarif inconnu/);
+    });
   });
 });

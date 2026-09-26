@@ -338,6 +338,14 @@ export function makeTestConfig(
     runtime: { heartbeatMs: 60_000 },
     // L'Autopilot ne se cadence pas dans les tests : un cycle se joue à la main.
     autopilot: { enabled: false, cycleMinutes: 30, maxDispatchPerCycle: 3, maxOpenActions: 12, maxCycleCostUsd: 0.5 },
+    // Le pont contrôleur est fermé dans les tests : un test qui l'ouvre le dit.
+    controller: { enabled: false, repo: '', authors: [], label: 'atlas:controller-task', pollMinutes: 5, maxIssuesPerPoll: 5 },
+    // Le superviseur GPT est fermé dans les tests : un test qui l'ouvre le dit.
+    supervisor: {
+      enabled: false, pollMinutes: 2, maxCycles: 3, maxCorrections: 2, objectiveTimeoutMinutes: 60,
+      reviewTimeoutMs: 180_000, maxObjectiveCostUsd: 0.5, maxReviewOutputTokens: 4_000, maxReviewAttempts: 2,
+      maxReviewsPerPoll: 1, maxDiffChars: 40_000,
+    },
     log: { level: 'error', pretty: false },
   };
 }

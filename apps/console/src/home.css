@@ -137,6 +137,28 @@
 .home-notice { font-size: 13px; color: var(--h-muted); padding: 10px 14px; border: 1px solid var(--h-line); border-radius: 8px; background: var(--h-surface); margin-top: 16px; }
 .home-notice--warn { color: var(--h-warn); }
 
+/* verdict système : une ligne, les blocages en dessous */
+.home-verdict { margin-top: 16px; padding: 12px 16px; border: 1px solid var(--h-line); border-left: 3px solid var(--h-ok); border-radius: 8px; background: var(--h-surface); font-size: 14px; }
+.home-verdict--warn { border-left-color: var(--h-warn); }
+.home-verdict--bad { border-left-color: var(--h-bad); }
+.home-verdict ul { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--h-muted); }
+
+/* opportunités : lecture seule */
+.home-opp { flex-direction: column; align-items: stretch !important; gap: 4px !important; }
+.home-opp .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.home-opp .company { font-weight: 600; }
+.home-opp .why { font-size: 14px; }
+.home-opp .meta { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--h-muted); overflow-wrap: anywhere; }
+
+/*
+ * Sur téléphone, la console se lit : les gestes commerciaux (traiter,
+ * décider, approuver, mettre en pause) restent sur grand écran.
+ * Non scopé sous `.home` : la page Ventes s'en sert aussi.
+ */
+@media (max-width: 720px) {
+  .atlas-write { display: none !important; }
+}
+
 @media (max-width: 720px) {
   .home-wrap { padding: 0 16px 48px; }
   .home-head { gap: 12px; padding-top: 16px; }

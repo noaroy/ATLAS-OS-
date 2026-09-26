@@ -265,6 +265,38 @@ const envSchema = z.object({
   ATLAS_AUTOPILOT_MAX_OPEN_ACTIONS: intish(12, 1, 100),
   ATLAS_AUTOPILOT_MAX_CYCLE_COST_USD: floatish(0.5, 0, 20),
 
+  // ─── Le pont contrôleur (GitHub Issues → ENGINEERING_CHANGE) ──────────
+  // Fermé par défaut, et fermé deux fois : l'interrupteur doit être levé, et
+  // le dépôt comme la liste d'auteurs doivent être renseignés — vides, tout
+  // est refusé. Le jeton n'est jamais lu ici : il vit dans l'environnement
+  // (ATLAS_CONTROLLER_GITHUB_TOKEN, à défaut GITHUB_TOKEN) et n'est lu qu'à
+  // l'appel, pour ne jamais séjourner dans un objet qu'on journalise.
+  ATLAS_CONTROLLER_ENABLED: boolish(false),
+  ATLAS_CONTROLLER_REPO: z.string().default(''),
+  ATLAS_CONTROLLER_AUTHORS: z.string().default(''),
+  ATLAS_CONTROLLER_LABEL: z.string().default('atlas:controller-task'),
+  ATLAS_CONTROLLER_POLL_MINUTES: intish(5, 5, 1_440),
+  ATLAS_CONTROLLER_MAX_ISSUES_PER_POLL: intish(5, 1, 20),
+
+  // ─── Le superviseur GPT (READY_FOR_REVIEW → revue → suite ou fin) ─────
+  // Fermé par défaut. Levé, le daemon du serveur relit chaque tâche
+  // ENGINEERING_CHANGE d'un objectif autonome arrivée en READY_FOR_REVIEW,
+  // demande une décision JSON versionnée à GPT, et pose au plus une suite
+  // Claude Code par cycle. Rien n'est appliqué, poussé ni déployé. Les bornes
+  // sont prudentes : elles s'ajoutent aux plafonds IA existants, jamais à leur
+  // place.
+  ATLAS_SUPERVISOR_ENABLED: boolish(false),
+  ATLAS_SUPERVISOR_POLL_MINUTES: intish(2, 1, 1_440),
+  ATLAS_SUPERVISOR_MAX_CYCLES: intish(3, 1, 10),
+  ATLAS_SUPERVISOR_MAX_CORRECTIONS: intish(2, 0, 10),
+  ATLAS_SUPERVISOR_OBJECTIVE_TIMEOUT_MINUTES: intish(60, 5, 1_440),
+  ATLAS_SUPERVISOR_REVIEW_TIMEOUT_MS: intish(180_000, 10_000, 900_000),
+  ATLAS_SUPERVISOR_MAX_OBJECTIVE_COST_USD: floatish(0.5, 0.01, 20),
+  ATLAS_SUPERVISOR_MAX_REVIEW_OUTPUT_TOKENS: intish(4_000, 500, 32_000),
+  ATLAS_SUPERVISOR_MAX_REVIEW_ATTEMPTS: intish(2, 1, 3),
+  ATLAS_SUPERVISOR_MAX_REVIEWS_PER_POLL: intish(1, 1, 5),
+  ATLAS_SUPERVISOR_MAX_DIFF_CHARS: intish(40_000, 2_000, 200_000),
+
   // ─── La boucle commerciale autonome ───────────────────────────────────
   // Le verrou d'approbation est le seul reglage dont la valeur par defaut
   // engage quelqu'un : il vaut `true`, et le passer a `false` autorise ATLAS
@@ -533,6 +565,39 @@ export interface AtlasConfig {
     maxDispatchPerCycle: number;
     maxOpenActions: number;
     maxCycleCostUsd: number;
+  };
+  /**
+   * Le pont contrôleur : une issue GitHub au format versionné devient une
+   * tâche ENGINEERING_CHANGE. Aucun port, aucun webhook — un sondage.
+   */
+  controller: {
+    enabled: boolean;
+    /** « propriétaire/dépôt ». Vide : tout est refusé. */
+    repo: string;
+    /** Les logins GitHub autorisés, en minuscules. Vide : tout est refusé. */
+    authors: string[];
+    /** L'étiquette qui désigne une issue à lire. */
+    label: string;
+    pollMinutes: number;
+    maxIssuesPerPoll: number;
+  };
+  /**
+   * Le superviseur GPT : il relit ce que Claude Code a produit, décide la
+   * suite (COMPLETE, NEXT_TASK, CORRECT, BLOCKED) et ne pose au plus qu'une
+   * tâche ENGINEERING_CHANGE par cycle. Il ne lance jamais Claude Code.
+   */
+  supervisor: {
+    enabled: boolean;
+    pollMinutes: number;
+    maxCycles: number;
+    maxCorrections: number;
+    objectiveTimeoutMinutes: number;
+    reviewTimeoutMs: number;
+    maxObjectiveCostUsd: number;
+    maxReviewOutputTokens: number;
+    maxReviewAttempts: number;
+    maxReviewsPerPoll: number;
+    maxDiffChars: number;
   };
   log: { level: 'debug' | 'info' | 'warn' | 'error'; pretty: boolean };
 }
@@ -851,6 +916,29 @@ export function loadConfig(cwd = process.cwd()): AtlasConfig {
       maxDispatchPerCycle: e.ATLAS_AUTOPILOT_MAX_DISPATCH_PER_CYCLE,
       maxOpenActions: e.ATLAS_AUTOPILOT_MAX_OPEN_ACTIONS,
       maxCycleCostUsd: e.ATLAS_AUTOPILOT_MAX_CYCLE_COST_USD,
+    },
+    controller: {
+      enabled: e.ATLAS_CONTROLLER_ENABLED,
+      repo: e.ATLAS_CONTROLLER_REPO.trim(),
+      authors: e.ATLAS_CONTROLLER_AUTHORS.split(',')
+        .map((a) => a.trim().toLowerCase())
+        .filter(Boolean),
+      label: e.ATLAS_CONTROLLER_LABEL.trim(),
+      pollMinutes: e.ATLAS_CONTROLLER_POLL_MINUTES,
+      maxIssuesPerPoll: e.ATLAS_CONTROLLER_MAX_ISSUES_PER_POLL,
+    },
+    supervisor: {
+      enabled: e.ATLAS_SUPERVISOR_ENABLED,
+      pollMinutes: e.ATLAS_SUPERVISOR_POLL_MINUTES,
+      maxCycles: e.ATLAS_SUPERVISOR_MAX_CYCLES,
+      maxCorrections: e.ATLAS_SUPERVISOR_MAX_CORRECTIONS,
+      objectiveTimeoutMinutes: e.ATLAS_SUPERVISOR_OBJECTIVE_TIMEOUT_MINUTES,
+      reviewTimeoutMs: e.ATLAS_SUPERVISOR_REVIEW_TIMEOUT_MS,
+      maxObjectiveCostUsd: e.ATLAS_SUPERVISOR_MAX_OBJECTIVE_COST_USD,
+      maxReviewOutputTokens: e.ATLAS_SUPERVISOR_MAX_REVIEW_OUTPUT_TOKENS,
+      maxReviewAttempts: e.ATLAS_SUPERVISOR_MAX_REVIEW_ATTEMPTS,
+      maxReviewsPerPoll: e.ATLAS_SUPERVISOR_MAX_REVIEWS_PER_POLL,
+      maxDiffChars: e.ATLAS_SUPERVISOR_MAX_DIFF_CHARS,
     },
     log: { level: e.ATLAS_LOG_LEVEL, pretty: e.ATLAS_LOG_PRETTY },
   };

@@ -64,6 +64,7 @@ npm run backup / restore-check / db:check / db:migrate
 npm run autopilot:status             # l'Autopilot, et le bloc SOFTWARE LOOP (relecteur, Claude, runner, dépôt, auto-deploy DISABLED)
 npm run expansion -- run | status | graph <domaine> | candidates | report | promote --run=<id>   # l'expansion de prospects : une bonne entreprise en révèle d'autres, avec preuves — aucun envoi
 npm run atlas:engineer -- --cycles=1 # le runner d'ingénierie isolé, à la main (sur le VPS : service atlas-engineer)
+npm run controller -- status | validate --file=<json> | poll   # le pont contrôleur GitHub Issues → ENGINEERING_CHANGE (jeton jamais affiché)
 npm run atlas:production-check       # les gardes, avant chaque bascule : SOFTWARE_READINESS · DEPLOYMENT_READINESS · REAL_WORLD_EVIDENCE ·
                                      # LIVE_DEPLOYMENT_STATUS (observé seulement depuis atlas-cli) · EXTERNAL_INTEGRATIONS
 npm run atlas:vps-check              # sur le VPS, lecture seule : système, .env (sans valeurs), conteneurs, réseau, base
@@ -524,9 +525,16 @@ vit ailleurs.
   démarrage) et un **worktree par tâche** (`/work/worktrees/<tâche>`, retiré
   avec elle ; `node_modules` de l'image lié dedans, aucune installation réseau) ;
 - Claude Code en mode headless (`-p --output-format json`, outils bornés),
-  **facturé à la clé d'API** (`ATLAS_CLAUDE_CODE_USE_API_KEY=true`,
-  `ANTHROPIC_API_KEY` transmise par interpolation Compose depuis le `.env`) —
-  aucune session interactive, aucune authentification manuelle ;
+  **par abonnement** (`ATLAS_CLAUDE_CODE_USE_API_KEY=false` en dur) ; la
+  session, ouverte une fois à la main, vit dans le volume nommé
+  `atlas-engineer-claude` (`/home/node/.claude`) et survit aux recréations du
+  conteneur — jamais dans le dépôt ni dans l'image ;
+- `ANTHROPIC_API_KEY` **reste transmise** au runner (interpolation Compose
+  depuis le `.env`) : les autres workers IA qu'il fait tourner appellent
+  l'API Anthropic directement et en ont besoin. Seul Claude Code en est
+  privé — avec `USE_API_KEY=false`, `runClaudeCode` la retire de
+  l'environnement du binaire (`childEnv`, `claude-code.ts`). Abonnement pour
+  Claude Code, clé pour le reste : deux chemins distincts, pas un choix global ;
 - **ce qu'il n'a pas** : pas d'`env_file` (seules les variables listées dans
   `docker-compose.yml` lui parviennent — ni `GMAIL_*`, ni
   `ATLAS_OPENAI_API_KEY`, ni le secret de session réel), pas de port, pas le
@@ -544,8 +552,7 @@ vit ailleurs.
 ```bash
 # 1. dans /opt/atlas/.env (jamais copié, jamais affiché)
 ATLAS_ENGINEERING_RUNNER=external        # le daemon du serveur laisse CLAUDE / CLAUDE_CODE en file
-ATLAS_CLAUDE_CODE_USE_API_KEY=true       # Claude Code facturé à la clé, non interactif
-ANTHROPIC_API_KEY=…                      # déjà présente ; c'est elle que le runner reçoit
+ANTHROPIC_API_KEY=…                      # déjà présente ; pour les workers Anthropic directs — jamais pour Claude Code
 ATLAS_AI_LIVE=true                       # sinon les fournisseurs restent ABSENT et rien n'est appelé
 # 2. le dépôt déployé doit être un dépôt git (/opt/atlas/.git) : c'est lui qui est monté en lecture seule
 cd /opt/atlas && git rev-parse --short HEAD
@@ -553,7 +560,9 @@ cd /opt/atlas && git rev-parse --short HEAD
 COMPOSE="docker compose --env-file /opt/atlas/.env -f deployment/docker-compose.yml -f deployment/docker-compose.private.yml"
 $COMPOSE --profile engineering up -d --build atlas-engineer
 $COMPOSE up -d atlas
-# 4. vérifier
+# 4. ouvrir la session Claude par abonnement, une fois (conservée dans le volume atlas-engineer-claude)
+$COMPOSE --profile engineering exec -it atlas-engineer claude   # se connecter, puis /exit
+# 5. vérifier
 $COMPOSE --profile engineering ps                       # atlas-engineer Up
 $COMPOSE logs --tail=20 atlas-engineer                  # « dépôt /work/repo @ <sha> · worktrees /work/worktrees »
 bash deployment/atlas-cli.sh autopilot-status           # SOFTWARE LOOP : Claude Code runner EXTERNAL, Repository workspace EXTERNAL
@@ -579,6 +588,217 @@ abonnement, ou à la clé si `ATLAS_CLAUDE_CODE_USE_API_KEY=true`).
 des propositions dans le cycle sous son nom ; c'est par là que le moteur
 d'expansion de prospects, le moteur de déclencheurs et l'apprentissage du
 revenu entreront, sans toucher au cycle.
+
+## Le pont contrôleur : une issue GitHub devient une tâche d'ingénierie
+
+```
+issue GitHub (étiquette + auteur autorisé + enveloppe atlas.controller-task.v1)
+  → CONTROLLER_BRIDGE_POLL (déterministe, daemon du serveur, aucun modèle)
+  → une tâche ENGINEERING_CHANGE (repos.tasks.create, routeTask → CLAUDE_CODE)
+  → atlas-engineer / ClaudeCodeWorker dans un worktree isolé → READY_FOR_REVIEW
+  → résultat atlas.controller-result.v1 publié sur la même issue + étiquette d'état
+```
+
+**Transport.** Les issues GitHub, et rien d'autre : un sondage **sortant**
+vers `api.github.com` (hôte fixe). Aucun webhook, aucun port, aucune route
+d'API, aucun écouteur. Le sondage est une tâche `CONTROLLER_BRIDGE_POLL` à clé
+de période (toutes les `ATLAS_CONTROLLER_POLL_MINUTES`, 5 min au plus souvent),
+posée par le superviseur **seulement** si `ATLAS_CONTROLLER_ENABLED=true`, avec
+une seule tentative : GitHub en panne = un tour FAILED, le suivant repasse.
+
+**Fermé par défaut, fermé deux fois.** Il faut `ATLAS_CONTROLLER_ENABLED=true`,
+`ATLAS_CONTROLLER_REPO=propriétaire/dépôt` **et** `ATLAS_CONTROLLER_AUTHORS=login1,login2` ;
+dépôt ou auteurs vides = tout est refusé, sans un appel. Le jeton vient de
+`ATLAS_CONTROLLER_GITHUB_TOKEN` (à défaut `GITHUB_TOKEN`), lu à l'appel : jamais
+affiché, journalisé ni stocké ; `controller status` n'en montre que la source.
+Jeton recommandé : fin, limité à ce dépôt, permission *Issues : read & write*.
+Le runner `atlas-engineer` ne reçoit **pas** ce jeton (pas d'`env_file`).
+
+**Ce qui est lu.** Une issue **ouverte**, portant `ATLAS_CONTROLLER_LABEL`
+(défaut `atlas:controller-task`), écrite par un login autorisé (casse
+indifférente), pas une pull request. Tout le reste est ignoré **sans écrire** :
+ni commentaire, ni étiquette. Dans le corps, seule compte une enveloppe — le
+corps entier en JSON, ou exactement **un** bloc ```` ```json ```` :
+
+```json
+{
+  "schema": "atlas.controller-task.v1",
+  "task_type": "ENGINEERING_CHANGE",
+  "correlation_id": "ctl-2026-09-24-001",
+  "objective": "Ajouter une validation des entrées dans fixture/add.ts",
+  "allowed_paths": ["fixture/add.ts", "packages/runtime/src/controller"],
+  "test_commands": ["npm test", "npm run typecheck"],
+  "acceptance_criteria": ["add refuse les entrées non finies"],
+  "constraints": [],
+  "limits": { "max_files_changed": 5, "max_diff_lines": 200, "timeout_minutes": 10 },
+  "apply": false,
+  "push": false,
+  "deploy": false
+}
+```
+
+Le texte libre autour n'entre ni dans la tâche ni dans la mission. Refus
+(commentaire `REJECTED`, étiquette `atlas:rejected`, **aucune tâche**) :
+pas d'enveloppe ou deux (`NO_ENVELOPE`, `AMBIGUOUS_ENVELOPE`), JSON illisible,
+autre schéma ou version (`WRONG_SCHEMA`), autre type que `ENGINEERING_CHANGE`
+(`WRONG_TASK_TYPE`), champ inconnu ou manquant (schéma strict), `allowed_paths`
+absent, vide ou > 20, chemin absolu, `..`, `.`, `*`, `**`, `?`, `[]`, `{}`, `~`,
+`$` (`INVALID_PATH`), zone protégée — `.env*`, `.git`, `.github`,
+`node_modules`, `dist`, `secrets`, clés (`*.pem`, `*.key`, `id_rsa`, `*secret*`…),
+`data/` et `deployment/` à la racine (`PROTECTED_PATH`), `test_commands` > 6 ou
+hors de la liste blanche `checkCommand` / `ENGINEERING_COMMAND_ALLOWLIST`
+(`npm test`, `npm run typecheck`, `npm run build`, `git diff`, `git status`,
+`git diff --stat` ; aucun enchaînement, redirection ni substitution :
+`INVALID_COMMAND`), bornes non entières ou ≤ 0 (`INVALID_LIMITS`), et
+**`apply`, `push` ou `deploy` à `true` : refus explicite**
+(`APPLY_PUSH_DEPLOY_REFUSED`). Les trois doivent être écrits, et faux.
+`npm run controller -- validate --file=enveloppe.json` vérifie une enveloppe
+sans GitHub ni base.
+
+**Bornes.** Effectives = minimum de la demande et des plafonds du déploiement
+(`ATLAS_MAX_FILES_CHANGED_PER_TASK`, `ATLAS_MAX_DIFF_LINES_PER_TASK`,
+`ATLAS_CLAUDE_CODE_TIMEOUT_MS`) ; une borne ramenée est nommée dans
+`clamped_limits`. ClaudeCodeWorker applique lui-même ces bornes resserrées
+(`payload.limits`) — une charge utile ne desserre jamais un plafond.
+
+**Idempotence.** Empreinte déterministe sur dépôt + issue + `correlation_id` +
+objectif + `allowed_paths` + `test_commands` → clé d'idempotence de la tâche.
+Le lien issue → tâche est consigné dans le registre immuable des opérations
+externes (`CONTROLLER_INTAKE`) : **une issue n'a qu'une tâche**, même si son
+corps est modifié ensuite (ouvrir une nouvelle issue pour une nouvelle
+demande). Un commentaire de résultat par tâche et par état
+(`CONTROLLER_RESULT`), retrouvé après un arrêt par un marqueur signé (HMAC sur
+`ATLAS_SESSION_SECRET` : un tiers ne peut pas le recopier pour faire taire un
+résultat). Redémarrages et relances ne dupliquent ni la tâche ni le commentaire.
+
+**Concurrence.** Deux sondeurs simultanés (ou deux processus sur la même base)
+ne font ni deux tâches ni deux commentaires. La tâche et le lien
+`CONTROLLER_INTAKE` naissent dans une même transaction SQLite IMMEDIATE : le
+second sondeur — même s'il a lu une autre version du corps — trouve l'issue
+prise et ne crée rien. S'il a lu une version refusée du corps, sa réservation
+du refus est interdite par la prise (même instruction SQL) : aucun `REJECTED`
+n'est publié sur une issue qui a déjà sa tâche. Chaque commentaire est
+**réservé avant le POST** : un
+seul sondeur obtient la place et publie. Une réservation trouvée sans
+confirmation (arrêt entre réservation et confirmation, échec GitHub consigné
+`FAILED`, autre sondeur en vol) n'est **jamais republiée automatiquement** :
+si le commentaire signé existe, il est confirmé ; sinon la publication est
+retenue (`held` dans le rapport de `npm run controller poll`) et attend une
+décision humaine. Les étiquettes, elles, continuent de converger ; l'état
+suivant de la tâche a sa propre clé et se publie normalement.
+
+**Ce qui est publié.** Un commentaire par état — `QUEUED` (accusé),
+`READY_FOR_REVIEW`, `BLOCKED` (attente humaine, pause quota/budget),
+`FAILED`, `REJECTED` — portant un JSON `atlas.controller-result.v1` (état,
+tâche, corrélation, empreinte, bornes effectives, fichiers du diff, hash,
+commit de base, état du worktree) et toujours `apply_performed=false`,
+`commit_to_main=false`, `push_performed=false`, `deploy_performed=false`,
+`messages_sent=0`. Tout passe par `redactSecrets` et l'effacement littéral du
+jeton. Une seule étiquette d'état à la fois : `atlas:queued`, `atlas:running`,
+`atlas:ready-for-review`, `atlas:blocked`, `atlas:failed`, `atlas:rejected`.
+
+**Ce que le pont ne fait jamais.** Lancer Claude Code (c'est le worker
+existant qui prend la tâche), appeler un modèle, appliquer, commiter sur main,
+pousser, déployer, écrire à un prospect. Appliquer un diff `READY_FOR_REVIEW`
+reste `npm run atlas:apply`, par une personne.
+
+```bash
+# dans /opt/atlas/.env (jamais affiché)
+ATLAS_CONTROLLER_ENABLED=true
+ATLAS_CONTROLLER_REPO=propriétaire/dépôt
+ATLAS_CONTROLLER_AUTHORS=login-du-contrôleur
+ATLAS_CONTROLLER_GITHUB_TOKEN=…
+# puis recréer le serveur, et vérifier
+bash deployment/atlas-cli.sh controller-status     # OUVERT / FERMÉ et pourquoi, dernier sondage, issues reçues
+```
+
+## Le superviseur GPT : la boucle qui continue sans personne
+
+Claude Code s'arrête toujours à READY_FOR_REVIEW. Le superviseur GPT est ce qui
+relit ce résultat et décide de la suite **sur le VPS, dans le daemon du
+serveur** : il ne dépend ni d'un poste allumé, ni d'une conversation ouverte.
+Les rôles restent séparés : GPT relit et décide ; Claude Code implémente
+(abonnement, `ATLAS_CLAUDE_CODE_USE_API_KEY=false`) ; le superviseur ne lance
+jamais Claude Code lui-même.
+
+### Le cycle
+
+1. Un **objectif autonome** est lancé : `npm run supervisor -- start …`
+   (ou une issue du pont contrôleur dont l'enveloppe porte `"autonomous": true`).
+   Sa tâche racine est une ENGINEERING_CHANGE ordinaire, routée par Hermes vers
+   CLAUDE_CODE, servie par `atlas-engineer` dans un worktree isolé.
+2. Toutes les `ATLAS_SUPERVISOR_POLL_MINUTES`, le superviseur (tâche
+   `SUPERVISOR_REVIEW_POLL`, worker déterministe du serveur, clé de période)
+   cherche les tâches d'objectif terminées sans décision.
+3. Gardes déterministes d'abord, **sans dépense** : objectif actif, échéance,
+   cycle attendu, tâche réellement READY_FOR_REVIEW, même commit de base
+   (`STALE_BASE`), diff différent du précédent (`REPEATED_DIFF`) et de tous les
+   précédents (`OSCILLATION`), coût inconnu injustifié (`COST_UNKNOWN`),
+   plafond de l'objectif et de la chaîne, budget du jour/mois (différé, pas
+   arrêté).
+4. Puis GPT, qui doit répondre **un seul objet JSON**
+   `atlas.supervisor-decision.v1` : `COMPLETE`, `NEXT_TASK`, `CORRECT` ou
+   `BLOCKED`. Prose, bloc de code, champ inconnu, identifiant différent,
+   commande hors liste blanche : refusé. Deux sorties illisibles →
+   `MALFORMED_REVIEW`, l'objectif s'arrête.
+5. `NEXT_TASK` / `CORRECT` : au plus **une** suite ENGINEERING_CHANGE, créée
+   dans la même transaction que la décision, avec une clé par objectif et par
+   cycle (`supervisor:child:v1:<objectif>:<cycle>`). Son worktree part du même
+   commit de base **avec le diff relu posé dessus** (vérifié par son
+   empreinte) : le travail s'empile sans toucher au dépôt principal. Le
+   périmètre (`allowed_paths`) est celui de l'objectif, jamais élargi.
+   `COMPLETE` consigne le résultat terminal (tâche finale, empreinte du diff
+   cumulé, fichiers). `BLOCKED` consigne la raison précise et arrête.
+
+Rien n'est jamais appliqué, commité sur main, poussé ni déployé par cette
+boucle : le diff final attend une personne (`atlas:apply`), comme toujours.
+
+### Bornes (toutes s'ajoutent aux plafonds IA existants)
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `ATLAS_SUPERVISOR_ENABLED` | `false` | Interrupteur. Exige aussi `ATLAS_AI_LIVE=true`, la clé OpenAI et un tarif déclaré. |
+| `ATLAS_SUPERVISOR_POLL_MINUTES` | `2` | Période du tour de revue. |
+| `ATLAS_SUPERVISOR_MAX_CYCLES` | `3` | Tâches par objectif, racine comprise (`MAX_CYCLES`). |
+| `ATLAS_SUPERVISOR_MAX_CORRECTIONS` | `2` | Décisions CORRECT par objectif (`MAX_CORRECTIONS`). |
+| `ATLAS_SUPERVISOR_OBJECTIVE_TIMEOUT_MINUTES` | `60` | Échéance de l'objectif (`OBJECTIVE_TIMEOUT` ; les tâches en file sont annulées). `ATLAS_MAX_CHAIN_RUNTIME_MINUTES` borne aussi la création des suites. |
+| `ATLAS_SUPERVISOR_REVIEW_TIMEOUT_MS` | `180000` | Délai d'un appel GPT. Un appel coupé a un coût inconnu : la reprise s'arrête sur `COST_UNKNOWN`. |
+| `ATLAS_SUPERVISOR_MAX_OBJECTIVE_COST_USD` | `0.5` | Dépense connue maximale de l'objectif, revue estimée au pire comprise. |
+| `ATLAS_SUPERVISOR_MAX_REVIEW_OUTPUT_TOKENS` | `4000` | Plafond de sortie d'une revue. |
+| `ATLAS_SUPERVISOR_MAX_REVIEW_ATTEMPTS` | `2` | Tentatives par revue (sortie illisible, bail expiré). Au-delà : `REVIEW_STALLED`. |
+| `ATLAS_SUPERVISOR_MAX_REVIEWS_PER_POLL` | `1` | Revues par tour. |
+| `ATLAS_SUPERVISOR_MAX_DIFF_CHARS` | `40000` | Part du diff envoyée à GPT (la coupe est annoncée). |
+
+**Coût inconnu.** La politique `ATLAS_UNKNOWN_COST_POLICY=BLOCK` reste la règle.
+Une seule exception, prouvée tâche par tâche : un appel `claude-code` dont la
+tâche atteste `claude_code_billing: SUBSCRIPTION` (écrit par ClaudeCodeWorker
+quand `ATLAS_CLAUDE_CODE_USE_API_KEY` n'est pas `true`) n'est pas facturé à
+l'appel. Tout autre appel sans prix arrête l'objectif. Le modèle de revue doit
+avoir un tarif déclaré (docs/model-pricing.md) ; sans lui, le superviseur reste
+fermé et le dit dans `supervisor status`.
+
+### Commandes
+
+```bash
+./deployment/atlas-cli.sh supervisor status        # ouvert/fermé et pourquoi, objectifs, revues, tâches
+./deployment/atlas-cli.sh supervisor start --key=mon-objectif-1 \
+  --objective="…" --paths=packages/runtime/src/x.ts,packages/runtime/test/x.test.ts \
+  --tests="npm run typecheck" --criteria="critère 1|critère 2"
+./deployment/atlas-cli.sh supervisor poll          # un tour maintenant (mêmes gardes, même dépense)
+```
+
+(`docker compose -f deployment/docker-compose.yml run --rm atlas-cli npm run supervisor -- …`
+si `atlas-cli.sh` n'est pas utilisé.) La même `--key` ne lance jamais deux objectifs.
+
+### Reprise
+
+Tout l'état est en base (`supervisor_objectives`, `supervisor_reviews`, file de
+tâches, registre des opérations externes). Un redémarrage du conteneur reprend
+au tour suivant. Deux sondeurs concurrents sont départagés par SQLite : une
+tâche n'a qu'une revue, un cycle n'a qu'une revue et qu'une suite. Une
+réservation dont le processus est mort est reprise après son bail, dans la
+limite des tentatives. Un objectif BLOCKED ne repart pas seul : c'est une
+décision humaine (relancer un nouvel objectif).
 
 ## L'expansion de prospects : une bonne entreprise en révèle d'autres
 

@@ -1,6 +1,10 @@
 import type { AtlasConfig, Logger } from '@atlas/core';
 import { AnthropicProvider } from '../anthropic-provider.ts';
+import { OpenAiProvider } from '../ai-providers-impl.ts';
+import { pricingFor } from '../pricing.ts';
 import { SimulationProvider } from '../simulation-provider.ts';
+import { textOf, type LlmProvider, type LlmRequest, type LlmResponse } from '../types.ts';
+import type { InferenceCapabilities } from './capabilities.ts';
 import { InferenceFabric } from './fabric.ts';
 import { InferenceProviderRegistry } from './registry.ts';
 
@@ -29,8 +33,79 @@ import { InferenceProviderRegistry } from './registry.ts';
 const PRIORITY: Record<string, number> = {
   'openai-compatible': 10,
   anthropic: 20,
+  openai: 30,
   simulation: 90,
 };
+
+/**
+ * OpenAI, tel que le parc peut l'employer : texte et JSON, sans outils.
+ *
+ * `structuredOutput` est vrai parce que le schéma est remis au modèle et la
+ * réponse forcée en objet JSON ; les outils ne le sont pas, faute de
+ * traduction — une requête qui en porte reste chez Anthropic ou échoue.
+ */
+const OPENAI_CAPABILITIES: InferenceCapabilities = {
+  structuredOutput: true,
+  toolUse: false,
+  serverTools: false,
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  // Le modèle demandé est un Claude ; c'est `substituteModel` qui est servi.
+  models: ['*'],
+  caveat: 'Secours sans outils : schéma JSON transmis dans la consigne, sortie en objet JSON.',
+};
+
+/**
+ * Le fournisseur OpenAI existant, présenté au contrat du parc.
+ *
+ * Aucune seconde implémentation : l'appel, le délai, l'idempotence et le
+ * classement d'erreur restent ceux d'`OpenAiProvider`. Ce n'est qu'une
+ * traduction de forme. `kind` reste celui que le contrat connaît ; ce qui
+ * attribue l'appel à OpenAI est l'identifiant `openai` du registre et le
+ * modèle réellement servi, rendu tel quel dans `response.model`.
+ */
+class OpenAiInferenceProvider implements LlmProvider {
+  readonly kind = 'anthropic' as const;
+
+  constructor(
+    readonly inner: OpenAiProvider,
+    private readonly timeoutMs: number,
+  ) {}
+
+  async complete(request: LlmRequest): Promise<LlmResponse> {
+    const prompt = request.messages
+      .map((m) => (request.messages.length > 1 ? `[${m.role}]\n${textOf(m.content)}` : textOf(m.content)))
+      .join('\n\n');
+    const system = request.jsonSchema
+      ? `${request.system}\n\nRéponds uniquement par un objet JSON conforme à ce schéma :\n${JSON.stringify(request.jsonSchema)}`
+      : request.system;
+
+    const reply = await this.inner.execute({
+      system,
+      prompt,
+      ...(request.jsonSchema ? { responseSchema: request.jsonSchema } : {}),
+      maxOutputTokens: request.maxTokens,
+      timeoutMs: this.timeoutMs,
+      capability: 'STRUCTURED_EXTRACTION',
+    });
+
+    // OpenAI compte les jetons relus en cache *dans* l'entrée ; le contrat les
+    // veut à part, pour qu'ils soient facturés une fois, à leur tarif.
+    const cached = Math.min(reply.usage.cacheReadTokens, reply.usage.inputTokens);
+    return {
+      content: [{ type: 'text', text: reply.text }],
+      stopReason: reply.truncated ? 'max_tokens' : 'end_turn',
+      usage: {
+        inputTokens: reply.usage.inputTokens - cached,
+        outputTokens: reply.usage.outputTokens,
+        cacheReadTokens: cached,
+        cacheWriteTokens: 0,
+      },
+      model: reply.model,
+      refusal: null,
+    };
+  }
+}
 
 export interface InferenceFabricOptions {
   /** Combien de fournisseurs essayer au maximum pour une même requête. */
@@ -81,6 +156,40 @@ export function buildInferenceRegistry(
         "Aucun point d'accès compatible OpenAI configuré. Posez ATLAS_OPENAI_BASE_URL " +
         "(Ollama, vLLM ou service déjà souscrit) pour donner un secours à l'inférence.",
     }),
+  });
+
+  // OpenAI, secours seulement. Anthropic reste le fournisseur principal : ce
+  // secours n'est éligible que lorsque son compte est vide, ou que son quota
+  // atteint a ouvert le disjoncteur. Le refroidissement passé, Anthropic est
+  // de nouveau essayé en premier. Un modèle sans tarif connu n'est jamais
+  // routé : une dépense qu'on ne sait pas chiffrer ne se plafonne pas.
+  const openai = new OpenAiProvider(config.ai.openaiModel, process.env.ATLAS_OPENAI_API_KEY ?? '');
+  registry.register({
+    id: 'openai',
+    label: 'OpenAI',
+    provider: new OpenAiInferenceProvider(openai, config.ai.openaiTimeoutMs),
+    priority: PRIORITY.openai!,
+    costModel: 'metered',
+    capabilities: OPENAI_CAPABILITIES,
+    substituteModel: config.ai.openaiModel,
+    available: () => {
+      const status = openai.status();
+      if (!status.configured) return { available: false, reason: status.detail };
+      if (!pricingFor(config.ai.openaiModel)) {
+        return {
+          available: false,
+          reason: `tarif inconnu pour « ${config.ai.openaiModel} » — déclarez-le (ATLAS_MODEL_PRICING_CONFIG) avant tout secours`,
+        };
+      }
+      const primary = registry.get('anthropic');
+      const primaryDown =
+        primary !== undefined &&
+        (primary.credit === 'exhausted' ||
+          (primary.credit === 'quota-reached' && primary.breaker.state === 'open'));
+      return primaryDown
+        ? { available: true, reason: `secours d'Anthropic (${primary.credit}) · ${status.detail}` }
+        : { available: false, reason: 'secours seulement : Anthropic reste prioritaire tant que son compte répond' };
+    },
   });
 
   registry.register({

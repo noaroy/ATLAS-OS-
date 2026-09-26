@@ -365,6 +365,58 @@ describe('l’idempotence', () => {
       false,
     );
   });
+
+  test('une réservation interdite par une autre ne s’écrit pas', () => {
+    repos.tasks.reserveExternalOperation({ idempotencyKey: 'prise:7', kind: 'INTAKE', claimedBy: 'a' });
+    const refused = repos.tasks.reserveExternalOperation({ idempotencyKey: 'refus:7', kind: 'REJECT', claimedBy: 'b', blockedBy: 'prise:7' });
+    assert.deepEqual([refused.reserved, refused.blocked, refused.confirmed], [false, true, false]);
+    assert.equal(repos.tasks.externalOperation('refus:7'), null, 'rien n’est réservé à sa place');
+    const free = repos.tasks.reserveExternalOperation({ idempotencyKey: 'refus:8', kind: 'REJECT', claimedBy: 'b', blockedBy: 'prise:8' });
+    assert.deepEqual([free.reserved, free.blocked], [true, false]);
+    // Déjà réservée : la réponse est « engagée », pas « interdite ».
+    const again = repos.tasks.reserveExternalOperation({ idempotencyKey: 'refus:8', kind: 'REJECT', claimedBy: 'c', blockedBy: 'prise:8' });
+    assert.deepEqual([again.reserved, again.blocked], [false, false]);
+  });
+
+  test('une tâche liée à une prise n’est créée qu’une fois, même par plusieurs threads à la fois', async () => {
+    // De vrais threads, chacun sa connexion, lâchés ensemble par une barrière :
+    // les transactions se chevauchent pour de bon, SQLite seul les départage.
+    const { Worker } = await import('node:worker_threads');
+    const { writeFileSync } = await import('node:fs');
+    const { pathToFileURL } = await import('node:url');
+    const n = 8;
+    const script = join(dir, 'claim-worker.ts');
+    writeFileSync(script, `
+      import { workerData, parentPort } from 'node:worker_threads';
+      import { createLogger } from '@atlas/core';
+      import { createRepositories } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, '../src/index.ts')).href)};
+      const { db, i, gate } = workerData;
+      const repos = createRepositories(db, createLogger({ level: 'error', pretty: false }));
+      const barrier = new Int32Array(gate);
+      Atomics.add(barrier, 0, 1);
+      while (Atomics.load(barrier, 0) < ${n}) Atomics.wait(barrier, 0, Atomics.load(barrier, 0), 5);
+      const claim = repos.tasks.createClaimedTask(
+        { taskType: 'ENGINEERING_CHANGE', department: 'ENGINEERING', workerType: 'CLAUDE_CODE', idempotencyKey: 'tache:v' + i, payload: {} },
+        { idempotencyKey: 'prise:acme#7', kind: 'INTAKE', claimedBy: 'sondeur-' + i },
+      );
+      const refusal = repos.tasks.reserveExternalOperation({ idempotencyKey: 'refus:acme#7:' + i, kind: 'REJECT', claimedBy: 'sondeur-' + i, blockedBy: 'prise:acme#7' });
+      repos.close();
+      parentPort.postMessage({ claimed: claim.claimed, refused: refusal.blocked });
+    `);
+    const gate = new SharedArrayBuffer(4);
+    const db = join(dir, 'q.db');
+    const results = await Promise.all(Array.from({ length: n }, (_, i) => new Promise<{ claimed: boolean; refused: boolean }>((resolve, reject) => {
+      const worker = new Worker(script, { workerData: { db, i, gate }, execArgv: ['--import', 'tsx'] });
+      worker.once('message', resolve);
+      worker.once('error', reject);
+    })));
+    assert.equal(results.filter((r) => r.claimed).length, 1, JSON.stringify(results));
+    assert.ok(results.every((r) => r.refused), 'chaque refus arrive après la prise de son propre thread');
+    const tasks = repos.tasks.list({ limit: 50 }).filter((t) => t.taskType === 'ENGINEERING_CHANGE');
+    assert.equal(tasks.length, 1);
+    assert.equal(repos.tasks.externalOperation('prise:acme#7')?.taskId, tasks[0]!.taskId);
+    assert.equal(repos.tasks.externalOperation('prise:acme#7')?.confirmed, true);
+  });
 });
 
 describe('les invariants append-only', () => {

@@ -178,6 +178,8 @@ export {
   readQuotaFromOutput,
   normaliseBinary,
   DEFAULT_ALLOWED_TOOLS,
+  effectiveWorkerLimits,
+  type WorkerLimits,
   type ClaudeCodeOptions,
   type ClaudeCodeAvailability,
   type ClaudeCodeRun,
@@ -269,6 +271,8 @@ export {
 } from './master-loop.ts';
 
 export * from './expansion/index.ts';
+export * from './controller/index.ts';
+export * from './gpt-supervisor/index.ts';
 export {
   providerReadinessOf, verifyProvider, assessModelProviders, PROVIDER_VERIFY_TTL_MS,
   type ProviderReadinessState, type ProviderReadinessVerdict,

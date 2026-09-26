@@ -138,13 +138,76 @@ export interface OutreachDraft {
   evidenceExcerpt: string;
   /** La phrase d'ouverture telle que le client la lira. Dérivée de l'extrait, jamais de l'interprétation. */
   customerFacingObservation: string;
+  /** L'échantillon d'entreprises cibles montré dans le message, s'il en a un. */
+  recommendations: TargetRecommendation[];
+}
+
+/**
+ * Une entreprise cible proposée en échantillon dans un premier contact.
+ *
+ * La raison d'adéquation n'est pas écrite par un modèle : c'est un morceau
+ * contigu d'une citation stockée (`evidenceQuote`), lisible à `sourceUrl`.
+ * Une raison qu'aucune citation ne porte est une intention inventée.
+ */
+export interface TargetRecommendation {
+  company: string;
+  domain: string;
+  fitReason: string;
+  sourceUrl: string;
+  evidenceQuote: string;
+}
+
+export const MIN_RECOMMENDATIONS = 2;
+export const MAX_RECOMMENDATIONS = 3;
+
+export interface RecommendationCheck {
+  ok: boolean;
+  /** Les 2 à 3 recommandations retenues, uniques par domaine, dans l'ordre reçu. */
+  accepted: TargetRecommendation[];
+  reason: string;
+}
+
+/**
+ * L'échantillon est-il montrable ? Fermé par défaut : une seule recommandation
+ * sans source, sans citation ou dont la raison dépasse la citation fait
+ * refuser tout l'échantillon — on ne trie pas le vrai du faux dans un message.
+ */
+export function validateRecommendations(
+  recs: readonly TargetRecommendation[],
+  ownDomain: string | null,
+): RecommendationCheck {
+  const refuse = (reason: string): RecommendationCheck => ({ ok: false, accepted: [], reason });
+  const own = (ownDomain ?? '').trim().toLowerCase().replace(/^www\./, '');
+  const seen = new Set<string>();
+  const accepted: TargetRecommendation[] = [];
+  for (const r of recs) {
+    const domain = r.domain.trim().toLowerCase().replace(/^www\./, '');
+    if (!r.company.trim() || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) return refuse(`recommandation sans entreprise ou domaine valide (${r.domain})`);
+    let url: URL;
+    try { url = new URL(r.sourceUrl); } catch { return refuse(`provenance illisible pour ${domain}`); }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return refuse(`provenance non web pour ${domain}`);
+    const reason = normaliseEspaces(r.fitReason);
+    if (compteMots(reason) < 3) return refuse(`raison d’adéquation vide ou trop courte pour ${domain}`);
+    if (!normaliseEspaces(r.evidenceQuote).toLowerCase().includes(reason.toLowerCase())) {
+      return refuse(`raison non portée par la citation stockée pour ${domain} : intention non sourcée`);
+    }
+    if (domain === own || seen.has(domain)) continue;
+    seen.add(domain);
+    if (accepted.length < MAX_RECOMMENDATIONS) accepted.push({ ...r, domain, fitReason: reason });
+  }
+  if (accepted.length < MIN_RECOMMENDATIONS) {
+    return refuse(`${accepted.length} recommandation(s) unique(s) : il en faut au moins ${MIN_RECOMMENDATIONS}`);
+  }
+  return { ok: true, accepted, reason: `${accepted.length} recommandations sourcées` };
 }
 
 export type OutreachRefusal =
   /** Aucun fait constaté et sourcé : impossible de personnaliser honnêtement. */
   | 'NO_SOURCED_FACT'
   /** L'entreprise n'a pas de nom exploitable. */
-  | 'NO_COMPANY';
+  | 'NO_COMPANY'
+  /** L'échantillon demandé n'a pas 2 à 3 recommandations sourcées. */
+  | 'INSUFFICIENT_RECOMMENDATIONS';
 
 export interface OutreachOutcome {
   draft: OutreachDraft | null;
@@ -502,9 +565,20 @@ export function buildOutreachDraft(input: {
     /** Une prestation recurrente est possible, chiffree sur le volume reel. */
     recurringAvailable?: boolean;
   };
+  /**
+   * L'échantillon de cibles à montrer. Absent : message d'origine. Présent :
+   * 2 à 3 recommandations valides, sinon aucun brouillon.
+   */
+  recommendations?: readonly TargetRecommendation[];
 }): OutreachOutcome {
   if (!input.company.trim()) {
     return { draft: null, refusal: 'NO_COMPANY', reason: 'aucun nom d’entreprise.' };
+  }
+  const sample = input.recommendations === undefined
+    ? null
+    : validateRecommendations(input.recommendations, input.website?.replace(/^https?:\/\//i, '').split('/')[0] ?? null);
+  if (sample && !sample.ok) {
+    return { draft: null, refusal: 'INSUFFICIENT_RECOMMENDATIONS', reason: sample.reason };
   }
 
   const fact = pickPersonalizationFact(input.facts);
@@ -572,12 +646,19 @@ export function buildOutreachDraft(input: {
   const apercu = `Je peux vous en préparer ${freeCount} gratuitement, simplement pour que `
     + `vous jugiez si le résultat est pertinent.`;
 
+  // L'échantillon : leurs mots, leur adresse. Rien qui ne soit dans la citation.
+  const echantillon = sample
+    ? ['', `Pour exemple, ${sample.accepted.length} entreprises relevées :`,
+      ...sample.accepted.map((r) => `- ${r.company} (${r.domain}) : « ${r.fitReason} » — ${r.sourceUrl}`)]
+    : [];
+
   const corps = [
     greeting,
     '',
     `J'ai vu sur votre ${label} ${observation}`,
     '',
     quoiJeFais,
+    ...echantillon,
     '',
     apercu,
     '',
@@ -606,6 +687,7 @@ export function buildOutreachDraft(input: {
       sourceUsedForPersonalization: fact.sourceUrl,
       evidenceExcerpt: cf.excerpt,
       customerFacingObservation: observation,
+      recommendations: sample?.accepted ?? [],
     },
     refusal: null,
     reason: 'personnalisation appuyée sur un fait constaté et sourcé.',

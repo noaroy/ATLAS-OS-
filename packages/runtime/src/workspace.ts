@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync, mkdtempSync, symlinkSync, lstatSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, unlinkSync, mkdtempSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -25,6 +25,12 @@ export interface Workspace {
   path: string;
   baseCommit: string;
   branch: string;
+  /**
+   * La cible du lien `node_modules` que le runner a lui-même posé, s'il en a
+   * posé un. Absent : aucun lien n'est de son fait, et un `node_modules` dans
+   * le diff est traité comme n'importe quel chemin hors périmètre.
+   */
+  linkedNodeModules?: string;
 }
 
 export interface FileEdit {
@@ -104,9 +110,12 @@ export function createWorkspace(options: CreateWorkspaceOptions): Workspace {
   const branch = `atlas/${options.taskId}`;
   git(['worktree', 'add', '--detach', path, baseCommit], options.repoRoot, 120_000);
   git(['checkout', '-B', branch], path, 60_000);
-  linkNodeModules(options.repoRoot, path);
+  const linked = linkNodeModules(options.repoRoot, path);
 
-  return { workspaceId: `ws_${options.taskId}`, taskId: options.taskId, path, baseCommit, branch };
+  return {
+    workspaceId: `ws_${options.taskId}`, taskId: options.taskId, path, baseCommit, branch,
+    ...(linked ? { linkedNodeModules: join(options.repoRoot, 'node_modules') } : {}),
+  };
 }
 
 /**
@@ -130,6 +139,23 @@ export function linkNodeModules(repoRoot: string, worktreePath: string): boolean
   try {
     symlinkSync(source, target, 'dir');
     return lstatSync(target).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Le lien posé par le runner est-il toujours celui qu'il a posé ?
+ *
+ * Toujours un lien symbolique, toujours vers la même cible, à la lettre. Un
+ * répertoire réel mis à sa place, un lien redirigé ou un lien supprimé ne le
+ * sont plus : ce n'est alors plus de la plomberie, c'est une modification.
+ */
+function nodeModulesLinkIntact(workspace: Workspace): boolean {
+  if (!workspace.linkedNodeModules) return false;
+  try {
+    const link = join(workspace.path, 'node_modules');
+    return lstatSync(link).isSymbolicLink() && readlinkSync(link) === workspace.linkedNodeModules;
   } catch {
     return false;
   }
@@ -221,7 +247,11 @@ export function applyEdits(
  * pas à ce que le modèle annonce.
  */
 export function captureDiff(workspace: Workspace): DiffSummary {
-  const status = git(['status', '--porcelain'], workspace.path).trim();
+  // `--untracked-files=all` : sans lui, un fichier créé dans un dossier neuf
+  // n'apparaît que sous le nom du dossier (`?? docs/nouveau/`), et l'audit de
+  // périmètre — qui compare des chemins de fichiers — refusait une création
+  // pourtant autorisée. Relevé au premier essai réel du superviseur GPT.
+  const status = git(['status', '--porcelain', '--untracked-files=all'], workspace.path).trim();
   const filesChanged: string[] = [];
   const filesAdded: string[] = [];
   const filesDeleted: string[] = [];
@@ -234,6 +264,11 @@ export function captureDiff(workspace: Workspace): DiffSummary {
     // que l'audit de perimetre voie « ixture/add.ts » et le refuse comme hors
     // perimetre. On prend les deux caracteres d'etat, puis tout le reste.
     const path = line.slice(2).trim().replace(/^"|"$/g, '');
+    // Le lien `node_modules` posé par le runner : `node_modules/` dans un
+    // .gitignore ignore les répertoires, pas les liens, et git le voit comme
+    // un ajout. Écarté ici seulement tant qu'il est intact — altéré, il reste
+    // dans la liste et l'audit le refuse.
+    if (code === '??' && path === 'node_modules' && nodeModulesLinkIntact(workspace)) continue;
     if (code.includes('D')) filesDeleted.push(path);
     else if (code.includes('?') || code.includes('A')) filesAdded.push(path);
     else filesChanged.push(path);
@@ -258,6 +293,40 @@ export function captureDiff(workspace: Workspace): DiffSummary {
     diffHash: hashDiff(diff),
     stat,
   };
+}
+
+/**
+ * Le diff d'un worktree tel que git le voit, brut — sans masquage.
+ *
+ * Distinct de `captureDiff` : on ne l'enregistre nulle part, on s'en sert pour
+ * vérifier qu'un worktree est toujours celui qui a été relu (même empreinte
+ * que `diff_hash`) et pour le reporter dans un autre worktree. Rien n'est
+ * indexé ici : le worktree relu n'est pas modifié.
+ */
+export function rawWorkspaceDiff(path: string): string {
+  return git(['diff', 'HEAD'], path, 60_000);
+}
+
+/**
+ * Poser un diff dans un worktree neuf, ou refuser en entier.
+ *
+ * `git apply` sans `--index` : les fichiers changent sur disque, l'index reste
+ * celui du commit de base, et `captureDiff` constatera ensuite le changement
+ * cumulé. `--check` d'abord : le patch passe entier ou pas du tout.
+ */
+export function applyDiffToWorkspace(workspace: Workspace, diff: string): { applied: boolean; reason: string } {
+  if (!diff.trim()) return { applied: true, reason: 'diff vide : rien à poser' };
+  const patch = join(tmpdir(), `atlas-stack-${workspace.taskId}-${Date.now()}.patch`);
+  writeFileSync(patch, diff, 'utf8');
+  try {
+    git(['apply', '--check', '--whitespace=nowarn', patch], workspace.path, 60_000);
+    git(['apply', '--whitespace=nowarn', patch], workspace.path, 60_000);
+    return { applied: true, reason: 'diff posé' };
+  } catch (error) {
+    return { applied: false, reason: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300) };
+  } finally {
+    try { unlinkSync(patch); } catch { /* le fichier temporaire peut avoir disparu */ }
+  }
 }
 
 export type ChangeBudgetVerdict =
@@ -293,16 +362,29 @@ export function checkChangeBudget(
   return { withinBudget: true, reason: `${total} fichier(s), ${diff.diffLines} ligne(s)` };
 }
 
-/** Le périmètre a-t-il été respecté, une fois le travail fait ? */
+/**
+ * Le périmètre a-t-il été respecté, une fois le travail fait ?
+ *
+ * Le lien `node_modules` du runner se vérifie à part : un répertoire réel mis
+ * à sa place est ignoré par `node_modules/` et n'apparaît donc pas dans ce que
+ * git constate. Son intégrité se contrôle directement, pas par le diff.
+ */
 export function auditWorkspace(
   workspace: Workspace,
   diff: DiffSummary,
   allowedPaths: readonly string[],
 ): { clean: boolean; violations: Array<{ path: string; reason: string }> } {
-  return auditChangedFiles(
+  const audit = auditChangedFiles(
     [...diff.filesChanged, ...diff.filesAdded, ...diff.filesDeleted],
     { workspaceRoot: workspace.path, allowedPaths },
   );
+  if (!workspace.linkedNodeModules || nodeModulesLinkIntact(workspace)) return audit;
+  const violations = audit.violations.filter((v) => v.path !== 'node_modules');
+  violations.push({
+    path: 'node_modules',
+    reason: 'le lien de dépendances posé par le runner a été supprimé, remplacé ou redirigé',
+  });
+  return { clean: false, violations };
 }
 
 export type ApplyVerdict =

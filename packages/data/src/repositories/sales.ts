@@ -1207,4 +1207,45 @@ export class SalesRepository {
       collectedAt: row.collected_at,
     }));
   }
+
+  /**
+   * Ce prospect peut-il devenir un brouillon de premier contact automatique ?
+   *
+   * Lecture seule, toutes les raisons à la fois. Ne couvre que ce que ce
+   * registre sait : la suppression, les envois et les brouillons existants
+   * vivent ailleurs et sont vérifiés par l'appelant.
+   */
+  firstTouchReadiness(prospectId: string): { ready: boolean; blockers: string[] } {
+    const p = this.require(prospectId);
+    const blockers: string[] = [];
+    const domain = p.domain ? canonicalDomainOf(p.domain) : null;
+    if (!domain) blockers.push('NO_DOMAIN');
+    if (!FIRST_TOUCH_STATES.includes(p.state) || p.tier === 'REJECTED') blockers.push(`STATE_${p.state}`);
+    if (p.contactedAt) blockers.push('ALREADY_CONTACTED');
+    if (!p.contactObserved || !p.contactEmail) blockers.push('NO_OBSERVED_EMAIL');
+    else if (!isCommercialEmail(p.contactEmail, domain) || p.contactSuitability === 'BLOCKED') blockers.push('EMAIL_NOT_COMMERCIAL');
+    const facts = this.evidenceFor(prospectId).filter((e) => e.nature !== 'inferred'
+      && !e.field.startsWith('identite:') && !e.field.startsWith('contact') && /^https?:\/\//i.test(e.sourceUrl ?? ''));
+    if (facts.length < MIN_FIRST_TOUCH_FACTS) blockers.push(`SOURCED_FACTS_${facts.length}/${MIN_FIRST_TOUCH_FACTS}`);
+    if (this.db.prepare('SELECT 1 FROM sales_invalidations WHERE prospect_id = ?').get(prospectId)) blockers.push('INVALIDATED');
+    const ledger = domain ? this.ledgerFor(domain) : null;
+    if (ledger) blockers.push(ledger.kind === 'DO_NOT_CONTACT' ? 'DO_NOT_CONTACT' : `LEDGER_${ledger.kind}`);
+    return { ready: blockers.length === 0, blockers };
+  }
+}
+
+/** Les états d'où un premier contact peut encore être préparé. */
+const FIRST_TOUCH_STATES: readonly ProspectState[] = ['QUALIFIED', 'READY_FOR_REVIEW', 'APPROVED_TO_CONTACT'];
+export const MIN_FIRST_TOUCH_FACTS = 2;
+
+const FREE_MAIL = /^(gmail|googlemail|yahoo|hotmail|outlook|live|msn|icloud|me|aol|gmx|proton|protonmail|orange|free|sfr|laposte|wanadoo)\./;
+const NON_COMMERCIAL_BOX = /^(no-?reply|do-?not-?reply|ne-?pas-?repondre|rgpd|gdpr|dpo|privacy|abuse|postmaster|webmaster|recrutement|jobs|careers|rh|compta|comptabilite|facturation|sav)$/;
+
+/** Une boîte commerciale : sur le domaine de l'entreprise, ni webmail, ni guichet non commercial. */
+export function isCommercialEmail(email: string, domain: string | null): boolean {
+  const m = /^([^@\s]+)@([^@\s]+\.[^@\s]+)$/.exec(email.trim().toLowerCase());
+  if (!m || !domain) return false;
+  const host = m[2]!;
+  if (FREE_MAIL.test(host) || NON_COMMERCIAL_BOX.test(m[1]!)) return false;
+  return host === domain || host.endsWith(`.${domain}`);
 }

@@ -190,6 +190,44 @@ describe('nos propres courriers ne sont pas des réponses', () => {
   });
 });
 
+describe('les opportunités', () => {
+  test('les prospects à saisir, dans un ordre stable, avec ce qui est enregistré — et rien d’écrit', () => {
+    const top = discover('top.fr');
+    repos.sales.setScore(top.id, { score: 90, tier: 'PRIORITY', detail: {}, whyFit: 'fabricant de machines, export Europe' });
+    repos.sales.setState(top.id, 'QUALIFIED');
+    repos.sales.setContact(top.id, { email: 'export@top.fr', sourceUrl: 'https://top.fr/contact', observed: true, method: 'EMAIL', name: 'Marie Curie', role: 'Export' });
+    const fit = discover('fit.fr');
+    repos.sales.setScore(fit.id, { score: 95, tier: 'GOOD_FIT', detail: {}, whyFit: 'distributeur' });
+    discover('neuf.fr');
+    const contacted = discover('deja.fr');
+    repos.sales.setScore(contacted.id, { score: 99, tier: 'PRIORITY', detail: {}, whyFit: 't' });
+    repos.sales.recordOutreach({ domain: 'deja.fr', kind: 'CONTACTED', recordedBy: 'sales-engine', channel: 'email', recordedAt: '2026-01-01T00:00:00.000Z' });
+    const rejected = discover('non.fr');
+    repos.sales.setState(rejected.id, 'REJECTED');
+    discover('gagne.fr');
+    recordSalesOutcome(repos, { domain: 'gagne.fr', kind: 'WON', revenueAmount: 500, by: 'founder' });
+
+    const before = repos.db.prepare('SELECT COUNT(*) AS n, MAX(updated_at) AS u FROM sales_prospects').get();
+    const board = read('7d');
+    assert.deepEqual(board.opportunities.map((o) => o.domain), ['top.fr', 'fit.fr', 'neuf.fr'], 'palier, puis score : jamais contactés, ni rejetés, ni conclus');
+    assert.equal(board.opportunitiesTotal, 3);
+    const first = board.opportunities[0]!;
+    assert.equal(first.state, 'QUALIFIED');
+    assert.equal(first.tier, 'PRIORITY');
+    assert.equal(first.score, 90);
+    assert.equal(first.whyFit, 'fabricant de machines, export Europe');
+    assert.equal(first.contact.email, 'export@top.fr');
+    assert.equal(first.contact.name, 'Marie Curie');
+    assert.equal(first.contact.observed, true);
+    assert.equal(first.contact.sourceUrl, 'https://top.fr/contact');
+    assert.equal(first.sourceUrl, 'https://top.fr/');
+    assert.ok(first.updatedAt);
+    assert.equal(board.opportunities[2]!.tier, null, 'non scoré : dernier, sans palier inventé');
+    assert.deepEqual(read('7d').opportunities, board.opportunities, 'deux lectures, le même ordre');
+    assert.deepEqual(repos.db.prepare('SELECT COUNT(*) AS n, MAX(updated_at) AS u FROM sales_prospects').get(), before, 'lire n’écrit rien');
+  });
+});
+
 describe('recalcul direct', () => {
   test('un calcul SQL depuis les tables donne les mêmes valeurs que le tableau', () => {
     for (let i = 0; i < 30; i += 1) {

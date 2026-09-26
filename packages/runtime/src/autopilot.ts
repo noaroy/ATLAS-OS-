@@ -517,9 +517,14 @@ export const revenueLoopSource: OpportunitySource = {
       out.push({
         objective: `relire et approuver ${o.sales.draftsAwaitingApproval} message(s) commerciaux rédigés`,
         category: 'BLOCKED_WORK', expectedBusinessValue: 'HIGH', expectedCostUsd: 0, expectedFounderTimeMinutes: 3 * o.sales.draftsAwaitingApproval,
-        confidence: 0.8, urgency: 'HIGH', evidence: [`${o.sales.draftsAwaitingApproval} dossier(s) en attente (brouillons READY_FOR_APPROVAL + prospects READY_FOR_REVIEW)`],
+        confidence: 0.8, urgency: 'HIGH', evidence: [`${o.sales.draftsAwaitingApproval} brouillon(s) READY_FOR_APPROVAL`],
         risk: 'MEDIUM', reversibility: 'IRREVERSIBLE', recommendedAgent: 'HUMAN', requiresHumanApproval: true,
         reason: 'aucun message ne part sans relecture : la file d’envoi est bloquée sur vous',
+        // `draftsAwaitingApproval` vient de `board.todo.approvals`, qui compte
+        // DEUX magasins (outreach_drafts + sales_prospects READY_FOR_REVIEW).
+        // `sales:loop -- drafts` n'en lit qu'un : il peut afficher 0 pendant
+        // que ce chiffre-ci en montre 3 — relevé en conditions réelles.
+        // `approvals:audit` (lecture seule) est le seul à montrer les deux.
         execution: { kind: 'FOUNDER_DECISION', command: 'npm run approvals:audit' }, fingerprintKey: 'BLOCKED_WORK:drafts-approval',
       });
     }
@@ -540,7 +545,12 @@ export const revenueLoopSource: OpportunitySource = {
         confidence: 0.7, urgency: 'NORMAL', evidence: [`${o.sales.recommendationsProposed} recommandation(s) PROPOSED`],
         risk: 'LOW', reversibility: 'REVERSIBLE', recommendedAgent: 'HUMAN', requiresHumanApproval: true,
         reason: 'ATLAS a mesuré quelque chose et propose un réglage : la décision vous revient',
-        execution: { kind: 'FOUNDER_DECISION', command: 'npm run sales:status  ·  puis npm run sales:campaign -- decide <recId> test|approve|reject' }, fingerprintKey: 'OPTIMIZATION:recommendations',
+        // `npm run sales:engine` n'existe pas (aucun script de ce nom, et
+        // `sales-engine.ts` n'a pas de verbe « recommendations ») : la
+        // commande affichée ne pouvait jamais s'exécuter. `sales:status`
+        // liste chaque recommandation (id, titre, raison) ; `campaign --
+        // decide` est la seule commande qui en décide.
+        execution: { kind: 'FOUNDER_DECISION', command: 'npm run sales:status  puis  npm run sales:campaign -- decide <recId> test|approve|reject' }, fingerprintKey: 'OPTIMIZATION:recommendations',
       });
     }
     if (o.health.gmail === 'DOWN' || o.health.gmail === 'STALE' || o.health.gmail === 'UNKNOWN') {

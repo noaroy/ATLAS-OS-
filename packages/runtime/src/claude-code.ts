@@ -10,7 +10,7 @@ import { classifyAiError } from '@atlas/llm';
 import { killTree } from './ai-workers.ts';
 import {
   createWorkspace, removeWorkspace, captureDiff, checkChangeBudget,
-  auditWorkspace, inspectRepo, repoRootOf, type Workspace,
+  auditWorkspace, inspectRepo, repoRootOf, rawWorkspaceDiff, applyDiffToWorkspace, hashDiff, type Workspace,
 } from './workspace.ts';
 
 /**
@@ -449,6 +449,37 @@ export function buildMission(task: TaskRow, allowedPaths: readonly string[]): st
   return parts.join('\n');
 }
 
+export interface WorkerLimits {
+  timeoutMs: number;
+  maxFilesChanged: number;
+  maxDiffLines: number;
+}
+
+/**
+ * Les bornes d'une mission : celles du worker, resserrées par la tâche.
+ *
+ * Une tâche peut demander moins — `limits` dans sa charge utile, posé par le
+ * pont contrôleur — jamais plus : chaque borne est le minimum des deux. Une
+ * valeur absente, non entière ou non positive est ignorée, et c'est la borne
+ * du worker qui s'applique. Le plafond du déploiement ne se desserre pas depuis
+ * une charge utile.
+ */
+export function effectiveWorkerLimits(
+  requested: unknown,
+  system: Pick<ClaudeCodeOptions, 'timeoutMs' | 'maxFilesChanged' | 'maxDiffLines'>,
+): WorkerLimits {
+  const r = requested && typeof requested === 'object' && !Array.isArray(requested)
+    ? requested as Record<string, unknown> : {};
+  const narrow = (ceiling: number, value: unknown, scale = 1): number =>
+    typeof value === 'number' && Number.isInteger(value) && value > 0
+      ? Math.min(ceiling, value * scale) : ceiling;
+  return {
+    timeoutMs: narrow(system.timeoutMs, r.timeout_minutes, 60_000),
+    maxFilesChanged: narrow(system.maxFilesChanged, r.max_files_changed),
+    maxDiffLines: narrow(system.maxDiffLines, r.max_diff_lines),
+  };
+}
+
 /**
  * Le worker.
  *
@@ -512,8 +543,14 @@ export class ClaudeCodeWorker implements Worker {
       };
     }
 
+    const stack = this.stackSource(task);
+    if (!stack.ok) {
+      return { kind: 'FAILED', errorCode: stack.code, errorMessage: stack.reason };
+    }
+
     const workspace = createWorkspace({
       repoRoot, taskId: task.taskId, root: this.options.worktreeRoot,
+      ...(stack.baseCommit ? { baseCommit: stack.baseCommit } : {}),
     });
     repos.tasks.openWorkspace({
       workspaceId: workspace.workspaceId, taskId: task.taskId,
@@ -521,19 +558,86 @@ export class ClaudeCodeWorker implements Worker {
     });
     logger.info('Claude Code : espace de travail créé', {
       taskId: task.taskId, baseCommit: workspace.baseCommit.slice(0, 8),
+      ...(stack.from ? { stackedOn: stack.from } : {}),
     });
 
+    if (stack.diff) {
+      // Le diff relu du cycle précédent, posé tel quel dans le worktree neuf :
+      // la suite part de ce qui a été relu, jamais du dépôt principal modifié.
+      const applied = applyDiffToWorkspace(workspace, stack.diff);
+      if (!applied.applied) {
+        repos.tasks.setWorkspaceState({ workspaceId: workspace.workspaceId, state: 'ABANDONED' });
+        removeWorkspace(repoRoot, workspace);
+        return {
+          kind: 'FAILED',
+          errorCode: 'STACK_APPLY_FAILED',
+          errorMessage: `le diff de ${stack.from} ne se pose pas sur ${workspace.baseCommit.slice(0, 8)} : ${applied.reason}`,
+        };
+      }
+    }
+
+    const limits = effectiveWorkerLimits(payload.limits, this.options);
     const run = await runClaudeCode({
       binary: availability.binary,
       prompt: buildMission(task, allowedPaths),
       cwd: workspace.path,
-      timeoutMs: this.options.timeoutMs,
+      timeoutMs: limits.timeoutMs,
       allowedTools: this.options.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
       logger,
       heartbeat: context.heartbeat,
     });
 
-    return this.settle(task, workspace, repoRoot, run, allowedPaths);
+    return this.settle(task, workspace, repoRoot, run, allowedPaths, limits);
+  }
+
+  /**
+   * Le worktree dont cette tâche doit partir, quand elle continue un objectif.
+   *
+   * Une suite posée par le superviseur GPT porte `supervisor.stack_on_task_id` :
+   * son worktree part du même commit de base que la tâche relue, avec le diff
+   * relu posé dessus. Ce diff est relu *dans le worktree d'origine*, et son
+   * empreinte doit être celle qui a été enregistrée — un worktree retouché
+   * depuis la revue, disparu, ou parti d'une autre base arrête la tâche au lieu
+   * de construire sur autre chose que ce qui a été relu.
+   */
+  private stackSource(task: TaskRow):
+    | { ok: true; baseCommit: string | null; diff: string | null; from: string | null }
+    | { ok: false; code: string; reason: string } {
+    const supervisor = (task.payload as Record<string, unknown>).supervisor as Record<string, unknown> | undefined;
+    const from = typeof supervisor?.stack_on_task_id === 'string' ? supervisor.stack_on_task_id : null;
+    if (!from) return { ok: true, baseCommit: null, diff: null, from: null };
+    const { repos } = this.options;
+    const parent = repos.tasks.byId(from);
+    if (!parent || parent.chainId !== task.chainId) {
+      return { ok: false, code: 'STACK_SOURCE_INVALID', reason: `${from} n’est pas une tâche de la même chaîne` };
+    }
+    const source = repos.tasks.workspaceFor(from);
+    if (!source || source.state !== 'READY_FOR_REVIEW' || !source.diffHash) {
+      return { ok: false, code: 'STACK_SOURCE_UNAVAILABLE', reason: `le worktree de ${from} n’est pas en READY_FOR_REVIEW` };
+    }
+    const expectedBase = typeof supervisor?.base_commit === 'string' ? supervisor.base_commit : null;
+    if (expectedBase && source.baseCommit !== expectedBase) {
+      return {
+        ok: false, code: 'STALE_BASE',
+        reason: `le worktree de ${from} part de ${source.baseCommit.slice(0, 12)}, l’objectif de ${expectedBase.slice(0, 12)}`,
+      };
+    }
+    if (!existsSync(source.path)) {
+      return { ok: false, code: 'STACK_SOURCE_UNAVAILABLE', reason: `le worktree de ${from} n’existe plus` };
+    }
+    let diff: string;
+    try {
+      diff = rawWorkspaceDiff(source.path);
+    } catch (error) {
+      return {
+        ok: false, code: 'STACK_SOURCE_UNAVAILABLE',
+        reason: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300),
+      };
+    }
+    if (hashDiff(diff) !== source.diffHash) {
+      return { ok: false, code: 'STACK_DIFF_CHANGED', reason: `le worktree de ${from} a changé depuis sa revue` };
+    }
+    return { ok: true, baseCommit: source.baseCommit, diff, from };
   }
 
   /** Constater ce qui a changé, et en tirer l'issue. */
@@ -543,6 +647,7 @@ export class ClaudeCodeWorker implements Worker {
     repoRoot: string,
     run: ClaudeCodeRun,
     allowedPaths: readonly string[],
+    limits: WorkerLimits,
   ): WorkerOutcome {
     const { repos } = this.options;
     const diff = captureDiff(workspace);
@@ -578,6 +683,10 @@ export class ClaudeCodeWorker implements Worker {
       base_commit: workspace.baseCommit,
       duration_ms: run.durationMs,
       agent: 'CLAUDE_CODE',
+      // L'attestation de facturation, écrite par le worker qui a lancé le
+      // binaire. Le superviseur GPT n'accepte le coût inconnu d'un appel
+      // Claude Code que sur abonnement : facturé à la clé, il n'a pas de prix.
+      claude_code_billing: usesApiKeyBilling() ? 'API_KEY' : 'SUBSCRIPTION',
     };
 
     if (run.timedOut) {
@@ -608,7 +717,7 @@ export class ClaudeCodeWorker implements Worker {
     }
 
     const budget = checkChangeBudget(diff, {
-      maxFiles: this.options.maxFilesChanged, maxLines: this.options.maxDiffLines,
+      maxFiles: limits.maxFilesChanged, maxLines: limits.maxDiffLines,
     });
     repos.tasks.setWorkspaceState({
       workspaceId: workspace.workspaceId,

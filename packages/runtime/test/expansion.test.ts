@@ -15,6 +15,7 @@ import {
   runAutopilotCycle, decideAutonomy, SAFE_AUTONOMOUS_TASK_TYPES, routeTask, isRunStale, RUN_STALE_AFTER_MS,
   type ExpansionDeps, type AutopilotObservation, type AutopilotProposal, type OpportunitySource,
 } from '../src/index.ts';
+import { aiCallBoundUsd, profileActivity } from '../src/expansion/llm.ts';
 
 /**
  * Le moteur d'expansion, éprouvé sur un petit monde fermé.
@@ -234,15 +235,18 @@ describe('8. le budget IA', () => {
     },
   });
 
+  /** Un modèle au tarif connu : sans lui, aucune réservation n'est possible. */
+  const priced = (): AtlasConfig => ({ ...config, llm: { ...config.llm, agentModel: 'claude-haiku-4-5-20251001' } });
+
   test('maxAiCostUsd minuscule : aucun appel ; plafond raisonnable : des appels, et le coût réel est compté', async () => {
     const none: LlmRequest[] = [];
-    const capped = await runExpansion(deps({ provider: fakeProvider(none) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 0.0001 } });
+    const capped = await runExpansion(deps({ config: priced(), provider: fakeProvider(none) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 0.0001 } });
     assert.equal(none.length, 0, 'sous un plafond nul, le modèle n’est jamais appelé');
     assert.ok(capped.report.stats.stoppedBy.includes('MAX_AI_COST'));
     assert.ok(capped.report.stats.funnel.universe > 0, 'le chemin déterministe continue sans le modèle');
 
     const some: LlmRequest[] = [];
-    const ok = await runExpansion(deps({ provider: fakeProvider(some) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 0.05 } });
+    const ok = await runExpansion(deps({ config: priced(), provider: fakeProvider(some) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 0.05 } });
     assert.ok(some.length >= 1);
     assert.ok(ok.run.aiCostUsd > 0 && ok.run.aiCostUsd <= 0.05, `coût IA ${ok.run.aiCostUsd}`);
     assert.ok(some.every((r) => r.meta?.purpose === 'prospect-expansion'));
@@ -250,12 +254,38 @@ describe('8. le budget IA', () => {
   });
 
   test('le budget IA commercial du jour, épuisé, coupe le modèle avant le plafond du tour', async () => {
-    const cfg: AtlasConfig = { ...config, sales: { ...config.sales, dailyAiBudgetUsd: 0.01 } };
+    const cfg: AtlasConfig = { ...priced(), sales: { ...config.sales, dailyAiBudgetUsd: 0.01 } };
     repos.llmCalls.record({ missionId: null, taskRef: null, agentKey: null, purpose: 'test', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', inputTokens: 1000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.02, durationMs: 1, ok: true, error: null, toolCalls: 0, subject: null, contextChars: null, evidenceCount: null, createdAt: new Date().toISOString() });
     const calls: LlmRequest[] = [];
     const { report } = await runExpansion(deps({ config: cfg, provider: fakeProvider(calls) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 0.5 } });
     assert.equal(calls.length, 0);
     assert.ok(report.stats.stoppedBy.includes('DAILY_AI_BUDGET'));
+  });
+
+  test('tarif inconnu : aucun appel, et le tour le dit', async () => {
+    const calls: LlmRequest[] = [];
+    const { report } = await runExpansion(deps({ provider: fakeProvider(calls) }), { seeds: [SEED], limits: { maxDepth: 1, maxAiCostUsd: 5 } });
+    assert.equal(calls.length, 0, `« ${config.llm.agentModel} » n’a pas de tarif : on ne dépense pas à l’aveugle`);
+    assert.equal(report.stats.aiCalls, 0);
+    assert.ok(report.stats.stoppedBy.includes('AI_PRICE_UNKNOWN'));
+    assert.ok(report.stats.funnel.universe > 0, 'le chemin déterministe continue sans le modèle');
+  });
+
+  test('la réservation porte la borne prudente de la requête réelle, et un refus n’appelle rien', async () => {
+    const seed = { entity: { name: 'Acme', domain: 'acme.fr', website: 'https://acme.fr', country: null }, activity: null, keywords: [], homepageUrl: null, homepageText: 'machines d’emballage '.repeat(200) } as unknown as Parameters<typeof profileActivity>[2];
+    const calls: LlmRequest[] = [];
+    const bounds: Array<number | null> = [];
+    const refused = await profileActivity(fakeProvider(calls), priced(), seed, { runId: 'r' }, (b) => { bounds.push(b); return false; });
+    assert.equal(calls.length, 0);
+    assert.equal(refused.called, false);
+    assert.equal(refused.costUsd, 0);
+
+    const granted = await profileActivity(fakeProvider(calls), priced(), seed, { runId: 'r' }, () => true);
+    assert.equal(calls.length, 1);
+    const bound = aiCallBoundUsd(calls[0]!)!;
+    assert.equal(bounds[0], bound, 'la borne réservée est celle de la requête envoyée');
+    assert.ok(granted.costUsd > 0 && granted.costUsd <= bound, `coût ${granted.costUsd} sous la borne ${bound}`);
+    assert.equal(aiCallBoundUsd({ ...calls[0]!, model: 'modele-sans-tarif' }), null);
   });
 });
 
@@ -699,6 +729,45 @@ describe('F2. le pays se prouve aussi depuis une page d’identité (contact, me
     await runExpansion(deps({ fetchHtml: f2Fetch, search: fixtureSearch(queries) }), { seeds: [SEEDCO], limits: { maxDepth: 1 }, icp });
     assert.ok(queries.every((q) => !/vannex/i.test(q)), 'la preuve de pays ne passe jamais par une recherche, seulement par les liens déjà classés');
   });
+
+  test('le plafond de 5 lectures d’identité par tour survit à une reprise : le compteur, persisté, ne repart pas de zéro', async () => {
+    // Quatre candidats, chacun assez fort (relation OFFICIAL, icp « vannes »)
+    // pour justifier une lecture d’identité, mais aucun ne prouve son pays
+    // depuis l’accueil — seulement depuis /contact.
+    const cand = (n: number) => `cand${n}.example`;
+    const F2R_WORLD: Record<string, string> = {
+      'https://seedco2.example/': page('SeedCo2 – fabricant de vannes industrielles', `<nav>${a('/distributeurs', 'Nos distributeurs')}</nav><p>SeedCo2 fabrique des vannes industrielles. SIRET 123 456 789 00022 — Lyon, France.</p>`),
+      'https://seedco2.example/distributeurs': page('Distributeurs – SeedCo2', `<ul>${[1, 2, 3, 4].map((n) => a(`https://${cand(n)}/`, `Cand${n}`)).join(' ')}</ul>`),
+    };
+    for (const n of [1, 2, 3, 4]) {
+      F2R_WORLD[`https://${cand(n)}/`] = page(`Cand${n}`, `<nav>${a('/contact', 'Contact')}</nav><p>Cand${n} distribue des vannes industrielles à travers l’Europe.</p>`);
+      F2R_WORLD[`https://${cand(n)}/contact`] = page('Contact', `<p>Cand${n}, ${n} rue de la République, 7500${n} Paris. SIRET ${n}${n}${n} ${n}${n}${n} ${n}${n}${n} 000${n}${n}.</p>`);
+    }
+    const fetchF2R = async (url: string): Promise<string | null> => F2R_WORLD[url] ?? F2R_WORLD[`${url}/`] ?? null;
+    const SEEDCO2 = { name: 'SeedCo2', domain: 'seedco2.example', website: 'https://seedco2.example', country: 'France' };
+    const icp2 = { countries: ['France'], keywords: ['vannes'], exclusions: [] };
+
+    // Un tour laissé RUNNING par un arrêt, avec 3 lectures d’identité déjà
+    // dépensées (par une graine déjà traitée que ce petit monde n’a pas
+    // besoin de rejouer) : la seule graine encore en file est SeedCo2, avec
+    // ses 4 candidats — largement de quoi dépasser 5 si le compteur repartait à zéro.
+    const run = repos.expansion.startRun({
+      purpose: 'SALES', trigger: 'test', seeds: [SEEDCO2], strategies: ['PARTNER'],
+      limits: { ...DEFAULT_EXPANSION_LIMITS, maxDepth: 1 }, icp: icp2, startedAt: EPOCH,
+    });
+    repos.expansion.upsertCandidate({ runId: run.id, entityKey: entityKeyOf(SEEDCO2), companyName: SEEDCO2.name, canonicalDomain: SEEDCO2.domain, website: SEEDCO2.website, country: SEEDCO2.country, depth: 0, seedKey: entityKeyOf(SEEDCO2), isSeed: true, discoveredAt: EPOCH });
+    const progress = { queue: [{ seed: SEEDCO2, depth: 0, rootKey: entityKeyOf(SEEDCO2) }], processed: [], rawCandidates: 0, stoppedBy: [], startedAt: EPOCH, identityFetches: 3 };
+    repos.expansion.saveProgress(run.id, progress as unknown as Record<string, unknown>);
+    assert.equal(repos.expansion.openRuns().length, 1);
+
+    const resumed = await resumeOpenExpansions(deps({ fetchHtml: fetchF2R, search: null }));
+    assert.equal(resumed.length, 1);
+    const finalProgress = resumed[0]!.progress as { identityFetches: number };
+    assert.equal(finalProgress.identityFetches, 5, 'le plafond (5) est respecté en repartant du compteur persisté (3), pas de 0 (ce qui aurait autorisé jusqu’à 3+4=7)');
+
+    const countryProofs = [1, 2, 3, 4].reduce((n, i) => n + repos.expansion.evidenceOf(cand(i)).filter((e) => e.kind === 'COUNTRY').length, 0);
+    assert.equal(countryProofs, 2, 'seuls 2 candidats de plus (5 − 3 déjà dépensés) obtiennent leur preuve de pays');
+  });
 });
 
 // ─── v4.7.1 : F3 — la diversité des stratégies ─────────────────────────────
@@ -715,9 +784,10 @@ describe('F3. un quota déterministe empêche une stratégie de remplir le tour'
 
     const byStrategy: Record<string, number> = {};
     for (const r of repos.expansion.relationshipsForRun(run.id)) byStrategy[r.sourceMethod] = (byStrategy[r.sourceMethod] ?? 0) + 1;
-    // 5 stratégies actives par défaut : quota = max(3, ceil(15*3/5)) = 9.
-    assert.ok((byStrategy.ASSOCIATION ?? 0) <= 9, `ASSOCIATION n’excède pas son quota : ${byStrategy.ASSOCIATION}`);
-    assert.ok((byStrategy.ASSOCIATION ?? 0) >= 3, 'la fédération contribue quand même — le quota n’écarte pas la stratégie, il la borne');
+    // 5 stratégies actives par défaut : quota = max(3, ceil(15*3/5)) = 9. La fédération en propose
+    // 20 (au-delà même du plafond de page, 15) : le compte doit tomber pile sur le quota, ni plus
+    // (un double push doublerait ce nombre), ni moins (le quota n’écarte pas la stratégie, il la borne).
+    assert.equal(byStrategy.ASSOCIATION, 9, `ASSOCIATION doit atteindre exactement son quota, pas plus (double comptage ?), pas moins : ${byStrategy.ASSOCIATION}`);
     assert.ok(Object.keys(byStrategy).length >= 3, `plusieurs stratégies contribuent : ${Object.keys(byStrategy).join(', ')}`);
     assert.ok((byStrategy.PARTNER ?? 0) > 0, 'la page distributeurs continue de compter, malgré la grande fédération');
 

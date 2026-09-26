@@ -33,7 +33,7 @@ describe('migration 36', () => {
     // c'est qu'elle existe, à son numéro, et que ses tables sont là.
     const migration = MIGRATIONS.find((m) => m.version === 36)!;
     assert.equal(migration.name, 'sales-engine-production');
-    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 38);
+    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 39);
     const tables = (repos.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name);
     for (const expected of [
       'sales_segments', 'sales_attributions', 'sales_outcomes', 'suppression_list', 'sales_experiments',

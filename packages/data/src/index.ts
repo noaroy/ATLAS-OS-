@@ -45,6 +45,7 @@ export {
   type ClientCandidateStage,
 } from './repositories/client-candidates.ts';
 import { TaskRepository } from './repositories/tasks.ts';
+import { SupervisorRepository } from './repositories/supervisor.ts';
 import { SalesEngineRepository } from './repositories/sales-engine.ts';
 export {
   SalesEngineRepository,
@@ -112,12 +113,14 @@ export interface Repositories {
   salesEngine: SalesEngineRepository;
   autopilot: AutopilotRepository;
   expansion: ExpansionRepository;
+  supervisor: SupervisorRepository;
   close(): void;
 }
 
 export function createRepositories(databaseFile: string, logger: Logger, options: OpenOptions = {}): Repositories {
   const db = openDatabase(databaseFile, logger, options);
   const skills = new SkillRepository(db);
+  const tasks = new TaskRepository(db);
 
   // Agents resolve their tool allow-list through the skill registry, so a
   // skill that is withdrawn immediately narrows every agent that held it.
@@ -155,7 +158,8 @@ export function createRepositories(databaseFile: string, logger: Logger, options
     salesLoop: new SalesLoopRepository(db),
     clientCandidates: new ClientCandidateRepository(db),
     clientCache: new ClientCacheRepository(db),
-    tasks: new TaskRepository(db),
+    tasks,
+    supervisor: new SupervisorRepository(db, tasks),
     toolCalls: new ToolCallRepository(db),
     decisions: new DecisionRepository(db),
     salesEngine: new SalesEngineRepository(db),
@@ -201,6 +205,11 @@ export {
   type CreateTaskInput,
   type ClaimResult,
 } from './repositories/tasks.ts';
+export {
+  SupervisorRepository,
+  type SupervisorObjective, type SupervisorReview, type ObjectiveSpec, type ObjectiveStatus,
+  type SupervisorDecisionKind, type EnsureObjectiveInput, type ReserveReviewResult, type DecideInput, type DecideResult,
+} from './repositories/supervisor.ts';
 export {
   AutopilotRepository, OPEN_ACTION_STATUSES,
   type AutopilotCycle, type AutopilotAction, type AutopilotActionStatus, type AutopilotCycleStatus,

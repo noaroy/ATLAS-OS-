@@ -1,8 +1,8 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createLogger } from '../../core/src/logger.ts';
 import type { AtlasConfig } from '../../core/src/index.ts';
 import { createRepositories, type Repositories } from '../../data/src/index.ts';
@@ -13,7 +13,6 @@ import {
   runAutopilotCycle, observeAtlas, summariseAutopilot, priorityScore, worthDoing, decideAutonomy, fingerprintOf,
   allocationShares, allocationAdjustment, setAutopilotPause, scheduleAutopilotCycle, createAutopilotHandlers,
   DEFAULT_OPPORTUNITY_SOURCES, SAFE_AUTONOMOUS_TASK_TYPES, HUMAN_GATES, ALLOCATION_TARGET, MAX_ACTION_DEPTH, AUTOPILOT_TASK_TYPE,
-  revenueLoopSource,
   type AutopilotProposal, type OpportunitySource, type AutopilotObservation,
 } from '../src/autopilot.ts';
 
@@ -491,37 +490,6 @@ describe('16. aucune métrique inventée', () => {
   });
 });
 
-describe('la commande proposée au fondateur existe réellement', () => {
-  test('brouillons en attente → approvals:audit, qui couvre les deux magasins', async () => {
-    const o = await observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
-    const proposals = revenueLoopSource.propose({
-      observation: { ...o, sales: { ...o.sales, draftsAwaitingApproval: 5 } }, repos, config, now: NOW,
-    });
-    const p = proposals.find((x) => x.fingerprintKey === 'BLOCKED_WORK:drafts-approval');
-    assert.ok(p, 'la proposition existe quand des brouillons attendent');
-    assert.equal(p!.execution.kind, 'FOUNDER_DECISION');
-    assert.equal((p!.execution as { command: string }).command, 'npm run approvals:audit');
-    // `sales:loop -- drafts` ne lit qu'un des deux magasins de brouillons
-    // (voir scripts/approvals-audit.ts) : jamais la commande proposée ici.
-    assert.equal((p!.execution as { command: string }).command.includes('sales:loop'), false);
-  });
-
-  test('recommandations proposées → sales:status puis sales:campaign -- decide, jamais sales:engine', async () => {
-    const o = await observeAtlas(repos, config, { now: NOW, providers: OFFLINE, probeClaudeCode: false, cwd: dir });
-    const proposals = revenueLoopSource.propose({
-      observation: { ...o, sales: { ...o.sales, recommendationsProposed: 3 } }, repos, config, now: NOW,
-    });
-    const p = proposals.find((x) => x.fingerprintKey === 'OPTIMIZATION:recommendations');
-    assert.ok(p, 'la proposition existe quand des recommandations attendent');
-    const command = (p!.execution as { command: string }).command;
-    // `npm run sales:engine` n'existe pas comme script : seuls sales:status et
-    // sales:campaign le sont (package.json).
-    assert.equal(command.includes('sales:engine'), false);
-    assert.match(command, /sales:status/);
-    assert.match(command, /sales:campaign -- decide/);
-  });
-});
-
 describe('17 + 20. rien ne part, les gardes de production ne bougent pas', () => {
   test('après cycles, pause, reprise et décisions : 0 message, portes intactes', async () => {
     seedHotLead();
@@ -564,5 +532,45 @@ describe('la règle d’économie', () => {
     assert.equal(worthDoing(proposal({ expectedBusinessValue: 'LOW', expectedCostUsd: 0 })).worth, true);
     const o = await observeAtlas(repos, config, { now: NOW, providers: READY, probeClaudeCode: false, cwd: dir });
     assert.equal(decideAutonomy(proposal({ execution: { kind: 'INTERNAL_TASK', taskType: 'SALES_DISCOVERY', department: 'sales' } }), { observation: o, config, cycleSpentUsd: 0 }).verdict, 'BLOCKED', 'découverte sans modèle vivant : fermé');
+  });
+});
+
+describe('les commandes que l’Autopilot affiche existent réellement', () => {
+  // Relevé en production : « npm run sales:engine -- recommendations »
+  // s'affichait pour chaque décision de recommandation, mais `sales:engine`
+  // n'est déclaré nulle part dans package.json, et `sales-engine.ts` n'a pas
+  // de verbe « recommendations » — la commande ne pouvait jamais s'exécuter.
+  const ROOT = resolve(import.meta.dirname, '../../..');
+  const source = readFileSync(join(ROOT, 'packages', 'runtime', 'src', 'autopilot.ts'), 'utf8');
+  const scripts = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts as Record<string, string>;
+
+  test('aucune commande affichée ne référence un script npm absent de package.json', () => {
+    const commands = [...source.matchAll(/command:\s*'([^']*)'/g)].map((m) => m[1]!);
+    assert.ok(commands.length > 0, 'la source doit contenir des commandes affichées');
+    for (const command of commands) {
+      // Chaque commande peut enchaîner plusieurs étapes (« … puis … ») ; chaque
+      // étape « npm run X » doit désigner un script déclaré.
+      for (const m of command.matchAll(/npm run ([a-zA-Z0-9:_-]+)/g)) {
+        assert.ok(m[1]! in scripts, `« npm run ${m[1]} » n'existe pas dans package.json (commande : ${command})`);
+      }
+    }
+  });
+
+  test('la décision de recommandation pointe vers sales:status puis sales:campaign -- decide', () => {
+    const commands = [...source.matchAll(/command:\s*'([^']*)'/g)].map((m) => m[1]!);
+    assert.ok(!commands.some((c) => c.includes('sales:engine')), '« sales:engine » n’a jamais existé comme script npm — un commentaire peut le nommer, une commande affichée jamais');
+    assert.ok(commands.some((c) => c === 'npm run sales:status  puis  npm run sales:campaign -- decide <recId> test|approve|reject'));
+  });
+
+  test('la relecture des brouillons pointe vers approvals:audit, qui couvre les deux magasins', () => {
+    // `draftsAwaitingApproval` compte `outreach_drafts` ET `sales_prospects`
+    // (board.todo.approvals) ; `sales:loop -- drafts` ne lit que le premier —
+    // relevé en conditions réelles : 3 en attente, 0 affichés par cette commande.
+    const commands = [...source.matchAll(/command:\s*'([^']*)'/g)].map((m) => m[1]!);
+    assert.ok(
+      !commands.some((c) => c === 'npm run sales:loop -- drafts'),
+      'cette commande ne couvre qu’un des deux magasins de brouillons — elle peut afficher 0 à tort',
+    );
+    assert.ok(commands.some((c) => c === 'npm run approvals:audit'));
   });
 });

@@ -13,7 +13,7 @@
  *   atlas-task retry <taskId> --by=noaroy
  *   atlas-task cancel <taskId> --by=noaroy
  */
-import { createLogger, nowIso, loadAtlasEnv, loadConfig } from '../packages/core/src/index.ts';
+import { createLogger, loadConfig, nowIso, loadAtlasEnv } from '../packages/core/src/index.ts';
 import { createRepositories } from '../packages/data/src/index.ts';
 
 // Avant toute lecture de process.env : sans cet appel, `.env.local` n'existe
@@ -31,6 +31,11 @@ const flag = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? null;
 
 const logger = createLogger({ level: 'error', pretty: false });
+// Comme tous les autres scripts : la base canonique résolue par `loadConfig`,
+// avec sa garde (refus d'ouvrir une seconde base hors du volume Docker). Un
+// `process.env.ATLAS_DB_PATH ?? 'data/atlas.db'` direct contournait cette
+// garde et pointait, dans le conteneur outils, vers un chemin qui n'existe
+// pas — `atlas-task` ne pouvait pas tourner via `atlas-cli.sh`.
 const config = loadConfig(process.cwd());
 const repos = createRepositories(config.paths.databaseFile, logger);
 

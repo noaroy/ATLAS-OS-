@@ -157,7 +157,8 @@ export class InferenceFabric implements LlmProvider {
       try {
         const response = await record.provider.complete(request);
         const durationMs = Date.now() - started;
-        const costUsd = costOfCall(response.usage, response.model || request.model) ?? 0;
+        // `null` si le tarif du modèle servi est inconnu : jamais zéro.
+        const costUsd = costOfCall(response.usage, response.model || request.model);
 
         this.#registry.recordSuccess(record.id, response, durationMs, costUsd);
         attempts.push({
@@ -194,6 +195,18 @@ export class InferenceFabric implements LlmProvider {
           // ferait que payer la même erreur une seconde fois.
           this.#lastTrace = { selected: null, attempts, blocked: false, blockedReason: null };
           throw err;
+        }
+
+        // Un secours peut n'être éligible qu'une fois le fournisseur principal
+        // tombé — un compte vide ne se constate qu'en l'appelant. File épuisée,
+        // le plan est donc refait : sans rejouer un fournisseur déjà en file,
+        // sans dépasser le nombre de tentatives, et avec toutes les règles du
+        // routeur, dont l'exclusion de la simulation en mode réel. L'itérateur
+        // du tableau voit les ajouts.
+        if (index === queue.length - 1 && queue.length < this.#maxAttempts) {
+          const queued = new Set(queue.map((c) => c.record.id));
+          const fresh = this.#router.plan(request).order.filter((c) => !queued.has(c.record.id));
+          queue.push(...fresh.slice(0, this.#maxAttempts - queue.length));
         }
 
         this.#onFailover?.(attempt, queue[index + 1]?.record.id ?? null);

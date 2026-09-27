@@ -894,6 +894,28 @@ export function promoteCandidates(repos: Repositories, runId: string, options: {
   return { promoted, skipped };
 }
 
+/**
+ * Le reliquat de l'expansion : les candidats qualifiés des tours SALES
+ * terminés (DONE ou CAPPED) qui n'ont pas encore été versés. Même fonction,
+ * mêmes gardes que `promoteCandidates` (domaine, entité technique, registre
+ * déjà connu, lien candidat → prospect) ; aucune recherche, aucun modèle,
+ * aucun coût. C'est la découverte serveur : l'image dist-only n'a pas le
+ * script de lot, mais elle a le graphe.
+ */
+export function promoteExpansionBacklog(repos: Repositories, options: { limit?: number; runs?: number; now?: Date } = {}): { promoted: string[]; runs: string[] } {
+  const limit = options.limit ?? 50;
+  const promoted: string[] = [];
+  const touched: string[] = [];
+  for (const run of repos.expansion.runs(options.runs ?? 30)) {
+    if (promoted.length >= limit) break;
+    if (run.purpose !== 'SALES' || (run.status !== 'DONE' && run.status !== 'CAPPED')) continue;
+    const outcome = promoteCandidates(repos, run.id, { limit: limit - promoted.length, now: options.now });
+    if (outcome.promoted.length > 0) touched.push(run.id);
+    promoted.push(...outcome.promoted);
+  }
+  return { promoted, runs: touched };
+}
+
 /** Les graines les plus fortes du registre commercial : PRIORITY puis GOOD_FIT, avec un site, jamais techniques, jamais déjà graines récemment. */
 export function strongestSeeds(repos: Repositories, options: { limit?: number; excludeSeededWithinMs?: number; now?: Date } = {}): ExpansionSeed[] {
   const now = options.now ?? new Date();

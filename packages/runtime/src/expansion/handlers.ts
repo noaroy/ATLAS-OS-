@@ -63,12 +63,17 @@ export function createExpansionHandlers(deps: ExpansionDeps): Record<string, (ta
       seeds, strategies: payload.strategies, limits: payload.limits, icp: payload.icp, purpose: payload.purpose ?? 'SALES', missionId: payload.missionId ?? null,
       trigger: payload.trigger ?? `daemon:${task.taskId}`, heartbeat,
     });
+    // Un tour SALES mené à terme verse aussitôt ses candidats qualifiés dans
+    // la file commerciale : sans cela, la fabrique qui l'a demandé ne voyait
+    // jamais ce qu'il avait trouvé (QUEUE_EMPTY à répétition).
+    const promoted = run.purpose === 'SALES' && (run.status === 'DONE' || run.status === 'CAPPED')
+      ? promoteCandidates(repos, run.id, { limit: 50 }).promoted.length : 0;
     return {
       kind: run.status === 'FAILED' ? 'FAILED' : 'DONE',
       errorCode: run.status === 'FAILED' ? 'EXPANSION_FAILED' : undefined,
       errorMessage: run.error ?? undefined,
       result: {
-        ran: true, runId: run.id, status: run.status, funnel: report.stats.funnel, uniqueCompanies: report.stats.uniqueCompanies, relationships: report.stats.relationships,
+        ran: true, runId: run.id, promoted, status: run.status, funnel: report.stats.funnel, uniqueCompanies: report.stats.uniqueCompanies, relationships: report.stats.relationships,
         evidence: report.stats.evidence, stoppedBy: report.stats.stoppedBy, summary: report.summary, resumed: resumed.map((r) => r.id), messagesSent: 0,
       },
       costUsd: Number((report.stats.searchCostUsd + report.stats.aiCostUsd).toFixed(5)),

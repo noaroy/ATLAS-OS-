@@ -494,25 +494,23 @@ describe('17. l’Autopilot lance l’expansion seul, et la suite verse dans la 
     assert.equal(claimed.task?.taskId, task.taskId);
     const outcome = await handlers[EXPANSION_TASK_TYPE]!(claimed.task!, { logger, heartbeat: () => true, shuttingDown: () => false, correlationId: null });
     assert.equal(outcome.kind, 'DONE');
-    const result = outcome.result as { runId: string; funnel: { universe: number; highPriority: number }; messagesSent: number };
+    const result = outcome.result as { runId: string; funnel: { universe: number; highPriority: number }; messagesSent: number; promoted: number };
     assert.ok(result.funnel.universe > 0);
     assert.equal(result.messagesSent, 0);
+    // Le tour SALES verse lui-même ses candidats qualifiés : la fabrique les verra au passage suivant.
+    assert.ok(result.promoted >= 1, 'versés dès la fin du tour');
     repos.tasks.complete(task.taskId, outcome.result ?? {}, 'daemon-test', outcome.costUsd ?? null);
-
-    const second = await runAutopilotCycle(repos, cfg, logger, { now: new Date(Date.now() + 60_000), trigger: 'test', observe: { providers: READY, probeClaudeCode: false, cwd: dir }, sources: [prospectExpansionSource] });
-    assert.equal(repos.autopilot.action(executed!.actionId)!.status, 'DONE');
-    const promote = second.created.find((a) => /Verser/.test(a.objective));
-    assert.ok(promote, 'la suite : verser les candidats qualifiés');
-    const promoted = second.executed.find((e) => e.actionId === promote!.id);
-    assert.ok(promoted, 'confiée seule aussi : ce ne sont que des prospects DISCOVERED');
-    const c2 = repos.tasks.claim({ owner: 'daemon-test', leaseMs: 60_000, workerTypes: ['DETERMINISTIC'] });
-    const o2 = await handlers[EXPANSION_TASK_TYPE]!(c2.task!, { logger, heartbeat: () => true, shuttingDown: () => false, correlationId: null });
-    assert.equal(o2.kind, 'DONE');
-    assert.ok((o2.result as { promoted: number }).promoted >= 1);
     const discovered = repos.sales.discoveredSince(null).filter((p) => p.batchId.startsWith('xpn_'));
-    assert.ok(discovered.length >= 1);
+    assert.equal(discovered.length, result.promoted);
     assert.ok(discovered.every((p) => p.state === 'DISCOVERED'), 'DISCOVERED, jamais approuvé, jamais contacté');
     assert.ok(repos.sales.evidenceFor(discovered[0]!.id).length >= 1, 'avec ses preuves');
+
+    // Le cycle suivant clôt l'action ; un versement demandé ensuite ne recrée rien.
+    await runAutopilotCycle(repos, cfg, logger, { now: new Date(Date.now() + 60_000), trigger: 'test', observe: { providers: READY, probeClaudeCode: false, cwd: dir }, sources: [prospectExpansionSource] });
+    assert.equal(repos.autopilot.action(executed!.actionId)!.status, 'DONE');
+    const again = await handlers[EXPANSION_TASK_TYPE]!({ ...claimed.task!, payload: { promote: true, runId: result.runId } }, { logger, heartbeat: () => true, shuttingDown: () => false, correlationId: null });
+    assert.equal((again.result as { promoted: number }).promoted, 0, 'idempotent : aucun doublon');
+    assert.equal(repos.sales.discoveredSince(null).filter((p) => p.batchId.startsWith('xpn_')).length, discovered.length);
     assertNothingSent();
   });
 });

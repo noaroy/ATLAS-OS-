@@ -41,6 +41,7 @@ import {
 } from '@atlas/departments';
 import type { WorkerContext, WorkerOutcome } from './workers.ts';
 import { syncSalesInbox, type InboxSyncReport } from './sales-inbox-sync.ts';
+import { promoteExpansionBacklog } from './expansion/engine.ts';
 
 /**
  * Le moteur commercial qui tourne seul — et s'arrête seul là où il le doit.
@@ -220,6 +221,8 @@ export interface DiscoveryResult {
    * décision humaine qu'elle attend.
    */
   needsHuman?: boolean;
+  /** Découverte serveur : les prospects versés depuis l'expansion (plusieurs lots possibles). */
+  promotedIds?: string[];
 }
 
 export interface SalesEngineDeps {
@@ -266,13 +269,17 @@ export const defaultDiscovery = (deps: { config: AtlasConfig; logger: Logger; so
     const script = join(deps.sourceRoot, 'scripts', 'sales-batch.ts');
     if (!existsSync(script)) {
       // L'image serveur est volontairement dist-only (voir docs/OPERATOR.md) :
-      // ni `scripts/` ni `tsx` n'y sont présents, et aucun redémarrage ne
-      // changera cela. Ce n'est donc jamais transitoire — une personne doit
-      // lancer la découverte par le canal qui, lui, a tout ce qu'il faut.
-      return {
-        ran: false, reason: `script absent : ${script} (image serveur dist-only)`,
-        batchId: null, exitCode: null, costUsd: null, needsHuman: true,
-      };
+      // ni `scripts/` ni `tsx`. La découverte y passe par le graphe
+      // d'expansion : les candidats qualifiés des tours SALES terminés sont
+      // versés au registre commercial (provenance, dédoublonnage, $0). Rien à
+      // verser n'est pas une attente humaine : la fabrique pose elle-même les
+      // expansions qui nourriront le passage suivant.
+      const { promoted } = promoteExpansionBacklog(deps.repos, { limit: 50 });
+      if (promoted.length === 0) {
+        return { ran: false, reason: 'aucun candidat d’expansion qualifié à verser (image serveur : découverte par le graphe)', batchId: null, exitCode: null, costUsd: 0 };
+      }
+      const batchId = deps.repos.sales.get(promoted[0]!)?.batchId ?? null;
+      return { ran: true, reason: `${promoted.length} prospect(s) versé(s) depuis l’expansion`, batchId, exitCode: 0, costUsd: 0, promotedIds: promoted };
     }
     if (deps.config.llm.mode !== 'live') {
       return { ran: false, reason: `mode LLM « ${deps.config.llm.mode} », pas « live »`, batchId: null, exitCode: null, costUsd: null };
@@ -513,7 +520,10 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     const today = startOfUtcDay(now());
     const spentToday = repos.llmCalls.usageSince(today).knownCostUsd;
     const remaining = Math.max(0, config.sales.dailyAiBudgetUsd - spentToday);
-    if (remaining < 0.05) {
+    // La découverte serveur (graphe d'expansion) ne coûte rien : le budget IA
+    // du jour ne la suspend pas. Seul le lot en sous-processus le consomme.
+    const serverDiscovery = !deps.discovery && !existsSync(join(sourceRoot, 'scripts', 'sales-batch.ts'));
+    if (remaining < 0.05 && !serverDiscovery) {
       repos.salesEngine.recordFriction({ kind: 'BUDGET_EXHAUSTED', detail: `${spentToday.toFixed(2)} $ dépensés sur ${config.sales.dailyAiBudgetUsd.toFixed(2)} $` });
       return { kind: 'PAUSED_BUDGET', errorCode: 'DAILY_AI_BUDGET', errorMessage: `budget IA du jour épuisé (${spentToday.toFixed(2)} $)` };
     }
@@ -547,8 +557,11 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     // Le lot ne connaît pas les segments : l'attribution se fait ici, sur ce
     // qu'il a réellement découvert.
     let attributed = 0;
-    if (result.batchId && segment) {
-      for (const prospect of repos.sales.forBatch(result.batchId)) {
+    const discoveredProspects = result.promotedIds
+      ? result.promotedIds.map((pid) => repos.sales.get(pid)).filter((p): p is NonNullable<typeof p> => Boolean(p))
+      : result.batchId ? repos.sales.forBatch(result.batchId) : [];
+    if (segment) {
+      for (const prospect of discoveredProspects) {
         if (!prospect.domain) continue;
         repos.salesEngine.attribute({
           domain: prospect.domain, prospectId: prospect.id, segmentId: segment.id,
@@ -565,7 +578,7 @@ export function createSalesEngineHandlers(deps: SalesEngineDeps): Record<string,
     if (result.exitCode !== 0) {
       repos.salesEngine.recordFriction({ kind: 'LLM_FAILURE', segmentId: segment?.id ?? null, detail: result.reason });
     }
-    return { kind: 'DONE', result: { ran: true, batchId: result.batchId, exitCode: result.exitCode, attributed, segmentId: segment?.id ?? null } };
+    return { kind: 'DONE', result: { ran: true, batchId: result.batchId, exitCode: result.exitCode, discovered: discoveredProspects.length, attributed, segmentId: segment?.id ?? null, costUsd: result.costUsd ?? null, messagesSent: 0 } };
   };
 
   const analytics = async (): Promise<WorkerOutcome> => {

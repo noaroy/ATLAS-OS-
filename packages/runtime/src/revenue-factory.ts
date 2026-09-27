@@ -11,7 +11,7 @@ import {
 import { fetchRawPages } from '@atlas/intelligence';
 import type { WorkerContext, WorkerOutcome } from './workers.ts';
 import { SALES_ENGINE_TASKS, registryRecommendationsFor, replyReceivedFor, readStrategy } from './sales-engine.ts';
-import { EXPANSION_TASK_TYPE } from './expansion/engine.ts';
+import { EXPANSION_TASK_TYPE, promoteExpansionBacklog } from './expansion/engine.ts';
 
 /**
  * La fabrique de revenu — boucle A.
@@ -120,6 +120,8 @@ export interface FactoryReport {
   pagesFetched: number;
   fetchFailures: number;
   expansionsEnqueued: number;
+  /** Prospects versés depuis le graphe d'expansion au début du tour (file courte). */
+  promotedFromExpansion: number;
   errors: Array<{ domain: string; error: string }>;
   elapsedMs: number;
   costUsd: number;
@@ -621,11 +623,17 @@ export async function runRevenueFactory(
     runId: run.runId, processed: 0,
     byClass: { HOT: 0, WARM: 0, NEEDS_ENRICHMENT: 0, DROP: 0, DUPLICATE: 0, BLOCKED: 0 },
     sendEligible: 0, contactsFound: 0, factsAdded: 0, recommendationsReady: 0, pagesFetched: 0, fetchFailures: 0,
-    expansionsEnqueued: 0, errors: [], elapsedMs: 0, costUsd: 0, stopReason: 'QUEUE_EMPTY', queueRemaining: 0,
+    expansionsEnqueued: 0, promotedFromExpansion: 0, errors: [], elapsedMs: 0, costUsd: 0, stopReason: 'QUEUE_EMPTY', queueRemaining: 0,
   };
 
   try {
-    const queue = factoryQueue(repos, startedAt, limits);
+    let queue = factoryQueue(repos, startedAt, limits);
+    // File courte : ce que l'expansion a déjà trouvé et qualifié entre d'abord
+    // dans le registre commercial (mêmes gardes que le versement manuel).
+    if (queue.length < limits.batchSize && config.sales.discoveryEnabled) {
+      report.promotedFromExpansion = promoteExpansionBacklog(repos, { limit: limits.batchSize * 4, now: startedAt }).promoted.length;
+      if (report.promotedFromExpansion > 0) queue = factoryQueue(repos, startedAt, limits);
+    }
     const batch = queue.slice(0, limits.batchSize);
     report.queueRemaining = Math.max(0, queue.length - batch.length);
     const knownDomains = new Set(repos.sales.discoveredSince(null).map((p) => (p.domain ? canonicalDomainOf(p.domain) : '')).filter(Boolean));
@@ -681,7 +689,7 @@ function statsOf(r: FactoryReport): Record<string, unknown> {
   return {
     byClass: r.byClass, sendEligible: r.sendEligible, contactsFound: r.contactsFound, factsAdded: r.factsAdded,
     recommendationsReady: r.recommendationsReady, pagesFetched: r.pagesFetched, fetchFailures: r.fetchFailures,
-    expansionsEnqueued: r.expansionsEnqueued, errors: r.errors.length, queueRemaining: r.queueRemaining,
+    expansionsEnqueued: r.expansionsEnqueued, promotedFromExpansion: r.promotedFromExpansion, errors: r.errors.length, queueRemaining: r.queueRemaining,
   };
 }
 

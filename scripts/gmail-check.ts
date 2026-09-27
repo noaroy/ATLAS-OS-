@@ -13,6 +13,7 @@ import {
   ACCEPTED_GMAIL_SCOPES, scopesInExcess, GMAIL_SEND_SCOPE_URI,
 } from '../packages/intelligence/src/mail/types.ts';
 import { GMAIL_READONLY_SCOPE } from '../packages/intelligence/src/mail/gmail.ts';
+import { tokenRefusalOf } from '../packages/intelligence/src/mail/oauth-error.ts';
 
 loadConfig(process.cwd());
 
@@ -53,8 +54,10 @@ process.exitCode = await (async (): Promise<number> => {
   });
 
   if (!response.ok) {
-    console.log(`  ${c.red}Le jeton est refusé (HTTP ${response.status}).${c.reset}`);
-    console.log('  Il a peut-être été révoqué. Relancez : npm run gmail:authorize\n');
+    // Seul le code Google (liste blanche) est affiché, jamais le corps.
+    const refusal = await tokenRefusalOf(response);
+    console.log(`  ${c.red}Le jeton est refusé (HTTP ${refusal.status} · ${refusal.code ?? 'code non renseigné'}).${c.reset}`);
+    console.log(`  Action : ${refusal.humanAction}\n`);
     return 1;
   }
 

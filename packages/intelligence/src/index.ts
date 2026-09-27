@@ -141,3 +141,4 @@ export {
   type SendReceipt,
 } from './mail/outbound.ts';
 export { FixtureInboxProvider, mailMessage } from './mail/fixture.ts';
+export { describeTokenRefusal, oauthErrorCodeOf, tokenRefusalOf, OAUTH_ERROR_CODES, type OAuthErrorCode, type TokenRefusal } from './mail/oauth-error.ts';

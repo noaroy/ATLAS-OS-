@@ -1,4 +1,5 @@
 import { withDeadline, describeError } from '@atlas/core';
+import { tokenRefusalOf } from './oauth-error.ts';
 import type { Logger } from '@atlas/core';
 import {
   USEFUL_HEADERS, ACCEPTED_GMAIL_SCOPES, scopesInExcess,
@@ -163,8 +164,9 @@ export class GmailInboxProvider implements MailInboxProvider {
     );
 
     if (!response.ok) {
-      // Le corps d'une erreur OAuth peut contenir des fragments de secret.
-      throw new Error(`échange de jeton refusé (HTTP ${response.status})`);
+      // Seul le code `error` de Google est lu (liste blanche) : le reste du
+      // corps peut contenir des fragments de secret et n'est jamais recopié.
+      throw new Error((await tokenRefusalOf(response)).message);
     }
     const payload = (await response.json()) as {
       access_token?: string; expires_in?: number; scope?: string;

@@ -21,6 +21,7 @@
  * distinctes, et seule la porte demande une décision humaine.
  */
 import { withDeadline } from '@atlas/core';
+import { tokenRefusalOf } from './oauth-error.ts';
 import {
   ACCEPTED_GMAIL_SCOPES, GMAIL_READONLY_SCOPE_URI, scopesInExcess, type MailProviderStatus,
 } from './types.ts';
@@ -401,8 +402,9 @@ export class GmailOutboundProvider implements MailOutboundProvider {
     );
 
     if (!response.ok) {
-      // Le corps d'une erreur OAuth peut contenir des fragments de secret.
-      throw new Error(`échange de jeton refusé (HTTP ${response.status})`);
+      // Seul le code `error` de Google est lu (liste blanche) : le reste du
+      // corps peut contenir des fragments de secret et n'est jamais recopié.
+      throw new Error((await tokenRefusalOf(response)).message);
     }
     const payload = (await response.json()) as {
       access_token?: string; expires_in?: number; scope?: string;

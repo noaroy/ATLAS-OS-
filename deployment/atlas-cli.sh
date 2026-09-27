@@ -63,6 +63,7 @@ npm_script_of() {
     sales-status)     printf 'sales:status' ;;
     gmail-check)      printf 'gmail:check' ;;
     gmail-read-check) printf 'gmail:read-check' ;;
+    factory-diagnose) printf 'factory:diagnose' ;;
     sales-inbox)      printf 'sales:inbox' ;;
     inbox-sync)       printf 'sales:inbox-sync' ;;
     send-approved)    printf 'sales:send-approved' ;;

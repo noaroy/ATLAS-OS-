@@ -22,6 +22,7 @@ import { createRepositories } from '../packages/data/src/index.ts';
 import { makeTestConfig } from '../packages/testing/src/index.ts';
 import { runRevenueFactory, DEFAULT_FACTORY_LIMITS, FACTORY_DAILY_TARGET } from '../packages/runtime/src/revenue-factory.ts';
 import { SALES_SCHEDULE } from '../packages/runtime/src/sales-engine.ts';
+import { promoteExpansionBacklog } from '../packages/runtime/src/expansion/engine.ts';
 import { site, fixtureFetch, discovered, partners, type SiteKind } from '../packages/runtime/test/helpers/factory-fixtures.ts';
 
 // Convention du dépôt : tout script charge l'environnement. Le banc n'en lit
@@ -50,10 +51,22 @@ async function bench(latencyMs: number) {
   const repos = createRepositories(join(dir, 'bench.db'), logger);
   const config = makeTestConfig(dir);
   const sites = [];
+  // L'offre arrive comme en production sur l'image serveur : un tour
+  // d'expansion SALES terminé, dont les candidats qualifiés sont versés au
+  // registre commercial par la découverte serveur ($0). Un sur deux ; l'autre
+  // moitié vient d'un lot déjà versé (sales_prospects direct).
+  const xRun = repos.expansion.startRun({ purpose: 'SALES', trigger: 'bench', seeds: [], strategies: ['partners'], limits: {} });
   for (let i = 0; i < companies; i++) {
     const { kind, partners: n } = kindFor(i);
     const domain = `pme-${i}.fr`;
-    discovered(repos, domain, `PME Industrielle ${i}`, new Date(Date.UTC(2026, 8, 26, 8, 0, i)).toISOString());
+    if (i % 2 === 0) {
+      const { candidate } = repos.expansion.upsertCandidate({ runId: xRun.id, entityKey: domain, companyName: `PME Industrielle ${i}`, canonicalDomain: domain, website: `https://${domain}`, country: 'FR', depth: 1, seedKey: 'graine.fr' });
+      repos.expansion.setCandidateVerdict(candidate.id, { stage: 'QUALIFIED', icpStatus: 'FIT', score: 70, scoreDetail: {} });
+      repos.expansion.addRelationship({ runId: xRun.id, sourceKey: 'graine.fr', sourceName: 'Graine', sourceKind: 'COMPANY', targetKey: domain, targetName: `PME Industrielle ${i}`,
+        relationshipType: 'COMPLEMENTARY_VENDOR', confidence: 0.8, status: 'VERIFIED', evidenceUrl: 'https://graine.fr/partenaires', evidenceSummary: 'partenaire publié', sourceMethod: 'bench', sourceTrust: 'OFFICIAL', country: 'FR', sourceDate: null });
+    } else {
+      discovered(repos, domain, `PME Industrielle ${i}`, new Date(Date.UTC(2026, 8, 26, 8, 0, i)).toISOString());
+    }
     if (i % 20 === 19) discovered(repos, `www.${domain}`, `PME Industrielle ${i} SAS`, new Date(Date.UTC(2026, 8, 26, 9, 0, i)).toISOString());
     partners(repos, domain, Array.from({ length: n }, (_, k) => ({ domain: `client-${i}-${k}.fr`, name: `Client ${i}-${k}` })));
     sites.push(site(domain, `PME Industrielle ${i}`, kind));
@@ -61,9 +74,15 @@ async function bench(latencyMs: number) {
   const counter = { pages: 0, calls: 0 };
   const fetchPages = fixtureFetch(sites, { latencyMs, counter });
 
+  repos.expansion.finishRun(xRun.id, { status: 'DONE', stats: {}, summary: null });
+  const promotedBySalesDiscovery = promoteExpansionBacklog(repos, { limit: companies }).promoted.length;
+  const promotedAgain = promoteExpansionBacklog(repos, { limit: companies }).promoted.length;
+
+  const rssBefore = process.memoryUsage().rss;
   const started = Date.now();
   let runs = 0;
   let processed = 0;
+  let interrupted = false;
   const runMs: number[] = [];
   // Des tours de production, enchaînés sans attendre la cadence de 30 minutes.
   for (;;) {
@@ -73,7 +92,21 @@ async function bench(latencyMs: number) {
     runs += 1;
     processed += r.processed;
     if (r.processed === 0 || runs > 1000) break;
+    // Une interruption : un tour ouvert puis abandonné (arrêt brutal). Le tour
+    // suivant doit le clore et reprendre la file, sans rien traiter deux fois.
+    if (runs === 1 && !interrupted) {
+      repos.revenueFactory.startRun('bench:crash', '2026-09-26T09:00:00.000Z');
+      interrupted = true;
+    }
   }
+  const rssAfter = process.memoryUsage().rss;
+  const verdicts = repos.revenueFactory.verdicts({ limit: 100_000 });
+  const blockerHistogram: Record<string, number> = {};
+  for (const v of verdicts) for (const b of v.blockers) blockerHistogram[b.replace(/_\d+(\/\d+)?$|\d+\/\d+$/, '')] = (blockerHistogram[b.replace(/_\d+(\/\d+)?$|\d+\/\d+$/, '')] ?? 0) + 1;
+  const uniqueInput = new Set(repos.sales.discoveredSince(null).map((p) => p.domain!.replace(/^www\./, ''))).size;
+  const abandonedLeftOpen = repos.revenueFactory.runs(1000).filter((x) => x.status === 'RUNNING').length;
+  const messagesSent = repos.salesLoop.sentSince('1970-01-01T00:00:00.000Z');
+  const aiCostUsd = repos.llmCalls.usageSince('1970-01-01T00:00:00.000Z').knownCostUsd;
   const elapsedMs = Date.now() - started;
   const stats = repos.revenueFactory.windowStats('1970-01-01T00:00:00.000Z');
   const errors = repos.revenueFactory.runs(1000).filter((x) => x.status === 'FAILED').length;
@@ -106,6 +139,15 @@ async function bench(latencyMs: number) {
     costUsdTotal: stats.costUsd,
     costPerCompanyUsd: +(stats.costUsd / Math.max(1, stats.processed)).toFixed(4),
     meetsTarget: Math.min(cadenceCapacity, computeCapacity) >= FACTORY_DAILY_TARGET,
+    promotedBySalesDiscovery,
+    promotedAgain,
+    duplicatesProcessed: verdicts.length - new Set(verdicts.map((v) => v.domain)).size,
+    uniqueCompaniesInRegistry: uniqueInput,
+    interruptedRunClosed: interrupted && abandonedLeftOpen === 0,
+    rssGrowthMb: +((rssAfter - rssBefore) / 1_048_576).toFixed(1),
+    blockerHistogram: Object.fromEntries(Object.entries(blockerHistogram).sort((a, b) => b[1] - a[1])),
+    aiCostUsd,
+    messagesSent,
   };
 }
 

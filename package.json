@@ -45,6 +45,7 @@
     "gmail:authorize": "tsx scripts/gmail-authorize.ts",
     "gmail:check": "tsx scripts/gmail-check.ts",
     "gmail:read-check": "tsx scripts/gmail-read-check.ts",
+    "factory:diagnose": "tsx scripts/revenue-factory-diagnose.ts",
     "sales:inbox": "tsx scripts/sales-inbox.ts",
     "sales:inbox-sync": "tsx scripts/sales-inbox-sync.ts",
     "sales:loop": "tsx scripts/sales-loop.ts",

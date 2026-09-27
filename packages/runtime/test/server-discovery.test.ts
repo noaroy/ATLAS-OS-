@@ -7,7 +7,7 @@ import { createLogger } from '../../core/src/logger.ts';
 import type { AtlasConfig } from '../../core/src/index.ts';
 import { createRepositories, type Repositories, type TaskRow } from '../../data/src/index.ts';
 import { makeTestConfig } from '../../testing/src/index.ts';
-import { createSalesEngineHandlers, SALES_ENGINE_TASKS } from '../src/sales-engine.ts';
+import { createSalesEngineHandlers, SALES_ENGINE_TASKS, materializeFirstTouchDrafts, runSendCycle } from '../src/sales-engine.ts';
 import { runRevenueFactory } from '../src/revenue-factory.ts';
 import { promoteExpansionBacklog } from '../src/expansion/engine.ts';
 import type { WorkerContext } from '../src/workers.ts';
@@ -170,5 +170,62 @@ describe('de la découverte serveur à la fabrique', () => {
     assert.equal(promoteExpansionBacklog(repos, { limit: 3, now: NOW }).promoted.length, 2);
     assert.equal(promoteExpansionBacklog(repos, { limit: 3, now: NOW }).promoted.length, 0);
     assert.equal(salesDomains().length, 5);
+  });
+});
+
+describe('E2E — découverte serveur → fabrique → brouillon personnalisé → READY_FOR_APPROVAL, stop', () => {
+  test('deux entreprises éligibles, une non éligible : brouillons propres à chacune, idempotents, rien ne part', async () => {
+    const names: Array<[string, string]> = [['merand.fr', 'Mérand'], ['fourpro.fr', 'FourPro']];
+    expansionRun([...names.map(([domain, name]) => ({ domain, name, stage: 'QUALIFIED' as const })), { domain: 'formulaire.fr', name: 'Formulaire', stage: 'QUALIFIED' }]);
+    partners(repos, 'merand.fr', [{ domain: 'bridor.fr', name: 'Bridor' }, { domain: 'panamar.es', name: 'Panamar' }]);
+    partners(repos, 'fourpro.fr', [{ domain: 'greggs.co.uk', name: 'Greggs' }, { domain: 'europastry.com', name: 'Europastry' }]);
+    partners(repos, 'formulaire.fr', [{ domain: 'bridor.fr', name: 'Bridor' }, { domain: 'panamar.es', name: 'Panamar' }]);
+
+    // DISCOVERED (découverte serveur) → qualification, contact, preuves, recommandations (fabrique)
+    assert.equal((await discover()).result?.discovered, 3);
+    await runRevenueFactory({ repos, config, logger, fetchPages: fixtureFetch([site('merand.fr', 'Mérand'), site('fourpro.fr', 'FourPro'), site('formulaire.fr', 'Formulaire', 'FORM_ONLY')]), now: () => NOW });
+    const eligible = repos.revenueFactory.verdicts({ sendEligible: true }).map((v) => v.domain).sort();
+    assert.deepEqual(eligible, ['fourpro.fr', 'merand.fr']);
+    assert.equal(repos.revenueFactory.verdict('formulaire.fr')!.sendEligible, false);
+
+    // Boucle B, configuration de production réelle : approbation humaine, interrupteur fermé.
+    assert.equal(config.sales.outboundEnabled, false);
+    assert.equal(config.sales.engineMode, 'INTERNAL_TEST');
+    const first = materializeFirstTouchDrafts(repos, { ...config, sales: { ...config.sales, humanApprovalRequired: true } }, { now: NOW, transportConfigured: true });
+    const ready = repos.salesLoop.draftsInState('READY_FOR_APPROVAL');
+    assert.deepEqual(ready.map((d) => d.domain).sort(), eligible, JSON.stringify(first));
+    assert.equal(repos.salesLoop.draftsForDomain('formulaire.fr').length, 0, 'non éligible : aucun brouillon');
+
+    for (const d of ready) {
+      const p = repos.sales.discoveredSince(null).find((x) => x.domain === d.domain)!;
+      const other = ready.find((x) => x.domain !== d.domain)!;
+      assert.equal(d.recipient, p.contactEmail, 'le contact observé de CETTE entreprise');
+      assert.ok(d.recipient.endsWith(`@${d.domain}`));
+      const mine = d.domain === 'merand.fr' ? ['Bridor', 'Panamar'] : ['Greggs', 'Europastry'];
+      const theirs = d.domain === 'merand.fr' ? ['Greggs', 'Europastry'] : ['Bridor', 'Panamar'];
+      for (const n of mine) assert.match(d.body, new RegExp(n), `${d.domain} cite ses propres recommandations`);
+      for (const n of theirs) assert.doesNotMatch(d.body, new RegExp(n), `${d.domain} ne cite jamais celles d’une autre entreprise`);
+      assert.doesNotMatch(d.body, new RegExp(other.domain.replace('.', '\\.')), 'aucun mélange de domaines');
+      assert.doesNotMatch(d.body, /\{\{|\[\[|TODO|XXX|lorem/i, 'aucun gabarit resté ouvert');
+      assert.ok(d.sources.length >= 2 && d.sources.every((s) => /^https:\/\//.test(s.sourceUrl)), 'provenance conservée');
+      assert.ok(d.sources.some((s) => s.sourceUrl.includes(d.domain)), 'au moins un fait lu sur le site de CETTE entreprise');
+    }
+
+    // Idempotent : un second passage ne rédige rien de plus.
+    const second = materializeFirstTouchDrafts(repos, { ...config, sales: { ...config.sales, humanApprovalRequired: true } }, { now: NOW, transportConfigured: true });
+    assert.equal(second.drafted, 0);
+    assert.equal(repos.salesLoop.draftsInState('READY_FOR_APPROVAL').length, 2);
+
+    // Même approuvé, un brouillon ne part pas tant que l'envoi est fermé.
+    assert.equal(repos.salesLoop.decideDraft({ draftId: ready[0]!.id, decision: 'APPROVED_TO_SEND', decidedBy: 'founder@test.local' }).applied, true);
+    const sent: string[] = [];
+    await runSendCycle({ repos, config, logger }, {
+      outbound: async () => ({ id: 'must-not-send', status: () => ({ configured: true, code: 'READY', detail: '', scopes: [] }),
+        sendEmail: async (m: { to: string }) => { sent.push(m.to); throw new Error('ne doit jamais être appelé'); },
+        replyToThread: async (m: { to: string }) => { sent.push(m.to); throw new Error('ne doit jamais être appelé'); } }) as never,
+      now: NOW,
+    });
+    assert.deepEqual(sent, []);
+    assert.equal(repos.salesLoop.sentSince('1970-01-01T00:00:00.000Z'), 0);
   });
 });

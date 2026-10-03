@@ -1,0 +1,93 @@
+From b9d941c8c0deecc1941b7478130fa28d8cfa4f11 Mon Sep 17 00:00:00 2001
+From: noaroy <noaroy210709@gmail.com>
+Date: Sat, 3 Oct 2026 19:25:26 +0000
+Subject: [PATCH] Harnais node_modules : le faux agent `tamper` remplace
+ vraiment le lien
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`unlinkSync` au lieu de `rmSync`, qui selon la version de Node suit le lien
+vers un répertoire et lève EISDIR : le faux mourait avant toute altération et
+le test ne vérifiait que CLAUDE_CODE_FAILED. Le remplacement est désormais
+constaté. Ajout d'un cas `redirect` (lien conservé mais redirigé →
+SECURITY_VIOLATION) et du cas inverse (échec ordinaire, lien intact →
+CLAUDE_CODE_FAILED, sans verdict de sécurité). Tests seuls, aucun code runtime.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/runtime/test/claude-code.test.ts | 41 +++++++++++++++++++++--
+ 1 file changed, 39 insertions(+), 2 deletions(-)
+
+diff --git a/packages/runtime/test/claude-code.test.ts b/packages/runtime/test/claude-code.test.ts
+index f0ff4d82..c82f25ef 100644
+--- a/packages/runtime/test/claude-code.test.ts
++++ b/packages/runtime/test/claude-code.test.ts
+@@ -44,7 +44,7 @@ const git = (args: string[], cwd: string) => execFileSync('git', args, { cwd, en
+  * agent qui écrit lui-même, plutôt que sur un modèle qui propose.
+  */
+ type FakeBehaviour =
+-  | 'edit' | 'escape' | 'hang' | 'fail' | 'nojson' | 'tamper'
++  | 'edit' | 'escape' | 'hang' | 'fail' | 'nojson' | 'tamper' | 'redirect'
+   | 'partial' | 'partial-big' | 'partial-escape' | 'quota' | 'quota-partial' | 'quota-escape';
+ function fakeClaudeCode(behaviour: FakeBehaviour): string {
+   const script = join(dir, `fake-claude-${behaviour}.cjs`);
+@@ -81,10 +81,22 @@ function fakeClaudeCode(behaviour: FakeBehaviour): string {
+     "    fs.writeFileSync('README.md', 'écrasé hors périmètre\\n');",
+     "  } else {",
+     // `tamper` : l'édition légitime, plus un node_modules réel à la place du lien.
++    // `unlinkSync` et non `rmSync` : selon la version de Node, `rmSync` suit le
++    // lien vers un répertoire et lève EISDIR — le faux agent mourait alors
++    // avant d'avoir rien altéré, et l'issue honnête était CLAUDE_CODE_FAILED.
++    // Le remplacement est vérifié ici : s'il n'a pas eu lieu, le faux échoue
++    // bruyamment au lieu de laisser croire qu'il a été tenté.
++    // `redirect` : le lien est conservé, mais pointe ailleurs.
+     "    if (mode === 'tamper') {",
+-    "      fs.rmSync('node_modules');",
++    "      fs.unlinkSync('node_modules');",
+     "      fs.mkdirSync('node_modules/dep', { recursive: true });",
+     "      fs.writeFileSync('node_modules/dep/index.js', 'module.exports = \"piégé\";\\n');",
++    "      if (fs.lstatSync('node_modules').isSymbolicLink()) { console.error('remplacement non effectué'); process.exit(4); }",
++    "    }",
++    "    if (mode === 'redirect') {",
++    "      fs.mkdirSync('../elsewhere/dep', { recursive: true });",
++    "      fs.unlinkSync('node_modules');",
++    "      fs.symlinkSync(require('node:path').resolve('../elsewhere'), 'node_modules', 'dir');",
+     "    }",
+     "    fs.mkdirSync('fixture', { recursive: true });",
+     "    fs.writeFileSync('fixture/add.ts',",
+@@ -585,6 +597,31 @@ describe('le lien node_modules du worktree', { skip: process.platform === 'win32
+     assert.equal(inspectRepo(repoRoot).clean, true, 'le dépôt principal reste intact');
+     assert.match(readFileSync(join(repoRoot, 'node_modules', 'dep', 'index.js'), 'utf8'), /= 1;/);
+   });
++
++  test('un agent qui redirige le lien node_modules fait échouer la tâche', async () => {
++    const task = newTask({ objective: 'o', allowed_paths: ['fixture'] });
++    const outcome = await worker(fakeClaudeCode('redirect')).execute(task, ctx());
++
++    assert.equal(outcome.kind, 'FAILED');
++    assert.equal(outcome.errorCode, 'SECURITY_VIOLATION');
++    assert.match(String(outcome.errorMessage), /node_modules/);
++    assert.equal(repos.tasks.workspaceFor(task.taskId)?.state, 'ABANDONED');
++    assert.equal(inspectRepo(repoRoot).clean, true, 'le dépôt principal reste intact');
++  });
++
++  test('un échec ordinaire, lien intact, reste CLAUDE_CODE_FAILED', async () => {
++    // L'inverse de la garde : un processus qui meurt sans avoir touché au lien
++    // n'est pas une violation, et ne doit pas être présenté comme telle.
++    const task = newTask({ objective: 'o', allowed_paths: ['fixture'] });
++    const outcome = await worker(fakeClaudeCode('fail')).execute(task, ctx());
++
++    assert.equal(outcome.kind, 'FAILED');
++    assert.equal(outcome.errorCode, 'CLAUDE_CODE_FAILED');
++    const workspace = repos.tasks.workspaceFor(task.taskId)!;
++    assert.notEqual(workspace.state, 'ABANDONED', 'pas de verdict de sécurité');
++    execFileSync('git', ['worktree', 'remove', '--force', workspace.path], { cwd: repoRoot });
++    assert.ok(existsSync(join(repoRoot, 'node_modules', 'dep', 'index.js')));
++  });
+ });
+ 
+ describe('la facturation de Claude Code', () => {
+-- 
+2.39.5
+

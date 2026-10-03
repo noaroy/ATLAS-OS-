@@ -1,0 +1,332 @@
+diff --git a/packages/runtime/src/continuous-engineering.ts b/packages/runtime/src/continuous-engineering.ts
+index 5d21cdd7..a8bf2bd6 100644
+--- a/packages/runtime/src/continuous-engineering.ts
++++ b/packages/runtime/src/continuous-engineering.ts
+@@ -1,3 +1,4 @@
++import { createHash } from 'node:crypto';
+ import type { AtlasConfig } from '@atlas/core';
+ import type { FactoryVerdict, Repositories, TaskRow } from '@atlas/data';
+ import { checkCommand, taskFingerprint } from './ai-contracts.ts';
+@@ -65,6 +66,8 @@ export const CONTINUOUS_ENGINEERING_SETTINGS = {
+   BACKLOG: 'continuousEngineering.backlog',
+   /** Les revues rapides déjà faites (taskId → verdict), bornées. */
+   REVIEWS: 'continuousEngineering.reviews',
++  /** La base approuvée du runner et ce qu'elle a changé depuis les bases récentes (écrite par atlas-engineer). */
++  APPROVED_BASE: 'continuousEngineering.approvedBase',
+ } as const;
+ 
+ export const CONTINUOUS_ENGINEERING_POLICY = Object.freeze({
+@@ -103,6 +106,18 @@ export const CONTINUOUS_ENGINEERING_POLICY = Object.freeze({
+    * échecs répétés sur une même base restent bornés.
+    */
+   maxStaleBaseRetriesPerItem: 1,
++  /**
++   * Un élément à bout de tentatives reçoit au plus une tentative fraîche par
++   * génération matériellement nouvelle de sa mission : la base approuvée a
++   * avancé en touchant ses chemins (ou ses entrées déclarées) et la preuve
++   * vivante de son blocage a changé — ou le Contrôleur a re-posé une autre
++   * mission sous la même clé. Un commit étranger à son périmètre ne rouvre
++   * rien ; une tentative fraîche qui échoue l'épuise de nouveau, jusqu'à la
++   * génération suivante. Relevé le 03/10 : après f15f8793 (faits v3, lecture
++   * bornée), six éléments restaient ATTEMPTS_EXHAUSTED sur des bases
++   * antérieures, avec 190 dossiers NEEDS_ENRICHMENT en file.
++   */
++  maxFreshAttemptsPerGeneration: 1,
+   /**
+    * Anti-boucle : un élément qui vient de finir attend — par clé *et* par
+    * empreinte de périmètre (un même périmètre re-posé sous une autre clé
+@@ -141,6 +156,12 @@ export interface MissionSpec {
+   allowedPaths: string[];
+   testCommands: string[];
+   acceptanceCriteria: string[];
++  /**
++   * Les fichiers dont la mission dépend sans les modifier : jamais réservés,
++   * jamais transmis comme périmètre — ils ne servent qu'à juger si une avancée
++   * de la base approuvée la concerne.
++   */
++  inputPaths?: string[];
+ }
+ 
+ /** Un chemin normalisé (sans « ./ » ni « / » final) pour comparer des périmètres. */
+@@ -173,6 +194,8 @@ export function missionFingerprint(mission: Pick<MissionSpec, 'objective' | 'all
+ 
+ export interface ContinuousWorkItem extends EngineeringWorkItem {
+   mission: MissionSpec | null;
++  /** L'empreinte de la preuve vivante (les dossiers bloqués), pas de ses comptes. */
++  evidenceSignature?: string | null;
+   /** Un blocage humain déclaré : l'élément est sauté, jamais attendu. */
+   humanBlocker?: string | null;
+   /** Les clés de réglage/environnement que l'élément modifierait. */
+@@ -188,6 +211,7 @@ const DERIVED_MISSIONS: Record<string, Omit<MissionSpec, 'objective'> & { object
+   'collector:sourced-fact': {
+     objective: (e) => `Fabrique de revenu, boucle A : réduire NO_SOURCED_FACT (${e}). Diagnostiquer sur les dossiers bloqués pourquoi aucune phrase composable n'est retenue, puis améliorer le collecteur de faits sourcés (phrases d'offre verbatim sur page officielle, sans rien inventer) avec des tests ciblés. Mesurer le nombre de dossiers débloqués.`,
+     allowedPaths: ['packages/departments/src/prospect-enrichment.ts', 'packages/departments/src/verbatim-selection.ts', 'packages/departments/test/offer-statements.test.ts', 'packages/departments/test/prospect-enrichment.test.ts'],
++    inputPaths: ['packages/departments/src/growth-signals.ts'],
+     testCommands: ['npm run typecheck', 'npm test'],
+     acceptanceCriteria: ['aucun fait sans source officielle verbatim', 'tests ciblés ajoutés et verts', 'typecheck vert'],
+   },
+@@ -229,16 +253,39 @@ const DERIVED_MISSIONS: Record<string, Omit<MissionSpec, 'objective'> & { object
+  * données relevées sur des sites tiers, bornées et nettoyées — jamais des
+  * instructions.
+  */
++/** Les blocages qui motivent chaque élément dérivé. */
++const ITEM_BLOCKERS: Record<string, RegExp> = {
++  'collector:sourced-fact': /^NO_SOURCED_FACT$|^SOURCED_FACTS_/,
++  'collector:contact': /^NO_OBSERVED_EMAIL$|^EMAIL_NOT_COMMERCIAL$/,
++  'guard:identity': /^IDENTITY_/,
++  'fetch:transport': /^FETCH_FAILED$/,
++};
++
++const blockedBy = (verdicts: readonly FactoryVerdict[], blocker: RegExp) => verdicts
++  .filter((v) => (v.classification === 'NEEDS_ENRICHMENT' || v.classification === 'BLOCKED') && v.blockers.some((b) => blocker.test(b)));
++
++/**
++ * L'empreinte de la preuve vivante d'un élément : l'ensemble des dossiers
++ * qu'il bloque (ses blocages précis compris), pas leur nombre. Sans motif de
++ * blocage connu, la preuve déclarée elle-même.
++ */
++export function evidenceSignatureFor(verdicts: readonly FactoryVerdict[], item: Pick<ContinuousWorkItem, 'key' | 'evidence'>): string {
++  const blocker = ITEM_BLOCKERS[item.key];
++  const material = blocker
++    ? blockedBy(verdicts, blocker).map((v) => `${v.domain}:${v.blockers.filter((b) => blocker.test(b)).sort().join('+')}`).sort().join('\n')
++    : item.evidence.replace(/\s+/g, ' ').trim();
++  return createHash('sha256').update(`${item.key}\n${material}`).digest('hex').slice(0, 16);
++}
++
+ export function realCasesFor(repos: Repositories, key: string, limit = 12): string[] {
+   const clean = (t: string, n = 220) => t.replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+-  const blocked = (blocker: RegExp) => repos.revenueFactory.verdicts({ limit: 100_000 })
+-    .filter((v) => (v.classification === 'NEEDS_ENRICHMENT' || v.classification === 'BLOCKED') && v.blockers.some((b) => blocker.test(b)))
++  const blocked = (blocker: RegExp) => blockedBy(repos.revenueFactory.verdicts({ limit: 100_000 }), blocker)
+     .sort((a, b) => (b.revenueScore ?? 0) - (a.revenueScore ?? 0))
+     .slice(0, limit);
+   const head = (v: FactoryVerdict) => `${v.domain} (${clean(v.companyName, 60)})`;
+   switch (key) {
+     case 'collector:sourced-fact':
+-      return blocked(/^NO_SOURCED_FACT$|^SOURCED_FACTS_/).map((v) => {
++      return blocked(ITEM_BLOCKERS[key]!).map((v) => {
+         const claims = v.evidence
+           .map((e) => ({ claim: String((e as { claim?: unknown }).claim ?? ''), url: String((e as { sourceUrl?: unknown }).sourceUrl ?? '') }))
+           .filter((e) => e.claim && !/^(?:site officiel|pays)\s*:/i.test(e.claim) && !/^[A-Z_]{4,} de /.test(e.claim))
+@@ -246,12 +293,12 @@ export function realCasesFor(repos: Repositories, key: string, limit = 12): stri
+         return `${head(v)} — ${claims.length ? claims.map((c) => `« ${clean(c.claim)} » (${clean(c.url, 100)})`).join(' ; ') : 'aucune phrase observée'}`;
+       });
+     case 'collector:contact':
+-      return blocked(/^NO_OBSERVED_EMAIL$|^EMAIL_NOT_COMMERCIAL$/).map((v) =>
++      return blocked(ITEM_BLOCKERS[key]!).map((v) =>
+         `${head(v)} — voies observées : ${v.contactRoutes.length ? v.contactRoutes.map((r) => `${r.kind} sur ${clean(r.sourceUrl ?? '', 100)}`).join(', ') : 'aucune'}`);
+     case 'guard:identity':
+-      return blocked(/^IDENTITY_/).map((v) => `${head(v)} — identité ${v.identityStatus ?? '?'}`);
++      return blocked(ITEM_BLOCKERS[key]!).map((v) => `${head(v)} — identité ${v.identityStatus ?? '?'}`);
+     case 'fetch:transport':
+-      return blocked(/^FETCH_FAILED$/).map((v) => `${head(v)} — dernière cause ${v.lastFetchCause ?? '?'}`);
++      return blocked(ITEM_BLOCKERS[key]!).map((v) => `${head(v)} — dernière cause ${v.lastFetchCause ?? '?'}`);
+     default:
+       return [];
+   }
+@@ -283,6 +330,12 @@ export function itemRefusal(item: ContinuousWorkItem): { code: ItemBlock; reason
+       return { code: 'PROTECTED_INVARIANT', reason: `« ${v.path} » porte un invariant d’envoi : revue du propriétaire, jamais en automatique` };
+     }
+   }
++  const inputs = item.mission.inputPaths ?? [];
++  if (inputs.length > 20) reasons.push('au plus 20 entrées déclarées');
++  for (const p of inputs) {
++    const v = checkControllerPath(p);
++    if (!v.ok) reasons.push(`entrée : ${v.reason}`);
++  }
+   for (const c of item.mission.testCommands) {
+     const v = checkCommand(c);
+     if (!v.allowed) reasons.push(v.reason);
+@@ -316,6 +369,92 @@ export interface AttemptRecord {
+   outcome: FastReviewVerdict | null;
+   /** Pourquoi elle ne compte pas (clôture du Contrôleur sur base périmée), sinon null. */
+   superseded: string | null;
++  /** L'empreinte de la mission posée (null : tâche antérieure qui ne la portait pas). */
++  missionFingerprint?: string | null;
++  /** L'empreinte de la preuve vivante au moment de l'envoi (null : non consignée). */
++  evidenceSignature?: string | null;
++  /** La base approuvée publiée au moment de l'envoi (vaut pour une tâche sans worktree). */
++  generationBase?: string | null;
++  /** Posée comme tentative fraîche d'une nouvelle génération. */
++  fresh?: boolean;
++}
++
++/** La base approuvée du runner, publiée à son démarrage (atlas-engineer). */
++export interface ApprovedBase {
++  schema: typeof APPROVED_BASE_SCHEMA;
++  ref: string;
++  commit: string;
++  publishedAt: string;
++  /**
++   * Les fichiers que la base approuvée a changés depuis chaque base récente
++   * d'un worktree d'ingénierie. Null : écart non mesurable (commit introuvable,
++   * diff trop large) — jamais une preuve.
++   */
++  changedSince: Record<string, string[] | null>;
++}
++
++export const APPROVED_BASE_SCHEMA = 'atlas.engineer-approved-base.v1';
++
++/** Pourquoi un élément à bout reçoit une tentative fraîche. */
++export interface FreshGeneration {
++  kind: 'BASE_ADVANCED' | 'MISSION_CHANGED';
++  reason: string;
++  /** La base de la dernière tentative, et la base approuvée d'où partira la nouvelle. */
++  fromBase: string | null;
++  toBase: string | null;
++  /** Les fichiers du périmètre (ou des entrées) que l'avancée a touchés. */
++  touched: string[];
++}
++
++const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?');
++
++/**
++ * Une génération matériellement nouvelle pour un élément à bout de tentatives ?
++ *
++ * Comparée à sa *dernière* tentative (fraîche ou non), ce qui borne tout : une
++ * tentative fraîche consigne la base et la preuve dont elle part ; si elle
++ * échoue, la génération suivante doit les dépasser à son tour.
++ *
++ * - MISSION_CHANGED : élément du Contrôleur re-posé avec une autre mission
++ *   (empreinte différente) sous la même clé.
++ * - BASE_ADVANCED : la base approuvée publiée n'est plus celle de la dernière
++ *   tentative, l'écart mesuré touche ses chemins ou ses entrées déclarées, et
++ *   la preuve vivante (les dossiers bloqués) a changé. Une preuve non consignée
++ *   par une tentative antérieure compte comme changée ; une preuve courante non
++ *   mesurée, un écart non mesuré ou une base inconnue ne prouvent rien.
++ */
++export function freshGeneration(
++  item: ContinuousWorkItem, h: ItemHistory, approvedBase: ApprovedBase | null,
++): { fresh: FreshGeneration } | { fresh: null; reason: string } {
++  const log = h.attemptLog ?? [];
++  const last = log.at(-1);
++  if (!last || !item.mission) return { fresh: null, reason: 'aucune tentative tracée' };
++  const fingerprint = missionFingerprint(item.mission);
++  const toBase = approvedBase?.commit ?? null;
++  if (item.source === 'CONTROLLER' && last.missionFingerprint && last.missionFingerprint !== fingerprint) {
++    return { fresh: { kind: 'MISSION_CHANGED', reason: 'mission re-posée par le Contrôleur (empreinte changée)', fromBase: last.baseCommit ?? last.generationBase ?? null, toBase, touched: [] } };
++  }
++  const fromBase = [...log].reverse().map((a) => a.baseCommit ?? a.generationBase ?? null).find(Boolean) ?? null;
++  if (!approvedBase) return { fresh: null, reason: 'aucune base approuvée publiée par le runner' };
++  if (!fromBase) return { fresh: null, reason: 'base des tentatives inconnue' };
++  if (approvedBase.commit === fromBase) return { fresh: null, reason: `base ${short(fromBase)} inchangée depuis la dernière tentative` };
++  const changed = approvedBase.changedSince[fromBase];
++  if (!changed) return { fresh: null, reason: `écart ${short(fromBase)} → ${short(approvedBase.commit)} non mesuré` };
++  const scope = [...item.mission.allowedPaths, ...(item.mission.inputPaths ?? [])];
++  const touched = changed.filter((c) => scope.some((p) => pathsOverlap(c, p)));
++  if (!touched.length) {
++    return { fresh: null, reason: `base ${short(fromBase)} → ${short(approvedBase.commit)} : ${changed.length} fichier(s) changé(s), aucun dans le périmètre` };
++  }
++  if (!item.evidenceSignature) return { fresh: null, reason: 'preuve vivante non mesurée' };
++  if (last.evidenceSignature === item.evidenceSignature) {
++    return { fresh: null, reason: `base ${short(fromBase)} → ${short(approvedBase.commit)} pertinente, mais preuve vivante inchangée` };
++  }
++  return {
++    fresh: {
++      kind: 'BASE_ADVANCED', fromBase, toBase, touched: touched.slice(0, 20),
++      reason: `base ${short(fromBase)} → ${short(approvedBase.commit)} touche ${touched.slice(0, 3).join(', ')}${touched.length > 3 ? ` (+${touched.length - 3})` : ''} ; preuve vivante ${last.evidenceSignature ? 'changée' : 'non consignée auparavant'}`,
++    },
++  };
+ }
+ 
+ /**
+@@ -363,6 +502,8 @@ export interface DecisionInput {
+   backoffUntil: string | null;
+   /** La dernière limite de quota observée : la reprise se fait à un seul chantier. */
+   lastQuotaLimitAt?: string | null;
++  /** La base approuvée publiée par le runner (null : aucune, rien ne se rouvre). */
++  approvedBase?: ApprovedBase | null;
+ }
+ 
+ export interface SkippedItem {
+@@ -381,7 +522,7 @@ export interface ConcurrencyView {
+   dispatched: number;
+ }
+ 
+-export type RankedItem = ContinuousWorkItem & { score: number; rank: number };
++export type RankedItem = ContinuousWorkItem & { score: number; rank: number; freshGeneration?: FreshGeneration };
+ 
+ export interface ContinuousDecision {
+   code: ContinuousDecisionCode;
+@@ -454,6 +595,7 @@ export function decideContinuousEngineering(input: DecisionInput): ContinuousDec
+   const skipped: SkippedItem[] = [];
+   const humanBlocked: SkippedItem[] = [];
+   const dispatchable: ContinuousWorkItem[] = [];
++  const fresh = new Map<string, FreshGeneration>();
+   const activeKeys = new Set(input.active.map((a) => a.itemKey).filter(Boolean));
+   for (const item of input.items) {
+     const refusal = itemRefusal(item);
+@@ -467,9 +609,13 @@ export function decideContinuousEngineering(input: DecisionInput): ContinuousDec
+     const h = input.history[item.key];
+     if (h?.inReview) { skipped.push({ key: item.key, code: 'IN_REVIEW', reason: 'un diff attend le Contrôleur' }); continue; }
+     if (h && countedAttempts(h) >= P.maxAttemptsPerItem) {
+-      const bases = [...new Set((h.attemptLog ?? []).map((a) => a.baseCommit?.slice(0, 8) ?? '?'))].join(', ');
+-      skipped.push({ key: item.key, code: 'ATTEMPTS_EXHAUSTED', reason: `${countedAttempts(h)} tentatives comptées en 7 jours (${h.attempts} posées${bases ? `, bases ${bases}` : ''}) : escaladé au Contrôleur` });
+-      continue;
++      const generation = freshGeneration(item, h, input.approvedBase ?? null);
++      if (!generation.fresh) {
++        const bases = [...new Set((h.attemptLog ?? []).map((a) => a.baseCommit?.slice(0, 8) ?? '?'))].join(', ');
++        skipped.push({ key: item.key, code: 'ATTEMPTS_EXHAUSTED', reason: `${countedAttempts(h)} tentatives comptées en 7 jours (${h.attempts} posées${bases ? `, bases ${bases}` : ''}) : escaladé au Contrôleur — aucune génération nouvelle (${generation.reason})` });
++        continue;
++      }
++      fresh.set(item.key, generation.fresh);
+     }
+     if (h?.lastFinishedAt && now - Date.parse(h.lastFinishedAt) < P.itemCooldownHours * HOUR) {
+       skipped.push({ key: item.key, code: 'COOLDOWN', reason: `dernier chantier ${h.lastOutcome ?? '?'} à ${h.lastFinishedAt.slice(0, 16)}` });
+@@ -503,7 +649,8 @@ export function decideContinuousEngineering(input: DecisionInput): ContinuousDec
+       skipped.push({ key: item.key, code: 'PATH_CONFLICT', reason: `périmètre partagé avec ${conflict.owner} : ${conflict.paths.join(', ')}` });
+       continue;
+     }
+-    chosen.push({ ...item, score: r.score, rank: r.rank });
++    const generation = fresh.get(item.key);
++    chosen.push({ ...item, score: r.score, rank: r.rank, ...(generation ? { freshGeneration: generation } : {}) });
+     held.push({ owner: item.key, paths: item.mission!.allowedPaths });
+   }
+ 
+@@ -511,7 +658,7 @@ export function decideContinuousEngineering(input: DecisionInput): ContinuousDec
+     concurrency.dispatched = chosen.length;
+     return {
+       ...base, code: 'DISPATCH',
+-      reason: `${chosen.length} chantier(s) indépendant(s) : ${chosen.map((c) => `${c.key} (rang ${c.rank}, score ${c.score})`).join(', ')} — ${active.length + chosen.length}/${limit} actifs (${basis})`,
++      reason: `${chosen.length} chantier(s) indépendant(s) : ${chosen.map((c) => `${c.key} (rang ${c.rank}, score ${c.score}${c.freshGeneration ? `, génération nouvelle : ${c.freshGeneration.reason}` : ''})`).join(', ')} — ${active.length + chosen.length}/${limit} actifs (${basis})`,
+       item: chosen[0]!, items: chosen, concurrency, ranked: rankedView, skipped, humanBlocked,
+     };
+   }
+@@ -551,13 +698,21 @@ export type FastReviewVerdict =
+   | 'READY_FOR_CONTROLLER' | 'NO_DIFF' | 'OVER_BUDGET' | 'PARTIAL_TIMEOUT' | 'PARTIAL_QUOTA'
+   | 'FAILED' | 'QUOTA_PAUSED' | 'WAITING_HUMAN' | 'CANCELLED';
+ 
+-interface ContinuousBlock { schema: string; itemKey: string; attempt: number; missionFingerprint: string | null }
++interface ContinuousBlock {
++  schema: string; itemKey: string; attempt: number; missionFingerprint: string | null;
++  evidenceSignature: string | null; generationBase: string | null; fresh: boolean;
++}
+ export function continuousBlockOf(task: TaskRow): ContinuousBlock | null {
+   const raw = (task.payload as Record<string, unknown>).continuousEngineering;
+   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+   const b = raw as Record<string, unknown>;
+   if (b.schema !== CONTINUOUS_ENGINEERING_SCHEMA || typeof b.itemKey !== 'string') return null;
+-  return { schema: b.schema, itemKey: b.itemKey, attempt: Number(b.attempt) || 1, missionFingerprint: typeof b.missionFingerprint === 'string' ? b.missionFingerprint : null };
++  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
++  const generation = b.generation && typeof b.generation === 'object' ? b.generation as Record<string, unknown> : {};
++  return {
++    schema: b.schema, itemKey: b.itemKey, attempt: Number(b.attempt) || 1, missionFingerprint: str(b.missionFingerprint),
++    evidenceSignature: str(b.evidenceSignature), generationBase: str(generation.baseCommit), fresh: Boolean(b.freshGeneration),
++  };
+ }
+ 
+ /** La revue rapide d'un chantier terminé : déterministe, gratuite. */
+@@ -658,7 +813,12 @@ function itemHistories(repos: Repositories, now: Date): Histories {
+         }
+       }
+       if (superseded) h.supersededAttempts = (h.supersededAttempts ?? 0) + 1;
+-      h.attemptLog!.push({ taskId: t.taskId, baseCommit: ws?.baseCommit ?? null, outcome: verdict, superseded });
++      const payload = t.payload as Record<string, unknown>;
++      h.attemptLog!.push({
++        taskId: t.taskId, baseCommit: ws?.baseCommit ?? null, outcome: verdict, superseded,
++        missionFingerprint: block.missionFingerprint ?? missionFingerprint({ objective: String(payload.objective ?? ''), allowedPaths: taskAllowedPaths(t) ?? [] }),
++        evidenceSignature: block.evidenceSignature, generationBase: block.generationBase, fresh: block.fresh,
++      });
+     }
+     if (verdict && !notAnAttempt(verdict)) {
+       h.lastFinishedAt = t.finishedAt ?? t.createdAt;

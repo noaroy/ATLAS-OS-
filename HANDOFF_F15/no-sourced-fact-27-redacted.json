@@ -1,0 +1,1393 @@
+{
+  "schema": "atlas.cloud-corpus.no-sourced-fact.v2",
+  "generated_at": "2026-10-03T22:21:43.352Z",
+  "count": 27,
+  "cases": [
+    {
+      "domain": "dellen.fr",
+      "company_name": "Pôles Dellen",
+      "revenue_score": 78.23,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:54.544Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Dellen - Grandir ensemble",
+          "nature": "observed",
+          "source_url": "https://dellen.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-25T09:15:41.438Z"
+        },
+        {
+          "field": "activity",
+          "claim": "DELLEN, soci&eacute;t&eacute; familiale, a pour vocation d&rsquo;acqu&eacute;rir et de d&eacute;velopper des entreprises fran&ccedil;aises de taille interm&eacute;diaire",
+          "nature": "observed",
+          "source_url": "https://dellen.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-25T09:15:41.438Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Machinext",
+          "nature": "observed",
+          "source_url": "https://www.dellen.fr/admin-pxl-38.html",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-25T09:15:41.439Z"
+        }
+      ]
+    },
+    {
+      "domain": "tme-industrie.com",
+      "company_name": "Technologie Mondiale Export",
+      "revenue_score": 70.22,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:56.523Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "modèle_commercial",
+          "claim": "Distributeur B2B d'équipements industriels vers professionnels (industrie, BTP, ateliers, services techniques)",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": null,
+          "confidence": 0.7,
+          "collected_at": "2026-09-21T16:54:55.017Z"
+        },
+        {
+          "field": "domaines_expertise",
+          "claim": "Spécialisé en outillage, manutention, métrologie, compresseurs, hydraulique/pneumatique, visserie",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": null,
+          "confidence": 0.7,
+          "collected_at": "2026-09-21T16:54:55.017Z"
+        },
+        {
+          "field": "positionnement",
+          "claim": "Sélectionne et distribue équipements adaptés aux environnements professionnels rigoureux",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": null,
+          "confidence": 0.7,
+          "collected_at": "2026-09-21T16:54:55.017Z"
+        },
+        {
+          "field": "verbatim:3",
+          "claim": "Technologie Mondiale Export (TME) accompagne les professionnels de l'industrie, du BTP, des ateliers et des services techniques dans l'approvisionnement en matériel industriel fiable et performant.",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": "interprétation : TME accompagne les professionnels de l'industrie, du BTP, des ateliers et des services techniques dans l'approvisionnement en matériel industriel. — page « Technologie Mondiale Export | Matériel industriel pro »",
+          "confidence": 0.9,
+          "collected_at": "2026-09-21T16:58:12.187Z"
+        },
+        {
+          "field": "verbatim:4",
+          "claim": "Spécialiste reconnu de l'outillage, de la manutention, de la métrologie, des compresseurs, de l'hydraulique/pneumatique et de la visserie, TME met son expertise au service de la performance et de la sécurité de vos activités.",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": "interprétation : TME est spécialiste de l'outillage, de la manutention, de la métrologie, des compresseurs, de l'hydraulique/pneumatique et de la visserie. — page « Technologie Mondiale Export | Matériel industriel pro »",
+          "confidence": 0.9,
+          "collected_at": "2026-09-21T16:58:12.187Z"
+        },
+        {
+          "field": "verbatim:6",
+          "claim": "Chez Technologie Mondiale Export , nous sélectionnons et distribuons des équipements industriels adaptés aux exigences des environnements professionnels les plus rigoureux.",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": "interprétation : TME sélectionne et distribue des équipements industriels adaptés aux environnements professionnels rigoureux. — page « Technologie Mondiale Export | Matériel industriel pro »",
+          "confidence": 0.9,
+          "collected_at": "2026-09-21T16:58:12.188Z"
+        },
+        {
+          "field": "verbatim:33",
+          "claim": "Installée à Vaulx-en-Velin (France), la société exporte également",
+          "nature": "observed",
+          "source_url": "https://www.tme-industrie.com/",
+          "basis": "interprétation : TME est installée à Vaulx-en-Velin en France et exporte vers plusieurs pays du Maghreb (Algérie, Tunisie, Maroc). — page « Technologie Mondiale Export | Matériel industriel pro »",
+          "confidence": 0.9,
+          "collected_at": "2026-09-21T16:58:12.188Z"
+        }
+      ]
+    },
+    {
+      "domain": "xtsolutions.fr",
+      "company_name": "XT Solutions",
+      "revenue_score": 73,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:33.006Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "verbatim:signal:export",
+          "claim": "Nous aidons nos fournisseurs à percer sur le marché africain en leur proposant de devenir leur exportateur.",
+          "nature": "observed",
+          "source_url": "https://xtsolutions.fr/",
+          "basis": "Relevé sur https://xtsolutions.fr/ — motif « exportateur ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-26T23:01:03.940Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Nos clients ne sont pas les seuls à bénéficier des services d’XTSolutions.",
+          "nature": "observed",
+          "source_url": "https://xtsolutions.fr/",
+          "basis": "Relevé sur https://xtsolutions.fr/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-26T23:01:03.941Z"
+        }
+      ]
+    },
+    {
+      "domain": "magexfrance.fr",
+      "company_name": "Magex France",
+      "revenue_score": 81.52,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-09-28T22:30:48.273Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Fournisseur de Distributeurs Automatiques - Magex France",
+          "nature": "observed",
+          "source_url": "https://magexfrance.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T10:19:48.066Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://magexfrance.fr/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T10:19:48.067Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Boostez votre CA avec Magex France. Installation de machines de vente 24/7 pour produits frais et retail. Solutions connectées, maintenance incluse et design moderne pour vendre sans personnel 7j/7. C",
+          "nature": "observed",
+          "source_url": "https://magexfrance.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T10:19:48.067Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Export international ADIAL",
+          "nature": "observed",
+          "source_url": "https://www.magexfrance.fr/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T10:19:48.067Z"
+        },
+        {
+          "field": "verbatim:signal:distribution",
+          "claim": "Pensés pour s’intégrer dans tous les environnements, nos distributeurs allient design moderne, simplicité d’utilisation et performances au quotidien .",
+          "nature": "observed",
+          "source_url": "https://www.magexfrance.fr/",
+          "basis": "Relevé sur https://www.magexfrance.fr/ — motif « nos distributeurs ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T16:36:57.702Z"
+        },
+        {
+          "field": "verbatim:signal:customer_fit",
+          "claim": "Nous accompagnons les professionnels, artisans et commerçants, de l'étude de faisabilité technique jusqu'à la mise en service des équipements.",
+          "nature": "observed",
+          "source_url": "https://www.magexfrance.fr/",
+          "basis": "Relevé sur la page officielle Magex France.",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T17:31:01.040Z"
+        }
+      ]
+    },
+    {
+      "domain": "ledistrib.fr",
+      "company_name": "LeDistrib",
+      "revenue_score": 78.99,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:54.541Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : LeDistrib - Le spécialiste des distributeurs automatiques",
+          "nature": "observed",
+          "source_url": "https://ledistrib.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T11:23:14.247Z"
+        },
+        {
+          "field": "activity",
+          "claim": "LEDISTRIB propose des solutions sûres, simples et efficaces pour permettre à n&#039;importe quel artisan/commerçant de vendre ses produits 24h/24 et 7j/7",
+          "nature": "observed",
+          "source_url": "https://ledistrib.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T11:23:14.247Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Export international ADIAL",
+          "nature": "observed",
+          "source_url": "https://www.ledistrib.fr/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T11:23:14.247Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "Nous proposons une large gamme de distributeurs automatiques alimentaires et non alimentaires , conçus pour développer votre activité, créer de nouveaux points de vente et rendre vos produits accessibles 24h/24.",
+          "nature": "observed",
+          "source_url": "https://www.ledistrib.fr/",
+          "basis": "Relevé sur https://www.ledistrib.fr/ — motif « Nous proposons ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T22:31:02.237Z"
+        }
+      ]
+    },
+    {
+      "domain": "indusap.fr",
+      "company_name": "Indusap",
+      "revenue_score": 70.75,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-09-29T03:30:36.325Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Indusap – Concepteur de solutions automatisées et robotisées",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T11:29:29.311Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T11:29:29.311Z"
+        },
+        {
+          "field": "activity",
+          "claim": "INDUSAP réalise des solutions automatisées et robotisées sur mesure : machines spéciales, emballage, rétrofit et supervision industrielle",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T11:29:29.311Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Semso",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T11:29:29.311Z"
+        },
+        {
+          "field": "verbatim:signal:new_capacity",
+          "claim": "I ? Vous lancez un nouveau produit ? Vous devez réaménager votre site de production ? Vous voulez raccourcir vos temps de chargement de format ? INDUSAP propose une offre complète permettant de répondre aux besoins les plus simples jus",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/entreprise-d-automatisation-industrielle/",
+          "basis": "Relevé sur https://indusap.fr/entreprise-d-automatisation-industrielle/ — motif « nouveau produit ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T14:10:08.130Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "NOUS CONTACTER POUR UNE ÉTUDE Vins & spiritueux Des applications sur-mesure, s’adaptant aux contraintes et process des produits à petits et grands volumes.",
+          "nature": "observed",
+          "source_url": "https://indusap.fr/secteurs-d-activites/",
+          "basis": "Relevé sur https://indusap.fr/secteurs-d-activites/ — motif « applications ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T20:31:03.114Z"
+        }
+      ]
+    },
+    {
+      "domain": "strongadhesifs.com",
+      "company_name": "Strong adhésifs industriels",
+      "revenue_score": 73.1,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:59.281Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Adhésifs professionnels sur mesure – Strong Adhésifs Industriels",
+          "nature": "observed",
+          "source_url": "https://strongadhesifs.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T11:25:34.051Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://strongadhesifs.com/",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T11:25:34.051Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Commandez vos adhésifs techniques et rubans sur mesure. Livraison rapide, qualité pro, conseils experts. Découvrez nos solutions adhésives en ligne.",
+          "nature": "observed",
+          "source_url": "https://strongadhesifs.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T11:25:34.051Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de ADERIS",
+          "nature": "observed",
+          "source_url": "https://www.strongadhesifs.com/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T11:25:34.051Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Collage précis, haute résistance, idéal pour PLV, photos et applications fines.",
+          "nature": "observed",
+          "source_url": "https://www.strongadhesifs.com/",
+          "basis": "Relevé sur https://www.strongadhesifs.com/ — motif « applications ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T21:30:23.120Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Adaptés à une large gamme d’applications, nos freins filet assurent une fixation fiable, que ce soit dans les secteurs de la mécanique , de l’aéronautique ou de la maintenance .",
+          "nature": "observed",
+          "source_url": "https://www.strongadhesifs.com/171-colles",
+          "basis": "Relevé sur https://www.strongadhesifs.com/171-colles — motif « applications ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T02:00:59.433Z"
+        }
+      ]
+    },
+    {
+      "domain": "alpsgroup.ch",
+      "company_name": "Alps Group",
+      "revenue_score": 73.1,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:35.220Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Industrial Intelligence | Alps Group",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:01:19.309Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Créer une industrie plus intelligente. Nos équipes accompagnent nos clients dans la digitalisation et de l’optimisation de leurs processus de production.",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T12:01:19.309Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de RÉKA INDUSTRIE",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/glossaire/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T12:01:19.309Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Pérennité Notre pérennité repose sur notre sérieux, notre résilience et l'entraide pour offrir à nos clients confiance et sérénité.",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/qui-sommes-nous/",
+          "basis": "Relevé sur https://alpsgroup.ch/qui-sommes-nous/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T18:12:38.280Z"
+        },
+        {
+          "field": "verbatim:controller-clean:alps-mission",
+          "claim": "Alps Group est une entreprise suisse leader d‘ingénierie en automation industrielle.",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/qui-sommes-nous/",
+          "basis": "interprétation : Alps Group est une entreprise suisse spécialisée en ingénierie et automation industrielle.",
+          "confidence": 0.98,
+          "collected_at": "2026-09-27T18:15:22.878Z"
+        },
+        {
+          "field": "verbatim:controller-clean:alps-purpose",
+          "claim": "La raison d’être d’Alps Group depuis son origine est de participer à la création d’une industrie toujours plus performante et plus intelligente.",
+          "nature": "observed",
+          "source_url": "https://alpsgroup.ch/qui-sommes-nous/",
+          "basis": "interprétation : Alps Group accompagne la transformation et la performance des industriels.",
+          "confidence": 0.98,
+          "collected_at": "2026-09-27T18:16:20.279Z"
+        }
+      ]
+    },
+    {
+      "domain": "dynatime.ch",
+      "company_name": "DYNATIME",
+      "revenue_score": 78.99,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:31.865Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : distributeur suisse d’équipements pour l’automation et l’électronique industrielle - DYNATIME",
+          "nature": "observed",
+          "source_url": "https://dynatime.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:01:19.296Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : Suisse",
+          "nature": "observed",
+          "source_url": "https://dynatime.ch/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:01:19.296Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Optimisez vos lignes de production avec nos solutions d&#039;automation de pointe. Nous distribuons des composants performants pour l&#039;automatisation de vos",
+          "nature": "observed",
+          "source_url": "https://dynatime.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T12:01:19.296Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Constructeur d'équipements industriels",
+          "nature": "observed",
+          "source_url": "https://dynatime.ch/marques/ventilateurs-industriels-tiger-suisse-dynatime/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-27T12:01:19.296Z"
+        }
+      ]
+    },
+    {
+      "domain": "dis-groupe.fr",
+      "company_name": "groupe DIS",
+      "revenue_score": 71.48,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:46:03.233Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Techdrive",
+          "nature": "observed",
+          "source_url": "https://www.dis-groupe.fr/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.35,
+          "collected_at": "2026-09-27T12:01:19.295Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Nos clients bénéficient de la réactivité d'une PME et des capacités d'un groupe industriel structuré.",
+          "nature": "observed",
+          "source_url": "https://www.dis-groupe.fr/",
+          "basis": "Relevé sur https://www.dis-groupe.fr/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T12:01:50.819Z"
+        }
+      ]
+    },
+    {
+      "domain": "eurobaut.com",
+      "company_name": "Eurobaut",
+      "revenue_score": 75.83,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:54.536Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Entreprise de robotique en France | Société de robotique",
+          "nature": "observed",
+          "source_url": "https://eurobaut.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:01:19.305Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://www.eurobaut.com/contact/",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:01:19.305Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Découvrez l&#039;entreprise de robotique Eurobaut ! Nous proposons des solutions robotiques pour optimiser votre production et réduire la pénibilité au travail",
+          "nature": "observed",
+          "source_url": "https://eurobaut.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T12:01:19.305Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de RÉKA INDUSTRIE",
+          "nature": "observed",
+          "source_url": "https://www.eurobaut.com/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T12:01:19.305Z"
+        },
+        {
+          "field": "verbatim:signal:export",
+          "claim": "Avec plus de vingt cinq ans d’expertise, elle intervient sur le territoire français mais également à l’international.",
+          "nature": "observed",
+          "source_url": "https://www.eurobaut.com/",
+          "basis": "Relevé sur https://www.eurobaut.com/ — motif « a l international ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T19:30:42.990Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "La société EUROBAUT est spécialisée dans la robotique et l'automatisme .",
+          "nature": "observed",
+          "source_url": "https://www.eurobaut.com/",
+          "basis": "Relevé sur https://www.eurobaut.com/ — motif « spécialisée dans ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T23:30:41.858Z"
+        }
+      ]
+    },
+    {
+      "domain": "lp-automation.ch",
+      "company_name": "LP Automation",
+      "revenue_score": 72.85,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:46:03.860Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Accueil - LP Automation - Ludovic Pugin",
+          "nature": "observed",
+          "source_url": "https://lp-automation.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T12:16:27.961Z"
+        },
+        {
+          "field": "activity",
+          "claim": "LP Automation : expert en automatisation, robotique et optimisation de production en Suisse. Contactez-nous !",
+          "nature": "observed",
+          "source_url": "https://lp-automation.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T12:16:27.961Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Providif",
+          "nature": "observed",
+          "source_url": "https://lp-automation.ch/distributeurs-automatiques/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-27T12:16:27.961Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Basés à Montmagny, nous combinons expertise et dynamisme pour répondre aux besoins diversifiés de nos clients.",
+          "nature": "observed",
+          "source_url": "https://lp-automation.ch/",
+          "basis": "Relevé sur https://lp-automation.ch/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T14:08:44.347Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "LP-Automation , en collaboration avec Providif , propose des distributeurs automatiques intelligents et modulaires, conçus pour faciliter la vente directe de produits locaux, 24h/24 et 7j/7.",
+          "nature": "observed",
+          "source_url": "https://lp-automation.ch/distributeurs-automatiques/",
+          "basis": "Relevé sur https://lp-automation.ch/distributeurs-automatiques/ — motif « propose des ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T02:30:59.981Z"
+        }
+      ]
+    },
+    {
+      "domain": "mecavent.ch",
+      "company_name": "MECAVENT SA",
+      "revenue_score": 81.25,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:13.258Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Solutions aérauliques et acoustiques sur mesure | MECAVENT SA",
+          "nature": "observed",
+          "source_url": "https://mecavent.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T13:01:57.557Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://mecavent.ch/contactez-nous/",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T13:01:57.557Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Conception et fourniture de solutions aérauliques et acoustiques complètes : filtration, ventilateurs industriels, réseaux, silencieux, capotages, persiennes et manchettes. Suisse et France.",
+          "nature": "observed",
+          "source_url": "https://mecavent.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T13:01:57.557Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de RECER",
+          "nature": "observed",
+          "source_url": "https://mecavent.ch/ventilateur-industriel/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T13:01:57.557Z"
+        },
+        {
+          "field": "verbatim:signal:sales_hiring",
+          "claim": "Nouvelles normes d'efficacité des moteurs Assistance et services Service technico-commercial disponible pour répondre à toutes vos questions.",
+          "nature": "observed",
+          "source_url": "https://mecavent.ch/entreprise/",
+          "basis": "Relevé sur https://mecavent.ch/entreprise/ — motif « technico-commercial ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T21:00:39.414Z"
+        }
+      ]
+    },
+    {
+      "domain": "temiq.fr",
+      "company_name": "Temiq",
+      "revenue_score": 72.48,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:38.549Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Equipements pour chaufferies: spécialiste génie thermique - Temig",
+          "nature": "observed",
+          "source_url": "https://temiq.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T13:40:20.303Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "GROUP_MEMBER de Robotique logistique",
+          "nature": "observed",
+          "source_url": "https://www.promalyon.com/le-groupe/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T13:40:20.303Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Spécialisés en génie thermique, nous concevons et produisons les équipements, skids et modules mobiles adaptés à vos besoins.",
+          "nature": "observed",
+          "source_url": "https://temiq.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T13:40:20.303Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Notre organisation nous permet de répondre et satisfaire aux demandes quotidiennes de nos clients exploitants, installateurs et bureaux d’étude en Génie Climatique.",
+          "nature": "observed",
+          "source_url": "https://www.temiq.fr/qui-sommes-nous-2/",
+          "basis": "Relevé sur https://www.temiq.fr/qui-sommes-nous-2/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T22:00:59.482Z"
+        }
+      ]
+    },
+    {
+      "domain": "bfu.ch",
+      "company_name": "BFU",
+      "revenue_score": 78.23,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:32.953Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : BFU, Beratungsstelle f&#xFC;r Unfallverh&#xFC;tung | BFU",
+          "nature": "observed",
+          "source_url": "https://bfu.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T16:39:30.803Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Die BFU forscht und ber&#xE4;t, damit in der Schweiz weniger folgenschwere Unf&#xE4;lle passieren &#x2013; im Strassenverkehr, zu Hause, in der Freizeit und beim Sport.",
+          "nature": "observed",
+          "source_url": "https://bfu.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T16:39:30.803Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Fabricant de machines spéciales sur mesure",
+          "nature": "observed",
+          "source_url": "https://www.bfu.ch/fr/le-bpa/a-propos-du-bpa/surveillance-du-marche-securite-produits",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-27T16:39:30.803Z"
+        }
+      ]
+    },
+    {
+      "domain": "olmiplast.ch",
+      "company_name": "Olmiplast",
+      "revenue_score": 73.1,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:45:54.546Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Fabricant d’articles techniques en plastique, Fabricant d&#039;emballages plastiques, pochettes en plastique, verre, dib",
+          "nature": "observed",
+          "source_url": "https://olmiplast.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T18:32:54.614Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : Suisse",
+          "nature": "observed",
+          "source_url": "https://olmiplast.ch/",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "COMPETITOR de Fabricant industriel & éco-conception",
+          "nature": "observed",
+          "source_url": "https://www.olmiplast.ch/focus-metier-ingenieur-packaging/",
+          "basis": "expansion:COMPETITOR",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Olmiplast est spécialisée dans la fabrication d’articles en plastique souple : fourre-tout, classeurs, supports divers. Contactez-nous pour en savoir plus.",
+          "nature": "observed",
+          "source_url": "https://olmiplast.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Olmiplast se positionne, depuis 1987, comme un expert industriel, dans les secteurs de l'industrie et l’horlogerie, la défense et la sécurité, le bâtiment et la construction, l'administratif et le médical ainsi que la communication et la publicité.",
+          "nature": "observed",
+          "source_url": "https://www.olmiplast.ch/",
+          "basis": "Relevé sur https://www.olmiplast.ch/ — motif « defense ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T19:01:06.860Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "Olmiplast est implanté depuis plus de 40 ans sur le marché Suisse et s’est spécialisé dans la fabrication d’articles de classement et fournitures de bureau .",
+          "nature": "observed",
+          "source_url": "https://www.olmiplast.ch/entreprise-fabrication-emballage-plastique-sur-mesure/",
+          "basis": "Relevé sur https://www.olmiplast.ch/entreprise-fabrication-emballage-plastique-sur-mesure/ — motif « spécialisé dans ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T01:30:34.716Z"
+        }
+      ]
+    },
+    {
+      "domain": "adsi.ch",
+      "company_name": "ADSI Sàrl",
+      "revenue_score": 72.85,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:37.639Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : ADSI - Nous améliorons votre efficacité | T +41 (0)21 968 27 40 | [redacted-email]",
+          "nature": "observed",
+          "source_url": "https://adsi.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Logiciels pour l&#039;optimisation de processus industriels, logistique, inventaires. Tablettes industrielles, terminaux mobiles, imprimantes et étiquettes.",
+          "nature": "observed",
+          "source_url": "https://adsi.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de PPWR",
+          "nature": "observed",
+          "source_url": "https://adsi.ch/references/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-27T18:32:54.615Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Granger Medical SA Granger Médical est un acteur important dans le secteur de la perfusion, nutrition entérale, appareils de diagnostic en cardiologie, aménagement des locaux et chariots médicaux.",
+          "nature": "observed",
+          "source_url": "https://adsi.ch/references/",
+          "basis": "Relevé sur https://adsi.ch/references/ — motif « medical ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-27T19:01:13.118Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "Nous développons régulièrement des modules spécifiques selon les besoins des différents services d'Azruea Jauges SA.",
+          "nature": "observed",
+          "source_url": "https://adsi.ch/references/",
+          "basis": "Relevé sur https://adsi.ch/references/ — motif « Nous développons ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T02:01:06.237Z"
+        }
+      ]
+    },
+    {
+      "domain": "groupeid.ch",
+      "company_name": "groupe.iD",
+      "revenue_score": 72.48,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:21.910Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : groupe.iD - système ERP suisse et services informatiques",
+          "nature": "observed",
+          "source_url": "https://groupeid.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T01:04:27.806Z"
+        },
+        {
+          "field": "activity",
+          "claim": "groupe.iD accompagne les professionnels dans leur gestion d’entreprise (ERP), ainsi que dans la gestion de leurs infrastructures informatiques.",
+          "nature": "observed",
+          "source_url": "https://groupeid.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T01:04:27.806Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Bossard",
+          "nature": "observed",
+          "source_url": "https://groupeid.ch/modern-workplace/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-28T01:04:27.806Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "40 collaborateurs contribuent à la satisfaction de nos clients.",
+          "nature": "observed",
+          "source_url": "https://groupeid.ch/",
+          "basis": "Relevé sur https://groupeid.ch/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T01:30:49.095Z"
+        }
+      ]
+    },
+    {
+      "domain": "france-chaudronnerie.org",
+      "company_name": "France Chaudronnerie",
+      "revenue_score": 78.99,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-09-28T22:30:54.283Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : France Chaudronnerie",
+          "nature": "observed",
+          "source_url": "https://france-chaudronnerie.org/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T02:03:53.895Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://france-chaudronnerie.org/contact",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T02:03:53.895Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "LIKELY_CUSTOMER de Maintenance et entretien",
+          "nature": "observed",
+          "source_url": "https://alce-cde.com/nos-realisations-en-cuve-double-paroi-integrale/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.85,
+          "collected_at": "2026-09-28T02:03:53.895Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "LIKELY_CUSTOMER de Maintenance et entretien",
+          "nature": "observed",
+          "source_url": "https://alce-cde.com/nos-realisations-en-cuves-bitume/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.85,
+          "collected_at": "2026-09-28T02:03:53.895Z"
+        }
+      ]
+    },
+    {
+      "domain": "unm.fr",
+      "company_name": "Unm",
+      "revenue_score": 74.34,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:19.321Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : UNM - Union de Normalisation de la Mécanique",
+          "nature": "observed",
+          "source_url": "https://unm.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T02:03:53.896Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://unm.fr/mentions-legales/",
+          "basis": "expansion:OFFICIAL_ID",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T02:03:53.896Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "LIKELY_CUSTOMER de Maintenance et entretien",
+          "nature": "observed",
+          "source_url": "https://alce-cde.com/nos-realisations-en-cuve-double-paroi-integrale/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T02:03:53.897Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "LIKELY_CUSTOMER de Maintenance et entretien",
+          "nature": "observed",
+          "source_url": "https://alce-cde.com/nos-realisations-en-cuves-bitume/",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T02:03:53.897Z"
+        },
+        {
+          "field": "activity",
+          "claim": "L’UNM, Union de Normalisation de la Mécanique, est le bureau de normalisation sectoriel français dans les domaines de la mécanique, de l’acier et du caoutchouc, par délégation de l’AFNOR.",
+          "nature": "observed",
+          "source_url": "https://unm.fr/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T02:03:53.897Z"
+        },
+        {
+          "field": "verbatim:signal:export",
+          "claim": "26%), pour 16% à la croissance du CA à l'export.",
+          "nature": "observed",
+          "source_url": "https://unm.fr/la-norme-au-service-des-marches/",
+          "basis": "Relevé sur https://unm.fr/la-norme-au-service-des-marches/ — motif « a l export ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T08:31:10.488Z"
+        }
+      ]
+    },
+    {
+      "domain": "lebeaulieu.ch",
+      "company_name": "Le Beaulieu",
+      "revenue_score": 77.47,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:15.991Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Le Beaulieu &#8211; Café, restaurant, spectacles et location de salle",
+          "nature": "observed",
+          "source_url": "https://lebeaulieu.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T03:02:56.229Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Fournitures et équipements industriels pour pros",
+          "nature": "observed",
+          "source_url": "https://www.lebeaulieu.ch/cat/mangeoire-et-distributeur-de-graines",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-28T03:02:56.229Z"
+        }
+      ]
+    },
+    {
+      "domain": "ibzag.ch",
+      "company_name": "IBZ AG",
+      "revenue_score": 78.99,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:13.262Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Home - IBZ Industrie AG",
+          "nature": "observed",
+          "source_url": "https://ibzag.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : Suisse",
+          "nature": "observed",
+          "source_url": "https://ibzag.ch/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Führender Schweizer Lösungsanbieter in den Bereichen Kleben, Schleifen, Arbeitsschutz und Hygiene. Wir unterstützen Kunden aus Industrie und Gewerbe.",
+          "nature": "observed",
+          "source_url": "https://ibzag.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Assemblage de pièces et sous-ensembles industriels",
+          "nature": "observed",
+          "source_url": "https://www.ibzag.ch/Adhesifs",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        }
+      ]
+    },
+    {
+      "domain": "crevoisier.ch",
+      "company_name": "CREVOISIER",
+      "revenue_score": 72.48,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:46:04.637Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Accueil - CREVOISIER",
+          "nature": "observed",
+          "source_url": "https://crevoisier.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T07:33:54.900Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "COMPETITOR de Assemblage de pièces et sous-ensembles industriels",
+          "nature": "observed",
+          "source_url": "https://crevoisier.ch/expertises/",
+          "basis": "expansion:COMPETITOR",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T07:33:54.900Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Intégrité Critères d’équité, d’intégrité et d’honnêteté les plus stricts dans nos relations avec nos collaborateurs, nos clients, nos fournisseurs, nos concurrents et parties prenantes.",
+          "nature": "observed",
+          "source_url": "https://crevoisier.ch/qui-sommes-nous/",
+          "basis": "Relevé sur https://crevoisier.ch/qui-sommes-nous/ — motif « nos clients ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T08:01:21.860Z"
+        },
+        {
+          "field": "verbatim:signal:offer",
+          "claim": "CREVOISIER® fabrique des machines, destinées à la terminaison de pièces, pour une clientèle active",
+          "nature": "observed",
+          "source_url": "https://crevoisier.ch/qui-sommes-nous/",
+          "basis": "Relevé sur https://crevoisier.ch/qui-sommes-nous/ — motif « fabrique des ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T02:31:03.714Z"
+        }
+      ]
+    },
+    {
+      "domain": "tirugo.ch",
+      "company_name": "Tirugo GmbH",
+      "revenue_score": 78.99,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:13.265Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Hubtische & Hebebühnen Schweiz: Flexlift & PETec | Tirugo GmbH",
+          "nature": "observed",
+          "source_url": "https://tirugo.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : Suisse",
+          "nature": "observed",
+          "source_url": "https://tirugo.ch/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Autorisierter Schweizer Händler für Flexlift-Hubtische und PETec-Arbeitstische. Hebelösungen 80–12.000 kg, Service und SUVA-Prüfungen in der Schweiz.",
+          "nature": "observed",
+          "source_url": "https://tirugo.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Assemblage de pièces et sous-ensembles industriels",
+          "nature": "observed",
+          "source_url": "https://www.tirugo.ch/fr/tables-elevatrices-automation-production.html",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-28T07:33:54.899Z"
+        }
+      ]
+    },
+    {
+      "domain": "inr-sa.ch",
+      "company_name": "INR SA",
+      "revenue_score": 72.48,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:26.881Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Injection plastique petite série / Entreprise suisse plasturgie INR",
+          "nature": "observed",
+          "source_url": "https://inr-sa.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-28T23:02:07.891Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Injection plastique en petite et moyenne série par INR SA, spécialiste en injection plastique depuis 1985. Entreprise de plasturgie Suisse frontalière à Moutier",
+          "nature": "observed",
+          "source_url": "https://inr-sa.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T23:02:07.891Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de WSI-France Fabricant chaudronnerie industrielle",
+          "nature": "observed",
+          "source_url": "https://inr-sa.ch/portfolio_category/chaudronnerie-plastique/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.35,
+          "collected_at": "2026-09-28T23:02:07.891Z"
+        },
+        {
+          "field": "verbatim:signal:named_markets",
+          "claim": "Applications de l’ injection plastique petite série L' injection plastique petite série est utilisée dans de nombreux secteurs d'activité Automobile Aérospatial Dispositif médicaux Electronique Industrie manufacturière E",
+          "nature": "observed",
+          "source_url": "https://inr-sa.ch/",
+          "basis": "Relevé sur https://inr-sa.ch/ — motif « applications ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-28T23:30:37.043Z"
+        }
+      ]
+    },
+    {
+      "domain": "acial.com",
+      "company_name": "Acial",
+      "revenue_score": 77.28,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:17.236Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Acial | Mobilier Métallique Industriel & Fabricant Français",
+          "nature": "observed",
+          "source_url": "https://acial.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-29T02:31:49.158Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : France",
+          "nature": "observed",
+          "source_url": "https://acial.com/",
+          "basis": "expansion:POSTAL_ADDRESS",
+          "confidence": 0.9,
+          "collected_at": "2026-09-29T02:31:49.158Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Acial, fabricant français de mobilier métallique industriel. Découvrez nos vestiaires, armoires fortes, casiers connectés et sur-mesure.",
+          "nature": "observed",
+          "source_url": "https://acial.com/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T02:31:49.158Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de Service Equipement",
+          "nature": "observed",
+          "source_url": "https://www.acial.com/",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-29T02:31:49.159Z"
+        },
+        {
+          "field": "verbatim:signal:new_capacity",
+          "claim": "25 Nouveautés 2025 : Découvrez notre nouvelle gamme de mobilier métallique Découvrir 15.",
+          "nature": "observed",
+          "source_url": "https://www.acial.com/",
+          "basis": "Relevé sur https://www.acial.com/ — motif « nouvelle gamme ».",
+          "confidence": 0.8,
+          "collected_at": "2026-09-29T03:00:39.478Z"
+        }
+      ]
+    },
+    {
+      "domain": "dermac.ch",
+      "company_name": "Dermac",
+      "revenue_score": 80.33,
+      "identity_status": "VERIFIED",
+      "processed_at": "2026-10-03T17:30:13.251Z",
+      "has_observed_email": true,
+      "evidence": [
+        {
+          "field": "identity",
+          "claim": "site officiel : Outillage professionnel en Suisse | Dermac",
+          "nature": "observed",
+          "source_url": "https://dermac.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.9,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "country",
+          "claim": "pays : Suisse",
+          "nature": "observed",
+          "source_url": "https://dermac.ch/",
+          "basis": "expansion:DECLARED_METADATA",
+          "confidence": 0.9,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "activity",
+          "claim": "Machines, outillage à main, visserie et EPI de marques de qualité : Makita, Milwaukee, DeWalt, Hazet… Livraison rapide en Suisse. Showroom à Port-Valais.",
+          "nature": "observed",
+          "source_url": "https://dermac.ch/",
+          "basis": "expansion:SITE",
+          "confidence": 0.8,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Bossard",
+          "nature": "observed",
+          "source_url": "https://www.dermac.ch/product-page/distributeur-de-savon-d%C3%A9sinfectant-sans-contact",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Bossard",
+          "nature": "observed",
+          "source_url": "https://www.dermac.ch/product-page/copie-de-gel-d%C3%A9sinfectant-5l-en-bidon",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "DISTRIBUTOR de Distributeur Bossard",
+          "nature": "observed",
+          "source_url": "https://www.dermac.ch/product-page/copie-de-gel-d%C3%A9sinfectant-5l-en-bidon",
+          "basis": "expansion:PARTNER",
+          "confidence": 0.75,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        },
+        {
+          "field": "relationship",
+          "claim": "SIMILAR_COMPANY de EuroTouch",
+          "nature": "observed",
+          "source_url": "https://www.dermac.ch/product-page/agrafeuse-2p-es-40-acoustique-prebena",
+          "basis": "expansion:SIMILAR",
+          "confidence": 0.4,
+          "collected_at": "2026-09-30T05:01:49.283Z"
+        }
+      ]
+    }
+  ]
+}

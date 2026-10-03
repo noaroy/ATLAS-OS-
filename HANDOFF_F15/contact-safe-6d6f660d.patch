@@ -1,0 +1,292 @@
+From 6d6f660d8d2172929fd322b33a591abdb5678503 Mon Sep 17 00:00:00 2001
+From: noaroy <noaroy210709@gmail.com>
+Date: Sat, 3 Oct 2026 13:02:14 +0000
+Subject: [PATCH] =?UTF-8?q?Collecteur=20de=20contacts=20:=20pied=20de=20pa?=
+ =?UTF-8?q?ge=20des=20pages=20trop=20longues=20et=20marque=20=C3=A0=20tire?=
+ =?UTF-8?q?t,=20sans=20=C3=A9largir=20la=20messagerie=20grand=20public?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- boundHtml : une page de plus de 512 Ko perd ses <style> et le dessin de ses
+  <svg>, puis garde début et fin coupés entre balises — le footer n'est plus
+  jeté, rien n'est construit ni décodé.
+- brandsRelated : `art-industrie.fr` et `artindustrie.fr` sont la même marque
+  quand la marque entière, ponctuation retirée, est identique et fait au moins
+  six caractères (`a-b.fr`/`ab.fr`, `a-tec.fr`/`atec.fr` restent distincts).
+
+Volontairement écarté du diff de référence : la marque lue dans la partie
+locale d'une messagerie grand public (carriesBrand) et wholeBrandOf dans
+classifyContactIntent. Aucune adresse de ce genre n'est publiée sur une page
+officielle en cache ; la seule relevée (azur.diffusion@free.fr) vient d'un
+annuaire. Des tests négatifs fixent le comportement actuel.
+
+Mesure : corpus réel des 12 cas 0 → 0 débloqué ; page_cache de production
+(16 domaines) 4/16 → 4/16 EMAIL, sortie identique.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/departments/src/contact-resolver.ts  |   7 +
+ .../departments/test/contact-resolver.test.ts | 172 ++++++++++++++++++
+ packages/intelligence/src/contact-fetch.ts    |  33 +++-
+ 3 files changed, 211 insertions(+), 1 deletion(-)
+
+diff --git a/packages/departments/src/contact-resolver.ts b/packages/departments/src/contact-resolver.ts
+index c74faa77..c0175061 100644
+--- a/packages/departments/src/contact-resolver.ts
++++ b/packages/departments/src/contact-resolver.ts
+@@ -234,6 +234,13 @@ export function brandsRelated(a: string, b: string): boolean {
+       .split(/[-_]/)
+       .filter((token) => token.length >= 4 && !GENERIC_BRAND_TOKENS.includes(token));
+ 
++  // `art-industrie.fr` et `artindustrie.fr` : la même marque, un tiret près.
++  // Découpée, la première ne garde que « industrie » (« art » est trop court)
++  // et ne recoupait plus « artindustrie » — l'adresse passait sous le
++  // formulaire. Seule la marque entière compte, ponctuation retirée, et à
++  // partir de six lettres : `a-b.fr` et `ab.fr` ne prouvent rien.
++  const joined = (host: string): string => brandRoot(host).replace(/[^a-z0-9]/g, '');
++  if (joined(a).length >= 6 && joined(a) === joined(b)) return true;
+   const left = significant(a);
+   const right = significant(b);
+   if (left.length === 0 || right.length === 0) return brandRoot(a) === brandRoot(b);
+diff --git a/packages/departments/test/contact-resolver.test.ts b/packages/departments/test/contact-resolver.test.ts
+index dad1c4b7..9f2c5990 100644
+--- a/packages/departments/test/contact-resolver.test.ts
++++ b/packages/departments/test/contact-resolver.test.ts
+@@ -8,6 +8,7 @@ import {
+   brandRoot,
+   brandsRelated,
+ } from '../src/contact-resolver.ts';
++import { boundHtml } from '../../intelligence/src/contact-fetch.ts';
+ 
+ /**
+  * Le lot 003 a conclu « aucun contact publié » pour deux entreprises qui en
+@@ -569,3 +570,174 @@ describe('aucune adresse devinée, aucune protection décodée', () => {
+     assert.equal(r.primary?.type, 'FORM');
+   });
+ });
++
++/**
++ * Les cas réels relevés en production (collector:contact), recopiés tels quels :
++ * domaine, nom, voies observées et page exacte. Aucun de ces sites n'a montré
++ * d'adresse : chaque page figée ne porte donc que ce qui y a été observé — un
++ * formulaire, un téléphone, ou rien. Le numéro est pris dans la plage que
++ * l'ARCEP réserve à la fiction (01 99 00 xx xx) : la voie est réelle, le
++ * numéro ne prétend pas l'être.
++ *
++ * Ce que ces cas doivent établir : sans adresse publiée, aucune adresse ne
++ * sort — ni construite sur le domaine, ni décodée d'une protection.
++ */
++describe('cas réels collector:contact — voies observées, aucune adresse fabriquée', () => {
++  type Voie = { kind: 'FORM' | 'PHONE'; url: string };
++  const REAL: Array<{ domain: string; name: string; voies: Voie[] }> = [
++    { domain: 'zafisao.com', name: 'Fabrication Distributeurs Automatiques France', voies: [{ kind: 'FORM', url: 'https://zafisao.com/' }, { kind: 'PHONE', url: 'https://zafisao.com/' }] },
++    { domain: 'art-industrie.fr', name: 'ART Industrie', voies: [{ kind: 'FORM', url: 'https://www.art-industrie.fr/contact/' }, { kind: 'PHONE', url: 'https://www.art-industrie.fr/contact/' }] },
++    { domain: 'groupe-machinext.fr', name: 'Machinext', voies: [] },
++    { domain: 'mabaguette.com', name: 'maBaguette', voies: [{ kind: 'PHONE', url: 'https://mabaguette.com/mentions-legales/' }] },
++    { domain: 'bourasseau-industrie.fr', name: 'Bourasseau-industrie', voies: [{ kind: 'PHONE', url: 'https://www.bourasseau-industrie.fr/' }] },
++    { domain: 'logimatiq.com', name: 'Logimatiq Systeme', voies: [{ kind: 'PHONE', url: 'https://www.logimatiq.com/fr/contact/' }] },
++    { domain: 'fr.silitech.ch', name: 'SILITECH AG', voies: [{ kind: 'PHONE', url: 'https://fr.silitech.ch/' }] },
++    { domain: 'machines.chantiers.ch', name: 'Machines de Chantiers', voies: [{ kind: 'PHONE', url: 'https://machines.chantiers.ch/pages/contact' }] },
++    { domain: 'rubix.com', name: 'Rubix', voies: [] },
++    { domain: 'marques-de-france.fr', name: 'Marques de France', voies: [] },
++    { domain: 'sei-export.fr', name: 'Fournitures Industrielles › SEI', voies: [] },
++    { domain: 'exapro.fr', name: 'Exapro', voies: [] },
++  ];
++
++  const pagesOf = (c: (typeof REAL)[number], extra = ''): Array<{ url: string; html: string }> => {
++    const urls = [...new Set(c.voies.map((v) => v.url))];
++    if (urls.length === 0) urls.push(`https://${c.domain}/`);
++    return urls.map((url) => ({
++      url,
++      html: `<html><body><h1>${c.name}</h1>`
++        + (c.voies.some((v) => v.url === url && v.kind === 'FORM') ? '<form><input type="email" name="email"><textarea name="message"></textarea></form>' : '')
++        + (c.voies.some((v) => v.url === url && v.kind === 'PHONE') ? '<a href="tel:+33199001234">01 99 00 12 34</a>' : '')
++        + extra + '</body></html>',
++    }));
++  };
++
++  for (const c of REAL) {
++    test(`${c.domain} (${c.name}) : ${c.voies.length ? c.voies.map((v) => `${v.kind} sur ${v.url}`).join(', ') : 'aucune voie'} — aucune adresse`, () => {
++      const r = resolveContacts({ officialDomain: c.domain, pages: pagesOf(c) });
++      assert.deepEqual(r.publicEmails, [], 'aucune adresse publiée, aucune adresse rendue');
++      const expected = c.voies.some((v) => v.kind === 'FORM') ? 'FORM' : c.voies.length ? 'PHONE' : 'NONE';
++      assert.equal(r.method, expected);
++      if (r.primary) {
++        assert.equal(r.primary.observed, true);
++        assert.ok(c.voies.some((v) => v.url === r.primary!.sourceUrl), 'la source est la page relevée');
++      }
++    });
++  }
++
++  test('les mêmes pages derrière Cloudflare email-protection ou « (at) » : toujours aucune adresse', () => {
++    const shield = '<a href="/cdn-cgi/l/email-protection#2b484445">[email&#160;protected]</a>'
++      + '<span class="__cf_email__" data-cfemail="2b484445">[email&#160;protected]</span>'
++      + ' contact (at) domaine [dot] fr';
++    for (const c of REAL) {
++      const r = resolveContacts({ officialDomain: c.domain, pages: pagesOf(c, shield) });
++      assert.deepEqual(r.publicEmails, [], c.domain);
++      assert.notEqual(r.method, 'EMAIL', c.domain);
++    }
++  });
++
++  test('avant → après sur ces douze cas : 0 → 0 débloqué, faute d’adresse observée', () => {
++    const unlocked = REAL.filter((c) => resolveContacts({ officialDomain: c.domain, pages: pagesOf(c) }).primary?.type === 'EMAIL');
++    assert.equal(unlocked.length, 0);
++  });
++});
++
++describe('une marque à tiret reste la même marque', () => {
++  test('art-industrie.fr et artindustrie.fr : même maison ; art-metal.fr : non', () => {
++    assert.equal(brandsRelated('artindustrie.fr', 'art-industrie.fr'), true);
++    assert.equal(brandsRelated('art-industrie.com', 'art-industrie.fr'), true);
++    assert.equal(brandsRelated('art-metal.fr', 'art-industrie.fr'), false);
++    assert.equal(brandsRelated('a-b.fr', 'ab.fr'), false, 'trop court pour conclure');
++    assert.equal(brandsRelated('a-tec.fr', 'atec.fr'), false, 'quatre lettres : trop court pour conclure');
++    assert.equal(brandsRelated('art-industrie.fr', 'artindustries.fr'), false, 'une lettre de plus : une autre chaîne');
++  });
++
++  test('l’adresse sans tiret passe devant le formulaire de la même page', () => {
++    const r = resolveContacts({
++      officialDomain: 'art-industrie.fr',
++      pages: [{ url: 'https://www.art-industrie.fr/contact/', html: '<form><input type="email"><textarea></textarea></form><a href="mailto:contact@artindustrie.fr">Écrire</a>' }],
++    });
++    assert.equal(r.primary?.type, 'EMAIL');
++    assert.equal(r.primary?.value, 'contact@artindustrie.fr');
++    assert.equal(r.primary?.sourceUrl, 'https://www.art-industrie.fr/contact/');
++  });
++});
++
++/**
++ * Une messagerie grand public ne porte jamais la marque, même quand la partie
++ * locale la reprend. La seule adresse de ce genre relevée en production —
++ * `azur.diffusion@free.fr` pour azur-diffusion.com — l'a été sur un annuaire
++ * (navsa.net), pas sur le site officiel ; aucune page officielle en cache n'en
++ * publie. Sans preuve, la règle ne s'élargit pas : ces cas la fixent.
++ */
++describe('messagerie grand public : jamais la marque, partie locale ou non', () => {
++  test('cas réel azur.diffusion@free.fr, même publiée sur azur-diffusion.com : derrière le téléphone', () => {
++    const r = resolveContacts({
++      officialDomain: 'azur-diffusion.com',
++      pages: [{ url: 'https://azur-diffusion.com/', html: '<a href="tel:+33199001234">01 99 00 12 34</a> <a href="mailto:azur.diffusion@free.fr">Nous écrire</a>' }],
++    });
++    assert.equal(r.primary?.type, 'PHONE');
++    assert.equal(r.publicEmails[0]?.value, 'azur.diffusion@free.fr');
++    assert.equal(r.publicEmails[0]?.sameBrand, false);
++  });
++
++  test('cas réel ljcada@wanadoo.fr sur automatiquedistribution.fr : une personne, pas la maison', () => {
++    const r = resolveContacts({
++      officialDomain: 'automatiquedistribution.fr',
++      pages: [{ url: 'https://automatiquedistribution.fr/', html: '<a href="tel:+33199001234">01 99 00 12 34</a> <a href="mailto:ljcada@wanadoo.fr">x</a>' }],
++    });
++    assert.equal(r.primary?.type, 'PHONE');
++    assert.equal(r.publicEmails[0]?.sameBrand, false);
++  });
++
++  test('la marque dans la partie locale d’une agence ne vaut rien', () => {
++    const r = resolveContacts({
++      officialDomain: 'bourasseau-industrie.fr',
++      pages: [{ url: 'https://www.bourasseau-industrie.fr/contact', html: '<form><textarea></textarea></form><a href="mailto:bourasseau@agence-web.fr">x</a>' }],
++    });
++    assert.equal(r.primary?.type, 'FORM');
++  });
++
++  test('un mot générique (« france ») dans une adresse gmail ne suffit pas', () => {
++    const r = resolveContacts({
++      officialDomain: 'marques-de-france.fr',
++      pages: [{ url: 'https://marques-de-france.fr/contact', html: '<form><textarea></textarea></form><a href="mailto:france.durand@gmail.com">x</a>' }],
++    });
++    assert.equal(r.primary?.type, 'FORM');
++  });
++
++  test('aux mentions légales, le designer en gmail reste écarté', () => {
++    const r = resolveContacts({
++      officialDomain: 'mabaguette.com',
++      pages: [{ url: 'https://mabaguette.com/mentions-legales/', html: '<p>Webdesign : studio.pixel@gmail.com</p><a href="tel:+33199001234">01 99 00 12 34</a>' }],
++    });
++    assert.deepEqual(r.publicEmails, []);
++    assert.equal(r.method, 'PHONE');
++  });
++});
++
++describe('une page trop longue garde son pied de page', () => {
++  test('feuilles de style en ligne : l’adresse du footer survit', () => {
++    const html = `<html><head><style>${'.a{color:red}'.repeat(60_000)}</style></head><body>`
++      + '<a href="tel:+33199001234">01 99 00 12 34</a>'
++      + '<footer><a href="mailto:contact@usine.fr">contact@usine.fr</a></footer></body></html>';
++    assert.ok(html.length > 512 * 1024);
++    const bounded = boundHtml(html);
++    assert.ok(bounded.length <= 512 * 1024);
++    const r = resolveContacts({ officialDomain: 'usine.fr', pages: [{ url: 'https://usine.fr/contact', html: bounded }] });
++    assert.equal(r.primary?.value, 'contact@usine.fr');
++  });
++
++  test('texte massif : début et fin gardés, coupes entre balises — aucune adresse tronquée', () => {
++    const body = Array.from({ length: 30_000 }, (_, i) => `<p>ligne ${i} contact@usine.fr</p>`).join('');
++    const html = `<html><body>${body}<footer><a href="mailto:ventes@usine.fr">ventes</a></footer></body></html>`;
++    const bounded = boundHtml(html);
++    assert.ok(bounded.length <= 512 * 1024);
++    const r = resolveContacts({ officialDomain: 'usine.fr', pages: [{ url: 'https://usine.fr/contact', html: bounded }] });
++    assert.deepEqual(r.publicEmails.map((e) => e.value).sort(), ['contact@usine.fr', 'ventes@usine.fr']);
++  });
++
++  test('une page ordinaire passe inchangée', () => {
++    const html = '<html><style>.a{}</style><svg><path d="M0 0"/></svg><p>x</p></html>';
++    assert.equal(boundHtml(html), html);
++  });
++});
+diff --git a/packages/intelligence/src/contact-fetch.ts b/packages/intelligence/src/contact-fetch.ts
+index eb0f963e..1ef9a91e 100644
+--- a/packages/intelligence/src/contact-fetch.ts
++++ b/packages/intelligence/src/contact-fetch.ts
+@@ -224,6 +224,37 @@ const BLOCKED_HOST =
+   /^(localhost|127\.|0\.|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?|metadata\.)/i;
+ 
+ const MAX_BYTES = 512 * 1024;
++/** La part de fin gardée quand la page dépasse : le pied de page entier. */
++const TAIL_BYTES = 128 * 1024;
++
++/**
++ * Borner une page sans perdre son pied de page.
++ *
++ * Couper aux 512 premiers kilo-octets gardait l'en-tête — téléphone, menu,
++ * formulaire — et jetait le `<footer>`, là où une page générée par un
++ * constructeur (feuilles de style en ligne, icônes SVG) publie souvent sa
++ * seule adresse. Le téléphone était relevé, l'adresse jamais : le dossier
++ * restait NO_OBSERVED_EMAIL avec une page pourtant lue.
++ *
++ * On retire d'abord ce qui ne publie aucune coordonnée — les blocs `<style>`
++ * et le dessin des `<svg>` — puis, s'il le faut encore, on garde le début et
++ * la fin. Rien n'est ajouté ni décodé : ce qui reste est du texte de la page.
++ */
++export function boundHtml(html: string): string {
++  if (html.length <= MAX_BYTES) return html;
++  const lean = html
++    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '<style></style>')
++    .replace(/(<svg\b[^>]*>)[\s\S]*?<\/svg>/gi, '$1</svg>');
++  if (lean.length <= MAX_BYTES) return lean;
++  // Les coupes tombent entre deux balises, jamais dans un texte : coupé au
++  // milieu, « contact@usine.fr » deviendrait « act@usine.fr », une adresse
++  // que personne n'a publiée.
++  const head = lean.slice(0, MAX_BYTES - TAIL_BYTES);
++  const headEnd = head.lastIndexOf('>') + 1;
++  const tail = lean.slice(lean.length - TAIL_BYTES);
++  const tailStart = tail.indexOf('<');
++  return head.slice(0, headEnd) + '\n' + (tailStart >= 0 ? tail.slice(tailStart) : '');
++}
+ 
+ export async function fetchRawPages(
+   urls: readonly string[],
+@@ -344,7 +375,7 @@ export async function fetchRawPages(
+       }
+       // Une page qui passe innocente l'hôte : un site lent redevient lisible.
+       echecs.delete(target.hostname);
+-      const html = (await response.text()).slice(0, MAX_BYTES);
++      const html = boundHtml(await response.text());
+       if (html.trim().length === 0) {
+         failures.push({ url: target.href, reason: 'page vide', kind: 'OTHER', cause: 'PARSING' });
+         continue;
+-- 
+2.39.5
+

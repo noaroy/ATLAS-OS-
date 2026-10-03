@@ -25,22 +25,25 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --location --proto '=https' --tlsv1.2 \
-            'https://qurl.sh/cc808bfd78ab4e69/atlas-cloud-handoff-final-v3.tar.xz' \
+            'https://qurl.sh/2de933857a0546ba/atlas-cloud-handoff-final-v3.tar.xz' \
             -o /tmp/atlas-cloud-handoff-final-v3.tar.xz
           echo '9f59d63aada1a88bb61b30723bc3d0ebb59a7d042afc801d0e3b6d52b2bbfbc6  /tmp/atlas-cloud-handoff-final-v3.tar.xz' | sha256sum -c -
 
-      - name: Extract and verify handoff files
+      - name: Extract and verify pinned handoff files
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/atlas-vps-handoff
           mkdir -p /tmp/atlas-vps-handoff
           tar -xJf /tmp/atlas-cloud-handoff-final-v3.tar.xz -C /tmp/atlas-vps-handoff
-          cd /tmp/atlas-vps-handoff/atlas-cloud-handoff-final-v3
-          sha256sum -c SHA256SUMS.txt
-          test "$(sha256sum atlas-96cc-tree-to-f15.patch.xz | awk '{print $1}')" = '038e0e011c63a7613c5983fcb446285f4333dfa07e96d45d6d61bb2a687a0a66'
+          src=/tmp/atlas-vps-handoff/atlas-cloud-handoff-final-v3
+          echo '038e0e011c63a7613c5983fcb446285f4333dfa07e96d45d6d61bb2a687a0a66  '"$src"'/atlas-96cc-tree-to-f15.patch.xz' | sha256sum -c -
+          echo 'c017d5e2657d1df03e112b6807567882e4d6d105c9008267ec0ab154cafa5de2  '"$src"'/no-sourced-fact-27-redacted.json' | sha256sum -c -
+          echo '5dcf80d0bf7d40349f87cfd04f13b3d13fda1e4cb4533a44e6d154d11d413c1b  '"$src"'/security-test-b9d941c8.patch' | sha256sum -c -
+          echo 'd1d0742dd0040118d5c48e9325c999ff00820e14cfafd6fa9062171dad77e64e  '"$src"'/contact-safe-6d6f660d.patch' | sha256sum -c -
+          echo 'ba7a2420c2912f5a5795381e0e5fd4396230189d40259a673f8b3efe033cd6ad  '"$src"'/continuous-fresh-INCOMPLETE.diff' | sha256sum -c -
 
-      - name: Publish only redacted handoff assets
+      - name: Publish only verified redacted handoff assets
         shell: bash
         run: |
           set -euo pipefail
@@ -51,11 +54,6 @@ jobs:
           cp "$src/security-test-b9d941c8.patch" HANDOFF_F15/
           cp "$src/contact-safe-6d6f660d.patch" HANDOFF_F15/
           cp "$src/continuous-fresh-INCOMPLETE.diff" HANDOFF_F15/
-          sha256sum HANDOFF_F15/atlas-96cc-tree-to-f15.patch.xz | grep '^038e0e011c63a7613c5983fcb446285f4333dfa07e96d45d6d61bb2a687a0a66 '
-          sha256sum HANDOFF_F15/no-sourced-fact-27-redacted.json | grep '^c017d5e2657d1df03e112b6807567882e4d6d105c9008267ec0ab154cafa5de2 '
-          sha256sum HANDOFF_F15/security-test-b9d941c8.patch | grep '^5dcf80d0bf7d40349f87cfd04f13b3d13fda1e4cb4533a44e6d154d11d413c1b '
-          sha256sum HANDOFF_F15/contact-safe-6d6f660d.patch | grep '^d1d0742dd0040118d5c48e9325c999ff00820e14cfafd6fa9062171dad77e64e '
-          sha256sum HANDOFF_F15/continuous-fresh-INCOMPLETE.diff | grep '^ba7a2420c2912f5a5795381e0e5fd4396230189d40259a673f8b3efe033cd6ad '
 
       - name: Commit imported assets to handoff branch
         shell: bash

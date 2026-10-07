@@ -1,6 +1,10 @@
 import { sendKey, type Repositories } from '@atlas/data';
 import type { MailInboxProvider, MailOutboundProvider } from '@atlas/intelligence';
-import { replyHistory, canTransitionLoop, evaluateManualSendLot, isIsolatedSelfTest, type ManualSendLotVerdict } from '@atlas/departments';
+import {
+  replyHistory, canTransitionLoop, evaluateManualSendLot, evaluateSendPolicy, isIsolatedSelfTest, validateOutreachDraft,
+  type ManualSendLotVerdict, type PolicyBlockReason, type SendPolicy,
+} from '@atlas/departments';
+import { observedEmailFor, policyStateFor } from './sales-engine.ts';
 
 /**
  * Le chemin manuel d'envoi, tel que `scripts/sales-send-approved.ts` le joue.
@@ -20,7 +24,25 @@ import { replyHistory, canTransitionLoop, evaluateManualSendLot, isIsolatedSelfT
  * qu'à GMAIL_USER, et un lot qui contient une seule autre adresse est refusé
  * en entier — avant la première lecture de boîte, la première réservation, la
  * première écriture.
+ *
+ * Puis, ligne par ligne, la MÊME politique que le daemon (`evaluateSendPolicy`,
+ * relue au moment de l'envoi) : coupe-circuit, liste de suppression, réponse
+ * reçue, fenêtre, plafonds, délai minimal, rebonds — et, pour un premier
+ * contact vers un vrai prospect, la porte qualité. Un chemin manuel qui
+ * ignorerait l'une d'elles serait le contournement de toutes (SEC-09).
  */
+
+/**
+ * Les motifs de la politique du daemon que ce chemin remplace par une garde
+ * plus étroite, et seulement ceux-là :
+ * - INTERNAL_TEST_MODE : la garde de lot n'admet, en INTERNAL_TEST, que GMAIL_USER ;
+ * - CAMPAIGN_* : chaque texte est fourni et approuvé un par un par le propriétaire ;
+ * - TRANSPORT_UNAVAILABLE : l'étape 1 refuse déjà un transport non configuré.
+ * Tout le reste s'applique tel quel.
+ */
+const MANUAL_EXEMPT: ReadonlySet<PolicyBlockReason> = new Set<PolicyBlockReason>([
+  'INTERNAL_TEST_MODE', 'CAMPAIGN_NOT_APPROVED', 'CAMPAIGN_NOT_ACTIVE', 'TRANSPORT_UNAVAILABLE',
+]);
 
 export interface ManualSendItem {
   domain: string;
@@ -41,6 +63,12 @@ export interface ManualSendItem {
    * continuer a se comporter comme avant.
    */
   purpose?: 'FIRST_TOUCH' | 'FOLLOW_UP';
+  /**
+   * Les sources du texte, comme le compositeur les écrit : la première porte
+   * la personnalisation, les suivantes les recommandations. Un premier
+   * contact vers un vrai prospect sans elles ne passe pas la porte qualité.
+   */
+  sources?: ReadonlyArray<{ quote: string; sourceUrl: string }>;
 }
 
 export interface ManualSendResult {
@@ -61,6 +89,10 @@ export interface ManualSendOptions {
   outboundEnabled: boolean;
   /** GMAIL_USER : la boîte dont le jeton porte les droits. */
   mailbox: string;
+  /** La politique d'envoi du daemon (`sendPolicyOf(config)`) : fenêtre, plafonds, délai, rebonds. */
+  policy: SendPolicy;
+  /** L'horloge de la politique ; l'heure réelle par défaut. */
+  now?: () => Date;
   inbox: MailInboxProvider;
   outbound: MailOutboundProvider;
   /** Chaque issue, au moment où elle tombe — pour l'écran. */
@@ -145,6 +177,47 @@ export async function runManualSendLot(options: ManualSendOptions): Promise<Manu
       }
     }
 
+    const selfTestIsole = isIsolatedSelfTest({ engineMode: options.engineMode, gmailUser: boite, item: relance });
+
+    // ── 3 bis. La politique du daemon, relue maintenant ───────────────────
+    //
+    // Avant la boîte, la réservation et le réseau. Le coupe-circuit d'abord :
+    // une pause générale arrête aussi ce qu'une personne lance à la main.
+    const maintenant = options.now?.() ?? new Date();
+    const etat = policyStateFor(
+      repos,
+      { sales: { outboundEnabled: options.outboundEnabled, engineMode: options.engineMode } },
+      { domain: relance.domain, recipient: relance.recipient, companyName: nom, purpose: intention },
+      maintenant,
+      transport.configured,
+    );
+    const politique = evaluateSendPolicy(options.policy, etat).blocks.filter((b) => !MANUAL_EXEMPT.has(b.reason));
+    const motifs: string[] = politique.map((b) => `${b.reason} (${b.detail})`);
+    let code: string | undefined = politique.find((b) => b.reason === 'GLOBAL_PAUSE')?.reason ?? politique[0]?.reason;
+    // Le domaine réel de l'adresse peut différer de celui du dossier : une
+    // suppression posée sur l'un protège aussi l'envoi vers l'autre.
+    const domaineAdresse = relance.recipient.split('@')[1]?.trim().toLowerCase() ?? '';
+    if (!politique.some((b) => b.reason === 'SUPPRESSED') && domaineAdresse
+      && repos.salesEngine.isSuppressed({ domain: domaineAdresse }).suppressed) {
+      motifs.push(`SUPPRESSED (domaine de l’adresse ${domaineAdresse})`);
+      code ??= 'SUPPRESSED';
+    }
+    // La porte qualité, comme au daemon : premier contact vers un vrai
+    // prospect seulement. Le self-test isolé va à soi-même, sur un domaine réservé.
+    if (intention === 'FIRST_TOUCH' && !selfTestIsole) {
+      const qualite = validateOutreachDraft({
+        recipient: relance.recipient, subject: relance.subject, body: relance.bodyText,
+        sources: relance.sources ?? [], domain: relance.domain,
+        observedEmail: observedEmailFor(repos, relance.domain, relance.recipient),
+      });
+      for (const r of qualite.reasons) motifs.push(`QUALITY_GATE:${r}`);
+      if (!code && !qualite.ok) code = 'QUALITY_GATE';
+    }
+    if (motifs.length > 0) {
+      bloquer(nom, `politique d’envoi : ${motifs.join(', ')}`, code);
+      continue;
+    }
+
     // ── 4. Une personne a-t-elle répondu depuis ? ──────────────────────────
     //
     // Lu dans Gmail sur le domaine réel du destinataire, pas sur celui du
@@ -157,7 +230,6 @@ export async function runManualSendLot(options: ManualSendOptions): Promise<Manu
     // production : dix messages quelconques bloquaient le self-test. Tout le
     // reste s'applique à lui comme aux autres : registre, déjà parti, clé,
     // approbation, réservation, transport.
-    const selfTestIsole = isIsolatedSelfTest({ engineMode: options.engineMode, gmailUser: boite, item: relance });
     const domaineReel = relance.recipient.split('@')[1] ?? relance.domain;
     if (!selfTestIsole) {
       let recus: Awaited<ReturnType<typeof inbox.list>> = [];

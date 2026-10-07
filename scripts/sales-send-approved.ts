@@ -28,6 +28,7 @@ import { createRepositories } from '../packages/data/src/index.ts';
 import { GmailInboxProvider, GmailOutboundProvider } from '../packages/intelligence/src/index.ts';
 import { evaluateManualSendLot } from '../packages/departments/src/index.ts';
 import { runManualSendLot, type ManualSendItem, type ManualSendResult } from '../packages/runtime/src/manual-send.ts';
+import { sendPolicyOf } from '../packages/runtime/src/sales-engine.ts';
 
 loadAtlasEnv();
 
@@ -151,7 +152,7 @@ if (!garde.allowed) {
   } else {
     const rapport = await runManualSendLot({
       repos, lot, send: SEND, engineMode: mode, outboundEnabled: autorisation.outboundEnabled,
-      mailbox: boite, inbox, outbound: expediteur, onResult: afficher,
+      mailbox: boite, policy: sendPolicyOf(config), inbox, outbound: expediteur, onResult: afficher,
     });
     terminer(rapport.results, rapport.refused ? 3 : 0);
   }

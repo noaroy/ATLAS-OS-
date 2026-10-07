@@ -172,7 +172,7 @@ export function replyReceivedFor(repos: Repositories, domain: string): boolean {
  */
 export function policyStateFor(
   repos: Repositories,
-  config: AtlasConfig,
+  config: { sales: Pick<AtlasConfig['sales'], 'outboundEnabled' | 'engineMode'> },
   draft: Pick<OutreachDraftRow, 'domain' | 'recipient' | 'companyName' | 'purpose'>,
   now: Date,
   transportConfigured: boolean,
@@ -951,7 +951,7 @@ export async function runSendCycle(
 }
 
 /** L'adresse lue sur le site officiel pour ce domaine, si c'est bien le destinataire. */
-function observedEmailFor(repos: Repositories, domain: string, recipient: string): string | null {
+export function observedEmailFor(repos: Repositories, domain: string, recipient: string): string | null {
   const want = recipient.trim().toLowerCase();
   const match = repos.sales.discoveredSince(null).find((p) => p.domain && canonicalDomainOf(p.domain) === domain
     && p.contactObserved && p.contactEmail?.trim().toLowerCase() === want);
